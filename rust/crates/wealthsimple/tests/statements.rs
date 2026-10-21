@@ -739,6 +739,35 @@ fn a_closed_account_merged_into_the_book_s_carries_its_history_and_holds_no_cash
     assert_eq!(w.book_cash(w.lira), dec("34.10"));
 }
 
+/// The newest completed month and the one before both not issued (today in
+/// September, July and August not issued): an open account's walk steps back
+/// once and stops, never past what it read, and books nothing. A closed
+/// account's statements end when it closed, so its walk steps back past every
+/// month not issued to its last statement, and books what its issued months
+/// hold, a movement only the statements state included.
+#[test]
+fn two_months_not_issued_end_an_open_account_s_walk_and_a_closed_account_s_walks_back_to_its_last_statement() {
+    for closed in [false, true] {
+        let mut w = owners_june();
+        for (k, m) in [("lira-1", "2025-07-01"), ("lira-1", "2025-08-01"), ("cash-1", "2025-07-01"), ("cash-1", "2025-08-01")] {
+            w.month(k, m, None);
+        }
+        if closed {
+            w.closed.extend(["lira-1".to_string(), "cash-1".to_string()]);
+        }
+        let keys: BTreeMap<AccountId, Vec<String>> = [(w.lira, vec!["lira-1".to_string()]), (w.cash, vec!["cash-1".to_string()])].into_iter().collect();
+        let mut failures = vec![];
+        let done = run(&w.book, &mut w.broker, w.conn, &keys, &w.closed, day("2025-09-03"), at("2025-09-03T16:00:00Z"), &mut |_| {}, &mut failures).unwrap();
+        assert!(failures.is_empty(), "closed {closed}: {failures:?}");
+        if closed {
+            assert_eq!((done.booked, done.joined), (2, 1), "closed: {done:?}");
+            assert_eq!((w.book_cash(w.lira), w.book_cash(w.cash)), (dec("24.10"), dec("35821.69")));
+        } else {
+            assert_eq!(done.booked, 0, "open: {done:?}");
+        }
+    }
+}
+
 /// A book of one May and one June on the LIRA, the chequing account agreeing.
 fn lira_months(w: &mut World, may: &[(&str, &str, &str, &str, &str)], june: &[(&str, &str, &str, &str, &str)], stated: &str) {
     w.month("lira-1", "2025-05-01", Some(brokerage_statement(may)));

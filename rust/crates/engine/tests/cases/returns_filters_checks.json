@@ -1445,5 +1445,65 @@
         }
       ]
     }
+  },
+  {
+    "name": "units and cash held in an account the broker states holds nothing are differences",
+    "spec": "briefs/75 §4, a closed account's statement: the broker's closed is stored as a cash statement of nothing and a units statement of nothing, which the check holds the book to as it does an open account's",
+    "working": [
+      "R: 1,000 deposited, 10 X bought for 500 on 01-06 → the book holds cash 500 CAD and 10 X",
+      "the broker states R closed: cash of nothing with the read at 01-07 14:00 and again at 15:00, units of nothing as of 01-07",
+      "two differences, each confirmed: CAD 500 against the nothing stated at the read, and 10 X against nothing as of a day read in full",
+      "the statement is newer than the read, so the check as a whole waits on the next read"
+    ],
+    "today": "2026-01-08",
+    "accounts": [
+      {
+        "id": "R"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "X"
+      }
+    ],
+    "transactions": [
+      {
+        "id": "r1",
+        "account": "R",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000"
+      },
+      {
+        "id": "r2",
+        "account": "R",
+        "day": "2026-01-06",
+        "at": "2026-01-06T15:00:00Z",
+        "kind": "buy",
+        "instrument": "X",
+        "qty": "10",
+        "cash": "-500"
+      }
+    ],
+    "brokers": {
+      "R": {
+        "cash": {},
+        "cash_read": {},
+        "held": {},
+        "held_as_of": "2026-01-07",
+        "as_of": "2026-01-07T15:00:00Z",
+        "activity_read_at": "2026-01-07T14:00:00Z"
+      }
+    },
+    "expect": {
+      "checks": [
+        {
+          "account": "R",
+          "differences": 2,
+          "pending": true
+        }
+      ]
+    }
   }
 ]

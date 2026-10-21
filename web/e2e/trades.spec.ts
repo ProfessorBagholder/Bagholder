@@ -321,7 +321,10 @@ test.describe('Trade detail', () => {
     // the person picks 1H: the server is offline, so its read finds no bars and the
     // listing stops offering it; the server says so on the stream
     await page.locator('#page .pill', { hasText: '1H' }).click()
-    await expect(page.locator('#page .pill')).toHaveText(['1D', '1W', '1M'], { timeout: 20_000 })
+    // the read runs on its own thread and its notice on the stream, beside every
+    // other test's reads on a shared runner: the wait the suite gives the server's
+    // own work to settle (everyscreen.spec.ts), not a guess at one read's time
+    await expect(page.locator('#page .pill')).toHaveText(['1D', '1W', '1M'], { timeout: 60_000 })
     expect(await page.evaluate(() => (window as unknown as { __sameLoad?: boolean }).__sameLoad), 'the page was not loaded again').toBe(true)
     // the pick is answered with why, never with the daily bars in its place
     await expect(page.locator('#page .muted.empty', { hasText: '1H is not offered for this listing now.' })).toBeVisible()

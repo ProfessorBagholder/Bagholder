@@ -74,7 +74,7 @@ fn pull_with<S: Source>(home: &std::path::Path, adapter: &mut Wealthsimple<S>, n
     let mut out = String::new();
     use std::fmt::Write as _;
     writeln!(out, "accounts added {}, linked {}", r.accounts_added, r.accounts_linked).expect("writing to a String cannot fail");
-    writeln!(out, "rows read {}: records new {}, revised {}, unchanged {}; imported records replaced {}; no longer listed, removed {}", r.rows_read, r.records_new, r.records_revised, r.records_unchanged, r.superseded, r.removed.len()).expect("writing to a String cannot fail");
+    writeln!(out, "rows read {}: records new {}, revised {}, unchanged {}; no longer listed, removed {}", r.rows_read, r.records_new, r.records_revised, r.records_unchanged, r.removed.len()).expect("writing to a String cannot fail");
     for (record, key) in &r.removed {
         writeln!(out, "  removed {key} (record {record})").expect("writing to a String cannot fail");
     }

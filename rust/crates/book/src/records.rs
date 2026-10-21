@@ -557,13 +557,6 @@ impl Book {
             .optional()?)
     }
 
-    /// The records known by `value` in `scheme`.
-    pub fn records_by_ref(&self, scheme: &str, value: &str) -> Result<Vec<RecordId>> {
-        let mut stmt = self.conn().prepare_cached("SELECT record_id FROM record_refs WHERE scheme = ? AND value = ? ORDER BY record_id")?;
-        let ids = stmt.query_map(params![scheme, value], |r| r.get::<_, String>(0))?;
-        ids.map(|s| text::parsed("record_refs", "record_id", &s?, RecordId::parse)).collect()
-    }
-
     /// Every revision of a record, oldest first: its number, when it arrived, its payload.
     pub fn revisions(&self, id: RecordId) -> Result<Vec<(u32, jiff::Timestamp, String)>> {
         let mut stmt = self.conn().prepare_cached("SELECT revision, received_at, payload FROM record_revisions WHERE record_id = ? ORDER BY revision")?;
@@ -710,23 +703,6 @@ impl Book {
         for row in rows {
             let (id, key) = row?;
             out.insert(text::parsed("source_records", "id", &id, RecordId::parse)?, key);
-        }
-        Ok(out)
-    }
-
-    /// The live records known by a value in `scheme` that another source than
-    /// `except` stated, with that value: an imported record of a broker's row
-    /// that the broker's own record has not replaced.
-    pub fn live_records_by_scheme(&self, scheme: &str, except: &SourceName) -> Result<Vec<(RecordId, String)>> {
-        let mut stmt = self.conn().prepare_cached(
-            "SELECT r.id, x.value FROM record_refs x JOIN source_records r ON r.id = x.record_id
-             WHERE x.scheme = ? AND r.state = 'live' AND r.source != ? ORDER BY r.first_received_at, r.rowid",
-        )?;
-        let rows = stmt.query_map(params![scheme, except.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        let mut out = Vec::new();
-        for row in rows {
-            let (id, value) = row?;
-            out.push((text::parsed("source_records", "id", &id, RecordId::parse)?, value));
         }
         Ok(out)
     }

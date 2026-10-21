@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use bagholder_core::json::Value;
 use bagholder_sources::reply::{Node, Read};
 
-use crate::record::{BookMove, Deposits, Opposing, Positions, Record};
+use crate::record::{BookMove, Deposits, Positions, Record};
 
 /// What a row needs read beside it.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -34,10 +34,6 @@ pub struct Needs {
     pub deposits: Vec<String>,
     /// The id a withdrawal shares with the tax withheld from it.
     pub withheld: Option<String>,
-    /// The other account a completed move arriving from another account names:
-    /// its own moves over the move's days say whether anything there records the
-    /// move leaving it.
-    pub opposing: Option<String>,
 }
 
 impl Needs {
@@ -73,37 +69,11 @@ pub trait Replies {
     fn siblings(&mut self, row: &Value) -> Vec<Value>;
     /// What the book's own transactions moved in these accounts on these days.
     fn book(&mut self, accounts: &[String], days: &[String]) -> Vec<BookMove>;
-    /// The rows of one of the person's own accounts filed from `first` to
-    /// `last`, its feed read over those days; None where the account is not one
-    /// the person's accounts list states (or whose feed this pull read), or its
-    /// feed over those days was not answered.
-    fn opposing(&mut self, account: &str, first: &str, last: &str) -> Option<Vec<Value>>;
-}
-
-/// The rows of an account's feed that move between accounts, of any status.
-pub fn is_move(r: &Node) -> bool {
-    matches!(r.text("type").unwrap_or(""), "INTERNAL_TRANSFER" | "ASSET_MOVEMENT" | "LEGACY_INTERNAL_TRANSFER")
 }
 
 fn around(day: &str) -> Vec<String> {
     let Ok(d) = day.parse::<jiff::civil::Date>() else { return vec![] };
     [d.yesterday().ok(), Some(d), d.tomorrow().ok()].into_iter().flatten().map(|d| d.to_string()).collect()
-}
-
-/// The moves of account `o`, the other account of a move arriving from it, over
-/// the days of the move's group (`siblings`, or its own `day`) and a day either
-/// side; None where that account's feed over them is not read.
-pub fn opposing(o: &str, siblings: &[Value], day: &str, replies: &mut dyn Replies) -> Option<Opposing> {
-    let (from, to) = days_read(siblings, day);
-    let rows = replies.opposing(o, &from, &to)?;
-    Some(Opposing { account: o.to_string(), rows: rows.into_iter().filter(|x| Node::root(x).text("accountId").ok() == Some(o) && is_move(&Node::root(x))).collect() })
-}
-
-/// The first and last days a move's other account's rows are read over: its
-/// group's days (`siblings`, or its own `day`) and a day either side.
-pub fn days_read(siblings: &[Value], day: &str) -> (String, String) {
-    let (first, last) = span(siblings, day);
-    (shift(&first, -1).unwrap_or(first), shift(&last, 1).unwrap_or(last))
 }
 
 /// What the row needs, from the row alone. `day` is the day the row is filed
@@ -140,11 +110,6 @@ pub fn needs(row: &Value, day: &str) -> Read<Needs> {
         // asked for; what arrived, and when, its detail and the positions do
         "INSTITUTIONAL_TRANSFER_INTENT" if completed => out.transfer = Some(n.text("externalCanonicalId")?.to_string()),
         _ => {}
-    }
-    // a move arriving from another account: whether that account's feed
-    // records it leaving
-    if completed && matches!(ty, "INTERNAL_TRANSFER" | "ASSET_MOVEMENT") && matches!(n.opt_text("subType")?, Some("DESTINATION" | "TRANSFER_IN")) {
-        out.opposing = n.opt_text("opposingAccountId")?.filter(|o| *o != accounts[0]).map(str::to_string);
     }
     let moves_holdings = ty == "CORPORATE_ACTION" || ty == "ASSET_MOVEMENT" || (ty == "INTERNAL_TRANSFER" && transfer_type.contains("in_kind"));
     if moves_holdings {
@@ -252,10 +217,6 @@ pub fn assemble(row: Value, day: &str, replies: &mut dyn Replies) -> Read<Record
         let (first, last) = span(&r.siblings, day);
         let accounts: BTreeSet<String> = needs.positions.iter().map(|(a, _)| a.clone()).collect();
         positions = accounts.iter().flat_map(|a| [shift(&first, -1), shift(&last, 1)].into_iter().flatten().map(move |d| (a.clone(), d))).collect();
-    }
-    // the other account's moves over the move's days, a day either side
-    if let Some(o) = &needs.opposing {
-        r.opposing = opposing(o, &r.siblings, day, replies);
     }
     for (account, d) in &positions {
         if let Some(nodes) = replies.positions(account, d) {

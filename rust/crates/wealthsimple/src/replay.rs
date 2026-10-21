@@ -40,6 +40,11 @@ pub struct Replay {
     before_statements: bool,
     /// What was asked, in order: what a pull would have sent.
     pub asked: Vec<String>,
+    /// Each account's activity asked, and the day it was asked from (the whole
+    /// of it when `None`), in order.
+    pub asked_from: Vec<(String, Option<jiff::civil::Date>)>,
+    /// The accounts each read of the balances asked for, in order.
+    pub asked_balances: Vec<Vec<String>>,
     zones: bagholder_book::zones::Zones,
 }
 
@@ -62,6 +67,8 @@ impl Replay {
             statements: BTreeMap::new(),
             before_statements: false,
             asked: vec![],
+            asked_from: vec![],
+            asked_balances: vec![],
             zones: bagholder_book::zones::Zones::default(),
         };
         let mut seen_rows = BTreeSet::new();
@@ -190,6 +197,7 @@ impl Source for Replay {
     }
     fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         self.asked.push(format!("activity {account}"));
+        self.asked_from.push((account.to_string(), from));
         Ok(self.rows.iter().filter(|r| Node::root(r).text("accountId").ok() == Some(account) && from.is_none_or(|f| self.day_of(r).is_some_and(|d| d >= f))).cloned().collect())
     }
     fn securities(&mut self, ids: &[String]) -> Answer<Vec<Value>> {
@@ -220,8 +228,9 @@ impl Source for Replay {
         self.asked.push(format!("positions {account} {day}"));
         self.positions.get(&(account.to_string(), day.to_string())).cloned().ok_or_else(|| Failure::Refused(format!("no positions of {account} as of {day} in the capture")))
     }
-    fn balances(&mut self, _accounts: &[String]) -> Answer<Vec<Value>> {
+    fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {
         self.asked.push("balances".into());
+        self.asked_balances.push(accounts.to_vec());
         Ok(self.balances.clone())
     }
     fn net_worth_history(&mut self, _accounts: &[String], _outside: &[String], _start: jiff::civil::Date, _end: jiff::civil::Date) -> Answer<Option<Vec<Value>>> {

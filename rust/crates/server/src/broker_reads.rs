@@ -90,6 +90,20 @@ pub fn pull_due(last_pull: Option<Timestamp>, now: Timestamp, zone: &TimeZone) -
     }
 }
 
+/// Whether the connection's accounts are all without a full read of their
+/// activity (a book after Clear data, or after migration 37): the pull that
+/// reads them whole is due at once, not at the next window.
+fn none_read(book: &Book, conn: ConnectionId) -> Result<bool, String> {
+    let mut any = false;
+    for a in book.accounts().map_err(|e| e.to_string())?.into_iter().filter(|a| a.connection == conn) {
+        if book.activity_read_at(a.id).map_err(|e| e.to_string())?.is_some() {
+            return Ok(false);
+        }
+        any = true;
+    }
+    Ok(any)
+}
+
 /// The book's Wealthsimple connection, made on the first read.
 fn connection(book: &Book, now: Timestamp) -> Result<ConnectionId, String> {
     let ws = Broker::named("wealthsimple");
@@ -287,7 +301,7 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
     // the day's window is met by a whole pull, never by one of the activity alone
     // (a book from before the mark: its last pull of any kind)
     let last_daily = book.last_read(conn, bagholder_broker::pull::DAILY_READ).map_err(|e| e.to_string())?.or(last_pull);
-    let pull = asked || pull_due(last_daily, now, &zone) || fill_due.is_some_and(|d| d <= now);
+    let pull = asked || pull_due(last_daily, now, &zone) || none_read(&book, conn)? || fill_due.is_some_and(|d| d <= now);
     let read = due(pull, open, opened != *served, last_cash, now);
     // every opening up to here is served by this pass, whatever the read's outcome
     // (a failed one is read again after its rest)
@@ -430,12 +444,11 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
         log(&format!("bagholder: the fills of {gave_way} of Bagholder's own orders are Wealthsimple's own rows now"));
     }
     log(&format!(
-        "bagholder: pulled Wealthsimple: {} rows read, {} new, {} revised, {} removed, {} imported replaced",
+        "bagholder: pulled Wealthsimple: {} rows read, {} new, {} revised, {} removed",
         report.rows_read,
         report.records_new,
         report.records_revised,
-        report.removed.len(),
-        report.superseded
+        report.removed.len()
     ));
     for (account, why) in &report.suspect {
         log(&format!("bagholder: a suspect read of {account}, nothing removed: {why}"));
@@ -550,6 +563,23 @@ mod tests {
         assert!(pull_due(None, t("2026-09-27T12:00:00Z"), &z), "never pulled");
         assert!(pull_due(Some(t("2026-09-24T19:00:00Z")), t("2026-09-24T20:30:00Z"), &z), "the window opened since");
         assert!(!pull_due(Some(t("2026-09-24T20:30:00Z")), t("2026-09-25T10:00:00Z"), &z), "pulled since the window");
+    }
+
+    #[test]
+    fn a_pull_is_due_while_no_account_has_a_full_read() {
+        let home = tempfile::tempdir().unwrap();
+        let now = t("2026-10-21T12:00:00Z");
+        let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
+        let conn = connection(&book, now).unwrap();
+        assert!(!none_read(&book, conn).unwrap(), "no account yet: the window's first pull adds them");
+        let r = bagholder_core::account::AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1");
+        let ty = bagholder_core::account::AccountType::Unrecognised("TFSA".into());
+        let a = book.add_account(conn, &[r], &ty, bagholder_core::account::AccountStatus::Closed, None, now).unwrap();
+        assert!(none_read(&book, conn).unwrap(), "an account never read whole");
+        book.note_activity_read(a, now, false).unwrap();
+        assert!(none_read(&book, conn).unwrap(), "a read not complete is no full read");
+        book.note_activity_read(a, now, true).unwrap();
+        assert!(!none_read(&book, conn).unwrap());
     }
 
     #[test]

@@ -1,8 +1,8 @@
 //! The pull (`docs/plans/stage-3b-wealthsimple.md`, "The pull, into the book"):
-//! the accounts and their links, each account's activity as records (each
-//! replacing the imported record of the same broker id), the two sides of a move
-//! of holdings linked, and the broker's statements. The first pull reads each
-//! account whole; after that only what changed (brief 07 §1).
+//! the accounts and their links, each account's activity as records, the two
+//! sides of a move of holdings linked, and the broker's statements. Every
+//! account the broker states, open or closed, is read the same way: whole the
+//! first time, after that from its last full read (brief 07 §1; brief 75 §4).
 //!
 //! Each part's failure is its own: named in the report, the other parts carry
 //! on, and nothing already stored is removed or overwritten by a failed part.
@@ -15,7 +15,6 @@ use bagholder_book::Book;
 use bagholder_core::account::{AccountKind, AccountRef, AccountStatus, AccountType};
 use bagholder_core::instrument::RefScheme;
 use bagholder_core::json;
-use bagholder_core::record::RecordState;
 use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, ConnectionId, Dec, RecordId};
 
@@ -30,8 +29,6 @@ pub struct Report {
     pub records_new: usize,
     pub records_revised: usize,
     pub records_unchanged: usize,
-    /// Imported records a broker record replaced.
-    pub superseded: usize,
     /// Records of rows the broker no longer lists over a span it was read in,
     /// each removed: the record and the broker's id for its row.
     pub removed: Vec<(RecordId, String)>,
@@ -64,8 +61,8 @@ pub type Result<T> = std::result::Result<T, bagholder_book::BookError>;
 
 /// The book's own moves, from its transactions, keyed by the broker's ids.
 struct Index {
-    /// (account key, day) → what moved, and whether from a record of another source
-    by: BTreeMap<(String, jiff::civil::Date), Vec<(MovedWhat, Dec, bool)>>,
+    /// (account key, day) → what moved
+    by: BTreeMap<(String, jiff::civil::Date), Vec<(MovedWhat, Dec)>>,
 }
 
 impl BookMoves for Index {
@@ -74,8 +71,8 @@ impl BookMoves for Index {
         for a in accounts {
             for d in days {
                 if let Some(list) = self.by.get(&(a.clone(), *d)) {
-                    for (what, q, imported) in list {
-                        out.push(Moved { account: a.clone(), day: *d, what: what.clone(), quantity: *q, imported: *imported });
+                    for (what, q) in list {
+                        out.push(Moved { account: a.clone(), day: *d, what: what.clone(), quantity: *q });
                     }
                 }
             }
@@ -128,6 +125,15 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         };
         ids.insert(a.key.clone(), id);
     }
+    // each account's status is the broker's: open where any of the broker's
+    // accounts behind it is
+    let mut open_of: BTreeMap<AccountId, bool> = BTreeMap::new();
+    for a in &stated {
+        *open_of.entry(ids[&a.key]).or_default() |= a.open;
+    }
+    for (id, open) in &open_of {
+        book.set_account_status(*id, if *open { AccountStatus::Open } else { AccountStatus::Closed })?;
+    }
     report.stated_for = ids.values().copied().collect();
     for a in &stated {
         if let (Some(to), Some(from)) = (a.linked_to.as_ref().and_then(|k| ids.get(k)), ids.get(&a.key)) {
@@ -142,30 +148,9 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // a row stored before it was final is read again, from its day
     // (from its first day where one's day is not known)
     let mut unsettled: BTreeMap<String, Option<jiff::civil::Date>> = BTreeMap::new();
-    // a record put together before the adapter read a part it reads now:
-    // added to once, below
-    let mut stale: Vec<(RecordId, json::Value)> = Vec::new();
-    // the stored records holding another account's rows over some days, by
-    // that account: a row of it recorded now is added to them (`amend`)
-    let mut watching: Watching = BTreeMap::new();
-    // the rows of that account those records hold that the book holds no
-    // record of, by that account: each one's day, a reason to read it again
-    let mut unheld: BTreeMap<String, Vec<Option<jiff::civil::Date>>> = BTreeMap::new();
     for r in book.live_records(&adapter.mapping().source())? {
         if let Some((_, _, payload)) = book.revisions(r)?.pop() {
-            let parsed = json::parse(&payload).ok();
-            if let Some(v) = parsed.as_ref().filter(|v| adapter.refreshes(v)) {
-                stale.push((r, v.clone()));
-            }
-            if let Some(a) = parsed.as_ref().and_then(|v| adapter.watches(v)) {
-                for (key, day) in parsed.as_ref().map(|v| adapter.watched_rows(v)).unwrap_or_default() {
-                    if book.record_by_key(Some(connection), &adapter.mapping().source(), &key)?.is_none() {
-                        unheld.entry(a.clone()).or_default().push(day);
-                    }
-                }
-                watching.entry(a).or_default().push(r);
-            }
-            if let Some((account, day)) = parsed.and_then(|v| adapter.unsettled(&v)) {
+            if let Some((account, day)) = json::parse(&payload).ok().and_then(|v| adapter.unsettled(&v)) {
                 let e = unsettled.entry(account).or_insert(day);
                 *e = match (*e, day) {
                     (Some(a), Some(b)) => Some(a.min(b)),
@@ -180,35 +165,11 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     let mut spans: BTreeMap<String, Option<jiff::civil::Date>> = BTreeMap::new();
     // the day of each account's last full read before this one
     let mut read_before: BTreeMap<String, jiff::civil::Date> = BTreeMap::new();
-    // an open account, or one never read in full, is read from its last full
-    // read; a closed one read in full only for a reason (`closed_due`), once
-    // the others are read: its feed can still gain rows (a move out of it
-    // Wealthsimple lists after it closed)
-    let mut to_read: Vec<(&AccountStated, Option<jiff::Timestamp>, Option<jiff::civil::Date>)> = Vec::new();
-    let mut closed: Vec<(&AccountStated, jiff::Timestamp)> = Vec::new();
-    for a in &stated {
-        match book.activity_read_at(ids[&a.key])? {
-            Some(t) if !a.open => closed.push((a, t)),
-            last => to_read.push((a, last, None)),
-        }
-    }
-    let mut n = 0;
-    let mut closed_read = false;
-    loop {
-        if n == to_read.len() {
-            if closed_read {
-                break;
-            }
-            closed_read = true;
-            to_read.extend(closed_due(book, adapter, connection, &closed, &rows, &unheld, &unsettled)?);
-            if n == to_read.len() {
-                break;
-            }
-        }
-        let (a, last, since) = to_read[n];
-        n += 1;
+    let of = stated.len();
+    for (n, a) in stated.iter().enumerate() {
         let id = ids[&a.key];
-        step(Step::Activity { account: a.name(), n, of: to_read.len() });
+        let last = book.activity_read_at(id)?;
+        step(Step::Activity { account: a.name(), n: n + 1, of });
         if let Some(t) = last {
             read_before.insert(a.key.clone(), adapter.day(t));
         }
@@ -217,8 +178,6 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             Some(Some(u)) => Some(d.min(*u)),
             Some(None) => None,
         });
-        // and from the first day of what gave a reason to read it
-        let from = from.map(|f| since.map_or(f, |s| f.min(s)));
         match adapter.activity(&a.key, from) {
             Ok(read) => {
                 report.rows_read += read.rows.len();
@@ -243,12 +202,15 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // the rows that move by themselves first; those read against positions
     // after, net of the book's own moves
     let source = adapter.mapping().source();
-    let scheme = adapter.record_scheme();
     // a row its stored record already holds as it is changed nothing, and is
     // not put together again
     let mut changed: Vec<&Row> = Vec::new();
     for row in &rows {
-        if held(book, adapter, connection, row)? {
+        let same = match book.record_by_key(Some(connection), &source, &row.key)? {
+            Some(r) => book.revisions(r)?.pop().is_some_and(|(_, _, p)| json::parse(&p).is_ok_and(|v| adapter.holds(&v, row))),
+            None => false,
+        };
+        if same {
             report.records_unchanged += 1;
         } else {
             changed.push(row);
@@ -258,105 +220,45 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     let (first, second): (Vec<&Row>, Vec<&Row>) = changed.into_iter().partition(|r| !r.reads_positions);
     let recording = first.len() + second.len();
     let mut done = 0;
+    // the broker's accounts with a row whose record could not be put together:
+    // their read is not complete, so the row is asked for again
+    let mut unrecorded: BTreeSet<String> = BTreeSet::new();
     let mut empty = Index { by: BTreeMap::new() };
     for row in &first {
         step(Step::Recording { done, of: recording });
-        store_row(book, adapter, &mut empty, connection, row, &scheme, &watching, &mut report, now)?;
+        if store_row(book, adapter, &mut empty, connection, row, &mut report, now)?.is_none() {
+            unrecorded.insert(row.account.clone());
+        }
         done += 1;
     }
     let mut stored_second: Vec<(RecordId, &Row)> = Vec::new();
-    // the imports of rows read now: each is about to be replaced by the
-    // broker's own record of its row, and is not one of the book's own moves
-    // a row is read net of
-    let replaced = replaced_by(book, adapter, &scheme, rows.iter())?;
     if !second.is_empty() {
-        let mut index = index(book, adapter, &source, &broker, &replaced)?;
+        let mut index = index(book, adapter, &source, &broker)?;
         for row in &second {
             step(Step::Recording { done, of: recording });
-            if let Some(id) = store_row(book, adapter, &mut index, connection, row, &scheme, &watching, &mut report, now)? {
-                stored_second.push((id, row));
+            match store_row(book, adapter, &mut index, connection, row, &mut report, now)? {
+                Some(id) => stored_second.push((id, row)),
+                None => {
+                    unrecorded.insert(row.account.clone());
+                }
             }
             done += 1;
         }
     }
-    // the records put together before the adapter read a part it reads now,
-    // that part added and derived again: once, as a record holding it is not
-    // stale again
-    let mut refreshed: Vec<RecordId> = Vec::new();
-    if !stale.is_empty() {
-        let mut index = index(book, adapter, &source, &broker, &replaced)?;
-        for (r, v) in &stale {
-            let key = book.record(*r)?.source_key;
-            match adapter.refresh(v, &mut index) {
-                Some(Ok(payload)) => {
-                    let text = payload.canonical();
-                    let incoming = Incoming { connection: Some(connection), source_key: &key, payload: &text, refs: vec![(scheme.clone(), key.clone())] };
-                    let stored = book.store(adapter.mapping(), &incoming, now)?;
-                    match stored.outcome {
-                        bagholder_book::records::Outcome::New => report.records_new += 1,
-                        bagholder_book::records::Outcome::Revised(_) => report.records_revised += 1,
-                        bagholder_book::records::Outcome::Unchanged => report.records_unchanged += 1,
-                    }
-                    supersede_copies(book, adapter, stored.record, &payload, &mut report, now)?;
-                    if adapter.reads_positions(&payload) {
-                        refreshed.push(stored.record);
-                    }
-                }
-                Some(Err(f)) => report.failed(format!("record:{key}"), f),
-                None => {}
-            }
-        }
-    }
-    // the rows of the person's accounts read for another row's record beside
-    // their accounts' own reads (a move's other side over its days), the book
-    // not holding them as they are: stored as every row read is
-    let mut beside: Vec<Row> = Vec::new();
-    let mut beside_linked: Vec<RecordId> = Vec::new();
-    loop {
-        let mut fresh = Vec::new();
-        for row in adapter.read_beside() {
-            if rows.iter().chain(&beside).chain(&fresh).any(|r| r.key == row.key) || held(book, adapter, connection, &row)? {
-                continue;
-            }
-            fresh.push(row);
-        }
-        if fresh.is_empty() {
-            break;
-        }
-        adapter.prepare(&fresh.iter().collect::<Vec<_>>());
-        let (first, second): (Vec<&Row>, Vec<&Row>) = fresh.iter().partition(|r| !r.reads_positions);
-        for row in &first {
-            store_row(book, adapter, &mut empty, connection, row, &scheme, &watching, &mut report, now)?;
-        }
-        if !second.is_empty() {
-            let replaced = replaced_by(book, adapter, &scheme, rows.iter().chain(&beside).chain(&fresh))?;
-            let mut index = index(book, adapter, &source, &broker, &replaced)?;
-            for row in &second {
-                if let Some(id) = store_row(book, adapter, &mut index, connection, row, &scheme, &watching, &mut report, now)? {
-                    beside_linked.push(id);
-                }
-            }
-        }
-        beside.extend(fresh);
-    }
-    let listed: BTreeSet<&str> = rows.iter().chain(&beside).map(|r| r.key.as_str()).collect();
-    let mut keys_all: BTreeMap<AccountId, Vec<&str>> = BTreeMap::new();
-    for a in &stated {
-        keys_all.entry(ids[&a.key]).or_default().push(&a.key);
-    }
-    for (r, key) in unlisted(book, adapter, &scheme, &spans, &keys_all, &listed, &read_before, &mut report)? {
+    let listed: BTreeSet<&str> = rows.iter().map(|r| r.key.as_str()).collect();
+    for (r, key) in unlisted(book, adapter, &spans, &listed, &read_before, &mut report)? {
         book.mark_removed(r, now)?;
         report.removed.push((r, key));
     }
+    let incomplete: BTreeSet<AccountId> = unrecorded.iter().filter_map(|k| ids.get(k)).copied().collect();
     for (id, at) in &read_accounts {
-        book.note_activity_read(*id, *at, true)?;
+        book.note_activity_read(*id, *at, !incomplete.contains(id))?;
     }
 
     // the two sides of each move of holdings: the rows' own accounts and
     // instant join them, and a leg joins the other side's leg of the same
     // instrument and the opposite quantity
-    let linked: Vec<RecordId> = stored_second.iter().map(|(id, _)| *id).chain(refreshed).chain(beside_linked).collect();
-    report.transfers_linked += link_moves(book, &linked)?;
+    report.transfers_linked += link_moves(book, &stored_second)?;
 
     // statements: cash now, units as of the last day read in full, and each
     // day's value after the last one stored. One book account can be several of
@@ -369,14 +271,22 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     store_net_values(book, connection, &stated, &keys_of, now)?;
     step(Step::Balances);
     store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
+    // a closed account holds nothing: so stated, its cash now and its units as
+    // of today, which the check holds the book to as it does an open account's
+    let closed_accounts: Vec<AccountId> = open_of.iter().filter(|(_, open)| !**open).map(|(id, _)| *id).collect();
+    store_closed(book, connection, &closed_accounts, now)?;
+    for id in &closed_accounts {
+        if !book.stated(*id)?.units.is_some_and(|(_, lines)| lines.is_empty()) {
+            let read = book.broker_read(connection, "units", now)?;
+            book.store_units(*id, today, &[], &read, now)?;
+        }
+    }
     // the movements the activity feed left out, for an account whose cash now
-    // disagrees with the broker's: read from its monthly statements
-    // every account of the broker's behind an open one of the book's, closed ones
-    // too: an account merged into another holds the history the book carries
-    // over from it, and holds no cash now
+    // disagrees with the broker's: read from its monthly statements, every
+    // account's, closed ones too
     let mut statement_keys: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
     let mut closed = BTreeSet::new();
-    for a in stated.iter().filter(|a| keys_of.contains_key(&ids[&a.key])) {
+    for a in &stated {
         statement_keys.entry(ids[&a.key]).or_default().push(a.key.clone());
         if !a.open {
             closed.insert(a.key.clone());
@@ -546,76 +456,19 @@ pub const DAILY_READ: &str = "daily";
 /// suspect.
 const FEW: usize = 3;
 
-/// Whether the book holds a row's record as the row is now.
-fn held(book: &Book, adapter: &dyn BrokerAdapter, connection: ConnectionId, row: &Row) -> Result<bool> {
-    Ok(match book.record_by_key(Some(connection), &adapter.mapping().source(), &row.key)? {
-        Some(r) => book.revisions(r)?.pop().is_some_and(|(_, _, p)| json::parse(&p).is_ok_and(|v| adapter.holds(&v, row))),
-        None => false,
-    })
-}
-
-/// The closed accounts already read in full that have a reason to be read
-/// again, each with the first day of what gave the reason: a row of another
-/// account read now naming it as the other side of a move (`names`) that the
-/// book does not hold as it is; a row of it that a stored record holds
-/// (`watched_rows`) and the book holds no record of; or a row of its own stored
-/// before it was final. Each reason is spent by the read it causes, so a
-/// closed account with none is never read again.
-#[allow(clippy::type_complexity)]
-fn closed_due<'a>(
-    book: &Book,
-    adapter: &dyn BrokerAdapter,
-    connection: ConnectionId,
-    closed: &[(&'a AccountStated, jiff::Timestamp)],
-    rows: &[Row],
-    unheld: &BTreeMap<String, Vec<Option<jiff::civil::Date>>>,
-    unsettled: &BTreeMap<String, Option<jiff::civil::Date>>,
-) -> Result<Vec<(&'a AccountStated, Option<jiff::Timestamp>, Option<jiff::civil::Date>)>> {
-    let earlier = |a: Option<jiff::civil::Date>, b: Option<jiff::civil::Date>| match (a, b) {
-        (Some(a), Some(b)) => Some(a.min(b)),
-        (a, b) => a.or(b),
-    };
-    let mut out = Vec::new();
-    for (a, read_at) in closed {
-        let mut due = unsettled.contains_key(&a.key);
-        let mut since = None;
-        for day in unheld.get(&a.key).into_iter().flatten() {
-            due = true;
-            since = earlier(since, *day);
-        }
-        for row in rows.iter().filter(|r| adapter.names(r).as_deref() == Some(a.key.as_str())) {
-            if !held(book, adapter, connection, row)? {
-                due = true;
-                since = earlier(since, row.day);
-            }
-        }
-        if due {
-            out.push((*a, Some(*read_at), since));
-        }
-    }
-    Ok(out)
-}
-
 /// The records of rows the broker no longer lists over a span it was read in:
 /// a row posted again under another id once final (a card purchase's pending
-/// row), a row withdrawn. Its own records by the account and day they name; an
-/// imported record of its rows by its transactions' account, once every
-/// account of the broker's behind it was read, and their day.
+/// row), a row withdrawn, by the account and day they name.
 ///
 /// A row not yet final that is gone is the pending row's life; a final row
 /// gone is not, so an account whose read would remove a final row older than
 /// the rows read again (before the last full read's day, where only rows not
 /// yet final are read again), or more than a few final rows, removes nothing
-/// and is reported suspect (brief 08). The imported records are not held to that
-/// guard: they are replaced on the first full read, and those the broker no
-/// longer lists are the import's copies of rows it has since posted again
-/// (the owner's card: 35 at once), which a count would keep counted twice.
+/// and is reported suspect (brief 08).
 fn unlisted(
     book: &Book,
     adapter: &dyn BrokerAdapter,
-    scheme: &str,
     spans: &BTreeMap<String, Option<jiff::civil::Date>>,
-    keys_all: &BTreeMap<AccountId, Vec<&str>>,
     listed: &BTreeSet<&str>,
     read_before: &BTreeMap<String, jiff::civil::Date>,
     report: &mut Report,
@@ -653,40 +506,11 @@ fn unlisted(
             None => out.extend(gone.into_iter().map(|(r, k, _, _)| (r, k))),
         }
     }
-    // the span every account behind a book account was read over: the latest start
-    let span_of = |id: &AccountId| -> Option<Option<jiff::civil::Date>> {
-        let mut span = None;
-        for k in keys_all.get(id)? {
-            span = Some(match (span.flatten(), *spans.get(*k)?) {
-                (Some(a), Some(b)) => Some(std::cmp::max(a, b)),
-                (a, b) => a.or(b),
-            });
-        }
-        span
-    };
-    for (r, key) in book.live_records_by_scheme(scheme, &adapter.mapping().source())? {
-        if listed.contains(key.as_str()) {
-            continue;
-        }
-        let txs = book.transactions_of(r)?;
-        let Some(first) = txs.iter().map(|t| t.occurred_at.map_or(t.trade_date, |at| adapter.day(at))).min() else { continue };
-        let accounts: BTreeSet<AccountId> = txs.iter().map(|t| t.account).collect();
-        if accounts.iter().all(|a| span_of(a).is_some_and(|from| covers(&from, first))) {
-            out.push((r, key));
-        }
-    }
     Ok(out)
 }
 
-/// The stored records holding another account's rows over some days, by that
-/// account's key.
-type Watching = BTreeMap<String, Vec<RecordId>>;
-
-/// Store one row's record, replacing the imported record of the same broker id,
-/// and adding the row to each stored record holding its account's rows over
-/// its day: one write, so no reader sees the book between the two.
-#[allow(clippy::too_many_arguments)]
-fn store_row(book: &Book, adapter: &mut dyn BrokerAdapter, moves: &mut dyn BookMoves, connection: ConnectionId, row: &Row, scheme: &str, watching: &Watching, report: &mut Report, now: jiff::Timestamp) -> Result<Option<RecordId>> {
+/// Store one row's record; none where it cannot be put together.
+fn store_row(book: &Book, adapter: &mut dyn BrokerAdapter, moves: &mut dyn BookMoves, connection: ConnectionId, row: &Row, report: &mut Report, now: jiff::Timestamp) -> Result<Option<RecordId>> {
     let payload = match adapter.record(row, moves) {
         Ok(p) => p,
         Err(f) => {
@@ -695,117 +519,20 @@ fn store_row(book: &Book, adapter: &mut dyn BrokerAdapter, moves: &mut dyn BookM
         }
     };
     let text = payload.canonical();
-    let incoming = Incoming { connection: Some(connection), source_key: &row.key, payload: &text, refs: vec![(scheme.to_string(), row.key.clone())] };
-    // the imported record of this row, still counted
-    let mut replaces = Vec::new();
-    for r in book.records_by_ref(scheme, &row.key)? {
-        let rec = book.record(r)?;
-        if rec.state == RecordState::Live && rec.source != adapter.mapping().source() {
-            replaces.push(r);
-        }
+    let incoming = Incoming { connection: Some(connection), source_key: &row.key, payload: &text, refs: vec![] };
+    let stored = book.store(adapter.mapping(), &incoming, now)?;
+    match stored.outcome {
+        bagholder_book::records::Outcome::New => report.records_new += 1,
+        bagholder_book::records::Outcome::Revised(_) => report.records_revised += 1,
+        bagholder_book::records::Outcome::Unchanged => report.records_unchanged += 1,
     }
-    book.atomically(|| {
-        let stored = if replaces.is_empty() {
-            book.store(adapter.mapping(), &incoming, now)?
-        } else {
-            report.superseded += replaces.len();
-            book.store_superseding(adapter.mapping(), &incoming, &replaces, "the broker's own row", now)?
-        };
-        match stored.outcome {
-            bagholder_book::records::Outcome::New => report.records_new += 1,
-            bagholder_book::records::Outcome::Revised(_) => report.records_revised += 1,
-            bagholder_book::records::Outcome::Unchanged => report.records_unchanged += 1,
-        }
-        supersede_copies(book, adapter, stored.record, &payload, report, now)?;
-        // the stored records holding this account's rows over the row's day:
-        // the row added, and each derived again (a move's arrival that booked
-        // it leaving here, now that its own row is read, books it no more)
-        for r in watching.get(&row.account).into_iter().flatten() {
-            if *r == stored.record {
-                continue;
-            }
-            let rec = book.record(*r)?;
-            if rec.state != RecordState::Live {
-                continue;
-            }
-            let Some((_, _, held)) = book.revisions(*r)?.pop() else { continue };
-            let Ok(held) = json::parse(&held) else { continue };
-            if let Some(amended) = adapter.amend(&held, row) {
-                let text = amended.canonical();
-                let incoming = Incoming { connection: Some(connection), source_key: &rec.source_key, payload: &text, refs: vec![(scheme.to_string(), rec.source_key.clone())] };
-                if let bagholder_book::records::Outcome::Revised(_) = book.store(adapter.mapping(), &incoming, now)?.outcome {
-                    report.records_revised += 1;
-                }
-            }
-        }
-        Ok(Some(stored.record))
-    })
-}
-
-/// A record whose row books a leg in another account than its own (a move
-/// whose other side the broker states by its arrival alone, booked leaving
-/// the other account too): the records of other sources (an import) that hold
-/// nothing but such legs, each one of these legs again (its account, kind,
-/// what it moved, the same day or the next or the one before), are superseded
-/// by it, as an imported record of the row's own id is.
-fn supersede_copies(book: &Book, adapter: &dyn BrokerAdapter, record: RecordId, payload: &json::Value, report: &mut Report, now: jiff::Timestamp) -> Result<()> {
-    let Some((key, _)) = adapter.placed(payload) else { return Ok(()) };
-    let Some(own) = book.account_by_ref(&AccountRef::new(adapter.broker(), key))? else { return Ok(()) };
-    // most records book nothing elsewhere: the book's transactions read only for one that does
-    if book.transactions_of(record)?.iter().all(|t| t.account == own) {
-        return Ok(());
-    }
-    let all = book.transactions_as_named()?;
-    let elsewhere: Vec<&Transaction> = all.iter().filter(|t| t.id.record == record && t.account != own).collect();
-    if elsewhere.is_empty() {
-        return Ok(());
-    }
-    let like = |a: &Transaction, b: &Transaction| {
-        a.account == b.account && a.kind == b.kind && a.cash == b.cash && a.instrument == b.instrument && a.quantity == b.quantity && (a.trade_date - b.trade_date).get_days().abs() <= 1
-    };
-    let source = adapter.mapping().source();
-    let candidates: BTreeSet<RecordId> = all.iter().filter(|t| t.id.record != record && elsewhere.iter().any(|e| like(e, t))).map(|t| t.id.record).collect();
-    let mut copies = Vec::new();
-    for r in candidates {
-        let rec = book.record(r)?;
-        if rec.state != RecordState::Live || rec.source == source {
-            continue;
-        }
-        let theirs: Vec<&Transaction> = all.iter().filter(|t| t.id.record == r).collect();
-        if theirs.iter().all(|t| elsewhere.iter().any(|e| like(e, t))) {
-            copies.push(r);
-        }
-    }
-    // one copy a leg: more is not which
-    if copies.is_empty() || copies.len() > elsewhere.len() {
-        return Ok(());
-    }
-    report.superseded += copies.len();
-    book.supersede(&copies, &[record], "the broker's own row, booking the move leaving this account", now)?;
-    Ok(())
-}
-
-/// The live records of another source (an import) that the broker's own
-/// records of these rows replace (`store_row`): their ids by the broker's.
-fn replaced_by<'a>(book: &Book, adapter: &dyn BrokerAdapter, scheme: &str, rows: impl Iterator<Item = &'a Row>) -> Result<BTreeSet<RecordId>> {
-    let source = adapter.mapping().source();
-    let mut out = BTreeSet::new();
-    for row in rows {
-        for r in book.records_by_ref(scheme, &row.key)? {
-            let rec = book.record(r)?;
-            if rec.state == RecordState::Live && rec.source != source {
-                out.insert(r);
-            }
-        }
-    }
-    Ok(out)
+    Ok(Some(stored.record))
 }
 
 /// The book's own moves, by the broker's account and instrument ids, leaving
-/// out the records that are themselves read against positions and the
-/// imports the rows read now replace (`replaced`).
-fn index(book: &Book, adapter: &dyn BrokerAdapter, source: &bagholder_core::SourceName, broker: &bagholder_core::Broker, replaced: &BTreeSet<RecordId>) -> Result<Index> {
-    let mut skip: BTreeSet<RecordId> = replaced.clone();
+/// out the records that are themselves read against positions.
+fn index(book: &Book, adapter: &dyn BrokerAdapter, source: &bagholder_core::SourceName, broker: &bagholder_core::Broker) -> Result<Index> {
+    let mut skip: BTreeSet<RecordId> = BTreeSet::new();
     for r in book.live_records(source)? {
         if let Some((_, _, payload)) = book.revisions(r)?.pop() {
             if let Ok(v) = json::parse(&payload) {
@@ -822,22 +549,13 @@ fn index(book: &Book, adapter: &dyn BrokerAdapter, source: &bagholder_core::Sour
         }
     }
     let mut instrument_ref: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::instrument::Reference>> = BTreeMap::new();
-    let mut by: BTreeMap<(String, jiff::civil::Date), Vec<(MovedWhat, Dec, bool)>> = BTreeMap::new();
-    let mut imported: BTreeMap<RecordId, bool> = BTreeMap::new();
+    let mut by: BTreeMap<(String, jiff::civil::Date), Vec<(MovedWhat, Dec)>> = BTreeMap::new();
     // each move under the broker's own id for what it moved
     for t in book.transactions_as_named()? {
         if skip.contains(&t.id.record) || t.kind == Kind::Unclassified {
             continue;
         }
         let Some(a) = account_key.get(&t.account) else { continue };
-        let other = match imported.get(&t.id.record) {
-            Some(o) => *o,
-            None => {
-                let o = &book.record(t.id.record)?.source != source;
-                imported.insert(t.id.record, o);
-                o
-            }
-        };
         let key = (a.clone(), t.trade_date);
         if let (Some(i), Some(q)) = (t.instrument, t.quantity) {
             let r = match instrument_ref.get(&i) {
@@ -849,20 +567,20 @@ fn index(book: &Book, adapter: &dyn BrokerAdapter, source: &bagholder_core::Sour
                 }
             };
             if let Some(r) = r {
-                by.entry(key.clone()).or_default().push((MovedWhat::Instrument(r), q, other));
+                by.entry(key.clone()).or_default().push((MovedWhat::Instrument(r), q));
             }
         }
         if let Some(c) = t.cash {
-            by.entry(key).or_default().push((MovedWhat::Cash(c.currency), c.amount, other));
+            by.entry(key).or_default().push((MovedWhat::Cash(c.currency), c.amount));
         }
     }
     Ok(Index { by })
 }
 
 /// Link the out and in legs of each move of holdings stored in this pull.
-fn link_moves(book: &Book, stored: &[RecordId]) -> Result<usize> {
+fn link_moves(book: &Book, stored: &[(RecordId, &Row)]) -> Result<usize> {
     let mut linked = 0;
-    let txs: Vec<(RecordId, Vec<Transaction>)> = stored.iter().map(|id| Ok((*id, book.transactions_of(*id)?))).collect::<Result<_>>()?;
+    let txs: Vec<(RecordId, Vec<Transaction>)> = stored.iter().map(|(id, _)| Ok((*id, book.transactions_of(*id)?))).collect::<Result<_>>()?;
     let outs: Vec<&Transaction> = txs.iter().flat_map(|(_, t)| t.iter()).filter(|t| t.kind == Kind::TransferOut && t.instrument.is_some()).collect();
     let ins: Vec<&Transaction> = txs.iter().flat_map(|(_, t)| t.iter()).filter(|t| t.kind == Kind::TransferIn && t.instrument.is_some()).collect();
     for o in &outs {
@@ -898,20 +616,26 @@ pub struct BalancesRead {
 }
 
 /// The balances now, apart from a pull (`docs/plans/stage-3c-switch.md`, §3: every
-/// five minutes while a page is open): each open account's worth and cash, and what
-/// each margin account can borrow, for the connection's accounts the book holds
+/// five minutes while a page is open): each open account's worth and cash, each
+/// closed one's cash as nothing (`store_closed`), and what each margin account
+/// can borrow, for the connection's accounts the book holds
 /// (`SPEC.md`, the sources: net liquidation value at every sync and every five
 /// minutes while a page is open).
 pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, now: jiff::Timestamp) -> Result<BalancesRead> {
     let broker = adapter.broker();
     let mut keys_of: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
     let mut margin = BTreeSet::new();
+    let mut closed = Vec::new();
     for a in book.accounts()? {
-        if a.connection != connection || a.status != AccountStatus::Open {
+        if a.connection != connection {
             continue;
         }
         let keys: Vec<String> = book.account_refs(a.id)?.into_iter().filter(|r| r.broker == broker).map(|r| r.value).collect();
         if keys.is_empty() {
+            continue;
+        }
+        if a.status != AccountStatus::Open {
+            closed.push(a.id);
             continue;
         }
         if is_margin(&a.account_type) {
@@ -926,6 +650,7 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         Err(f) => failures.push(("accounts".into(), f)),
     }
     accounts.extend(store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?);
+    accounts.extend(store_closed(book, connection, &closed, now)?);
     let mut cash_moved = Vec::new();
     for a in &accounts {
         let stated = book.stated_latest(*a)?;
@@ -938,6 +663,19 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         }
     }
     Ok(BalancesRead { accounts: accounts.into_iter().collect(), failures, cash_moved })
+}
+
+/// A closed account's cash now, stated as nothing: what closing means, asked
+/// of the broker by no request. The accounts it was stored for.
+fn store_closed(book: &Book, connection: ConnectionId, closed: &[AccountId], now: jiff::Timestamp) -> Result<Vec<AccountId>> {
+    if closed.is_empty() {
+        return Ok(Vec::new());
+    }
+    let read = book.broker_read(connection, "cash", now)?;
+    for id in closed {
+        book.store_cash(*id, now, &BTreeMap::new(), &read)?;
+    }
+    Ok(closed.to_vec())
 }
 
 /// What each account is worth now, as the broker states it, where every account of
