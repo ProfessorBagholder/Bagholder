@@ -8,9 +8,7 @@
 
 use std::collections::BTreeMap;
 
-/// The kinds of outside entity that are debts, as Wealthsimple's net worth
-/// feature types them (brief 23, the bundle's type map).
-pub const LIABILITY_TYPES: [&str; 9] = ["CreditCard", "LineOfCredit", "Heloc", "Mortgage", "AutoLoan", "InstallmentLoan", "PersonalLoan", "StudentLoan", "OtherLiability"];
+pub use bagholder_book::debts::LIABILITY_TYPES;
 
 /// The purposes a pre-authorized debit states (`aftTransactionCategory`), as
 /// Wealthsimple writes Payments Canada Standard 007's transaction codes: those
@@ -164,11 +162,13 @@ pub fn match_payment(payment: &Payment, debts: &[Liability], answers: &Answers) 
             if !for_debt && !purpose.is_none_or(|p| NO_PURPOSE.contains(&p)) {
                 return Matched::NotOne;
             }
-            let at: Vec<&Liability> = debts.iter().filter(|d| same_institution(&d.institution, originator)).collect();
+            let at: Vec<&Liability> = debts.iter().filter(|d| same_institution(&d.institution, originator) || cut_short_of(&d.institution, originator)).collect();
             if let Some(id) = one(at.clone()) {
                 return Matched::Debt { liability: id, by: Rule::Institution };
             }
-            if !at.is_empty() || for_debt {
+            // asked only where a debt it may be is known: with none read yet there is
+            // nothing to choose among
+            if (!at.is_empty() || for_debt) && !debts.is_empty() {
                 return Matched::Unsettled { candidates: unsettled(&at, debts) };
             }
             Matched::NotOne
@@ -181,6 +181,32 @@ pub fn match_payment(payment: &Payment, debts: &[Liability], answers: &Answers) 
 fn same_institution(institution: &str, stated: &str) -> bool {
     let (a, b) = (normalise(institution), normalise(stated));
     !a.is_empty() && a == b
+}
+
+/// How many characters a pre-authorized debit's originator short name holds: the
+/// field's width in Payments Canada Standard 005's debit record, so a longer name
+/// arrives cut there (`ATB FInancial L`).
+pub const SHORT_NAME: usize = 15;
+
+/// Whether `stated`, a short name cut at its field's width, is the start of the
+/// institution's name: its whole words, all but the last, are the institution's
+/// first words, and that last word, cut, begins the institution's next one or
+/// follows its last (`ATB FInancial L` for `ATB Financial`; `ROYAL BANK OF C`
+/// for `Royal Bank of Canada`, never `Royal Bank of Montreal`).
+fn cut_short_of(institution: &str, stated: &str) -> bool {
+    if stated.trim().chars().count() < SHORT_NAME {
+        return false;
+    }
+    let (inst, said) = (normalise(institution), normalise(stated));
+    let (inst, said): (Vec<&str>, Vec<&str>) = (inst.split(' ').filter(|w| !w.is_empty()).collect(), said.split(' ').filter(|w| !w.is_empty()).collect());
+    let Some((cut, whole)) = said.split_last() else { return false };
+    if whole.is_empty() || !inst.starts_with(whole) {
+        return false;
+    }
+    match inst.get(whole.len()) {
+        None => true,
+        Some(next) => next.starts_with(cut),
+    }
 }
 
 /// The debts a person chooses among: those at the institution named, else every one.
@@ -235,6 +261,24 @@ mod tests {
         for originator in ["OMICRON TRUST", "Omicron Trust Inc.", "omicron trust ltd", "Omicron Trust Corporation", "Omicron Trust Ltée", "ÓMICRON TRUST, LLC"] {
             assert_eq!(match_payment(&debit(originator, Some("residential_mortgage")), &debts(), &Answers::new()), Matched::Debt { liability: "mortgage-b".into(), by: Rule::Institution }, "{originator}");
         }
+    }
+
+    /// A debit's originator short name is cut at fifteen characters (Standard
+    /// 005): a name of that width is the start of the institution's.
+    #[test]
+    fn a_short_name_cut_at_its_width_is_its_institution() {
+        let debts = vec![debt("loc", "LineOfCredit", "ATB Financial", None), debt("rbc", "Mortgage", "Royal Bank of Canada", None), debt("bmo", "LineOfCredit", "Royal Bank of Montreal Trust", None)];
+        assert_eq!(match_payment(&debit("ATB FInancial L", Some("loans")), &debts, &Answers::new()), Matched::Debt { liability: "loc".into(), by: Rule::Institution });
+        assert_eq!(match_payment(&debit("ROYAL BANK OF C", Some("mortgage")), &debts, &Answers::new()), Matched::Debt { liability: "rbc".into(), by: Rule::Institution });
+        // shorter than the field: not cut, so whole names only
+        assert!(matches!(match_payment(&debit("ATB Fin", Some("loans")), &debts, &Answers::new()), Matched::Unsettled { .. }));
+        assert_eq!(SHORT_NAME, 15);
+    }
+
+    /// With no debt read yet there is nothing to choose among: nothing is asked.
+    #[test]
+    fn nothing_is_asked_while_no_debt_is_known() {
+        assert_eq!(match_payment(&debit("ATB FInancial L", Some("loans")), &[], &Answers::new()), Matched::NotOne);
     }
 
     #[test]

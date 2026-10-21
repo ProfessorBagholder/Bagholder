@@ -45,6 +45,13 @@ pub const TO_FIGURES_MS: u64 = 1_000;
 /// runs of the runner's CPU, Azure Cobalt 100 (1,620 and 1,639). CPU only, not
 /// measured on hardware.
 pub const PI_SLOWDOWN: f64 = 2.1;
+/// How far one run's wall time on the runner lands from another's, as a share of
+/// their median: `backdated-trade` by depth, the same code on sixteen runs of
+/// pull requests #574, #575 and #577 (2026-10-20 and -21), read 86.4 to 107.1 ms
+/// on a Pi about a median of 98.0: a range of (107.1 - 86.4) / 98.0, or 21%, half
+/// of it either side of a true value. A time within this of its budget is at the
+/// edge of it, said the same whichever side a run lands.
+pub const TIME_SPREAD: f64 = 0.106;
 /// Work through an index grows by a B-tree's depth when the book is four times
 /// the size; work proportional to the book grows about four times. Under twice
 /// tells the two apart.
@@ -112,7 +119,7 @@ impl Pair {
     /// instrument's history costs.
     fn ops(self) -> &'static [Op] {
         match self {
-            Pair::Breadth => &[Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::AgentTrades],
+            Pair::Breadth => &[Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::NetWorthDays, Op::AgentTrades],
             // a change dated today, and one dated in the middle of the history: a
             // record that states no venue reads as on the one before it, so a
             // back-dated one re-forms the names after it (brief 44, 2)
@@ -163,6 +170,10 @@ pub enum Op {
     Brokers,
     PriceChanged,
     FeedStep,
+    /// Net worth by day worked out once (`bagholder_engine::scope::net_worth_days`):
+    /// every day from the first anything is stated to today, as every build of
+    /// the Portfolio works it out, which a change to the figures brings.
+    NetWorthDays,
     /// A trade entered by hand on the holding, dated in the middle of its history.
     BackdatedTrade,
     /// One of the broker's buys of the holding, from the middle of its history,
@@ -184,7 +195,7 @@ pub enum Op {
 }
 
 impl Op {
-    pub const ALL: [Op; 12] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat, Op::AgentTrades];
+    pub const ALL: [Op; 13] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::NetWorthDays, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat, Op::AgentTrades];
     pub fn name(self) -> &'static str {
         match self {
             Op::Startup => "startup",
@@ -193,6 +204,7 @@ impl Op {
             Op::Brokers => "brokers",
             Op::PriceChanged => "price-changed",
             Op::FeedStep => "feed-step",
+            Op::NetWorthDays => "net-worth-days",
             Op::BackdatedTrade => "backdated-trade",
             Op::BackdatedFill => "backdated-fill",
             Op::BackdatedRecord => "backdated-record",
@@ -270,6 +282,9 @@ pub const OVER_BUDGET: &[(&str, Pair, Measure, &str)] = &[
     // the Trades list's first page builds and sorts every trade in scope before
     // taking the page: the page's own read and an agent's alike
     ("agent-trades-page", Pair::Breadth, Measure::Allocations, "#554"),
+    // at the edge: a trade dated in the past derives every later trade again, and
+    // reads 86 to 107 ms on a Pi against 100
+    ("backdated-trade", Pair::Depth, Measure::Time, "#569"),
 ];
 
 /// What a measurement is judged by.
@@ -799,6 +814,15 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             f.price_changed(instrument)?;
             Ok(since(&m, priced))
         }
+        Op::NetWorthDays => {
+            // today's point first, which the days before it end on, as the
+            // Portfolio works it out; then the days alone
+            let all = bagholder_engine::scope::Filters::default();
+            let now = f.read(|e| e.scope(&all).portfolio.net_worth_now).flatten().ok_or("the figures were not built")?;
+            let m = mark();
+            let days = f.read(|e| bagholder_engine::scope::net_worth_days(&all, e.inputs(), &now).len()).ok_or("the figures were not built")?;
+            Ok(Measured { rows: Some(days as u64), ..since(&m, priced) })
+        }
         Op::FeedStep => {
             let mut feed = crate::events::Feed::open(app.clone());
             let want = |k: &str| (k.to_string(), crate::events::Want { params: serde_json::json!({}), have: None });
@@ -1047,6 +1071,9 @@ pub fn budget_ms(op: Op, divisor: u64) -> (f64, &'static str) {
         Op::Brokers => (BALANCES_EVERY_MS as f64 / divisor as f64, "balances cadence / accounts"),
         Op::PriceChanged => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / priced holdings"),
         Op::FeedStep => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / signals a pass sends"),
+        // a part of every price change's figures: the Portfolio, net worth by day
+        // with it, is built again on each, so it has the price change's share
+        Op::NetWorthDays => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / priced holdings"),
         // an agent's read: nobody waits on it as on a screen, so no budget
         Op::AgentTrades => (f64::INFINITY, "reported, not budgeted (an agent's read)"),
     }
@@ -1117,6 +1144,9 @@ pub struct Verdict {
     pub pair: Pair,
     /// Each measure over, with what it measured.
     pub over: Vec<(Measure, String)>,
+    /// Each measure at the edge of its budget (within `TIME_SPREAD` of it), with
+    /// what it measured: neither over nor within until a steadier figure says.
+    pub edge: Vec<(Measure, String)>,
 }
 
 impl Verdict {
@@ -1130,11 +1160,15 @@ impl Verdict {
 
 /// What breaks the budget or the growth rule, from the two sizes' measurements.
 pub fn judge(op: Op, pair: Pair, one: &Measured, four: &Measured) -> Verdict {
-    let mut over = Vec::new();
+    let (mut over, mut edge) = (Vec::new(), Vec::new());
     let pi_ms = four.wall_ns as f64 / 1e6 * PI_SLOWDOWN;
     let (budget, _) = budget_ms(op, four.divisor);
-    if op.waited_on() && pi_ms > budget {
-        over.push((Measure::Time, format!("{:.0} ms on a Pi at four times the owner's size, over {budget:.0} ms", pi_ms)));
+    if op.waited_on() {
+        if pi_ms > budget * (1.0 + TIME_SPREAD) {
+            over.push((Measure::Time, format!("{:.0} ms on a Pi at four times the owner's size, over {budget:.0} ms", pi_ms)));
+        } else if pi_ms >= budget * (1.0 - TIME_SPREAD) {
+            edge.push((Measure::Time, format!("{:.0} ms on a Pi at four times the owner's size, within the runner's spread of {budget:.0} ms", pi_ms)));
+        }
     }
     if op.per_change() {
         // per unit of what each change did: a change that did four times as much has
@@ -1150,7 +1184,7 @@ pub fn judge(op: Op, pair: Pair, one: &Measured, four: &Measured) -> Verdict {
             }
         }
     }
-    Verdict { op, pair, over }
+    Verdict { op, pair, over, edge }
 }
 
 /// The run fails on an operation off the list that is over, and on one on the
@@ -1160,14 +1194,32 @@ pub fn listed_disagree(verdicts: &[Verdict]) -> Vec<String> {
     for v in verdicts {
         for m in [Measure::Time, Measure::Steps, Measure::Allocations, Measure::BytesRead] {
             let said: Vec<&str> = v.over.iter().filter(|(o, _)| *o == m).map(|(_, s)| s.as_str()).collect();
-            match (listed(v.op, v.pair, m), said.is_empty()) {
-                (false, false) => out.push(format!("{} ({}) is over budget: {}", v.op.name(), v.pair.name(), said.join("; "))),
-                (true, true) => out.push(format!("{} ({}) is within its budget by {} now: take it off OVER_BUDGET and close its issue", v.op.name(), v.pair.name(), m.name())),
+            let edge: Vec<&str> = v.edge.iter().filter(|(o, _)| *o == m).map(|(_, s)| s.as_str()).collect();
+            match (listed(v.op, v.pair, m), said.is_empty(), edge.is_empty()) {
+                (false, false, _) => out.push(format!("{} ({}) is over budget: {}", v.op.name(), v.pair.name(), said.join("; "))),
+                // at the edge, it passes only listed with its issue: a run either side
+                // of the budget says the same
+                (false, true, false) => out.push(format!("{} ({}) is at the edge of its budget: {}; list it on OVER_BUDGET with its issue", v.op.name(), v.pair.name(), edge.join("; "))),
+                // a time under the band while listed is said beside the table and fails
+                // nothing: time is noisy, and the listing stays in sight by its issue
+                (true, true, true) if m == Measure::Time => {}
+                (true, true, true) => out.push(format!("{} ({}) is within its budget by {} now: take it off OVER_BUDGET and close its issue", v.op.name(), v.pair.name(), m.name())),
                 _ => {}
             }
         }
     }
     out
+}
+
+/// The operations listed over by time that a run found under the band: said, never
+/// failed (`listed_disagree`).
+pub fn could_come_off(verdicts: &[Verdict]) -> Vec<String> {
+    let time = |l: &[(Measure, String)]| l.iter().any(|(m, _)| *m == Measure::Time);
+    verdicts
+        .iter()
+        .filter(|v| listed(v.op, v.pair, Measure::Time) && !time(&v.over) && !time(&v.edge))
+        .map(|v| format!("{} ({}) was under its budget by time on this run: it could come off OVER_BUDGET", v.op.name(), v.pair.name()))
+        .collect()
 }
 
 pub fn run(work: &Path) -> Result<String, String> {
@@ -1199,7 +1251,8 @@ pub fn run(work: &Path) -> Result<String, String> {
                 _ => "".into(),
             };
             let pi = b.wall_ns as f64 / 1e6 * PI_SLOWDOWN;
-            let over = if verdict.over.iter().any(|(m, _)| *m == Measure::Time) { " (over)" } else { "" };
+            let time = |l: &[(Measure, String)]| l.iter().any(|(m, _)| *m == Measure::Time);
+            let over = if time(&verdict.over) { " (over)" } else if time(&verdict.edge) { " (at the edge)" } else { "" };
             let (budget, from) = budget_ms(op, b.divisor);
             let read = match (a.read, b.read) {
                 (Some(x), Some(y)) => format!("{x} → {y}"),
@@ -1219,10 +1272,11 @@ pub fn run(work: &Path) -> Result<String, String> {
         }
     }
     let wrong = listed_disagree(&verdicts);
+    let said: String = could_come_off(&verdicts).iter().map(|s| format!("\n{s}")).collect();
     if wrong.is_empty() {
-        Ok(String::from("\nEvery operation is within its budget and the growth rule, or listed over it.\n"))
+        Ok(format!("{said}\nEvery operation is within its budget and the growth rule, or listed over it.\n"))
     } else {
-        Err(format!("\n{}", wrong.join("\n")))
+        Err(format!("{said}\n{}", wrong.join("\n")))
     }
 }
 
@@ -1464,7 +1518,8 @@ mod tests {
                 let paths_a = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
                 let b = probe(op, pair, min.1, four.path()).unwrap();
                 let paths_b = PROBED_PATHS.with(|p| std::mem::take(&mut *p.borrow_mut()));
-                assert!(a.steps > 0 || op == Op::FeedStep, "{op:?} counted no work: {a:?}");
+                // a step and net worth by day work on what the figures hold, reading no storage
+                assert!(a.steps > 0 || matches!(op, Op::FeedStep | Op::NetWorthDays), "{op:?} counted no work: {a:?}");
                 let v = judge(op, pair, &a, &b);
                 // steps and allocations: what the process reads from storage at
                 // these small sizes is what this run's page cache holds, judged by
@@ -1617,17 +1672,57 @@ mod tests {
         assert!(judge(Op::Startup, Pair::Breadth, &small, &slow).over.iter().any(|(m, o)| *m == Measure::Time && o.contains("over 5000 ms")));
         // a background operation's wall time is reported, never judged
         assert!(judge(Op::Brokers, Pair::Breadth, &small, &Measured { wall_ns: 10_000_000_000, ..small }).over.is_empty());
-        let off_list = listed_disagree(&[Verdict { op: Op::PriceChanged, pair: Pair::Breadth, over: vec![(Measure::Steps, "x".into())] }]);
+        let off_list = listed_disagree(&[Verdict { op: Op::PriceChanged, pair: Pair::Breadth, over: vec![(Measure::Steps, "x".into())], edge: vec![] }]);
         assert_eq!(off_list.len(), usize::from(!listed(Op::PriceChanged, Pair::Breadth, Measure::Steps)));
         // a listing names its measure: one listed by allocations is still held to its steps
         let (op, pair, listed_by, _) = OVER_BUDGET[0];
         let op = Op::parse(op).unwrap();
         let other = [Measure::Steps, Measure::Allocations].into_iter().find(|m| *m != listed_by).unwrap();
-        let said = listed_disagree(&[Verdict { op, pair, over: vec![(listed_by, "x".into()), (other, "y".into())] }]);
+        let said = listed_disagree(&[Verdict { op, pair, over: vec![(listed_by, "x".into()), (other, "y".into())], edge: vec![] }]);
         assert_eq!(said.len(), 1, "{said:?}");
         assert!(said[0].contains("y"), "{said:?}");
         // and one listed but no longer over by its measure fails the run
-        let said = listed_disagree(&[Verdict { op, pair, over: vec![] }]);
+        let said = listed_disagree(&[Verdict { op, pair, over: vec![], edge: vec![] }]);
         assert!(said.iter().any(|s| s.contains("within its budget")), "{said:?}");
+    }
+
+    /// Time is judged in three zones about the budget, the runner's spread wide:
+    /// past it and off the list fails; at the edge passes only listed, whichever
+    /// side of the budget the run landed; under it and listed says to take it off.
+    #[test]
+    fn test_time_past_at_the_edge_of_and_under_its_budget() {
+        let ms = |x: f64| (x / PI_SLOWDOWN * 1e6) as u64;
+        let one = Measured { wall_ns: ms(10.0), steps: 100, allocs: 100, read: Some(1_000), divisor: 1, rows: None, changed: 1 };
+        let at = |pi: f64| Measured { wall_ns: ms(pi), ..one };
+        let budget = ANSWER_MS as f64;
+        let time = |l: &[(Measure, String)]| l.iter().any(|(m, _)| *m == Measure::Time);
+        // the row listed for its edge, and one held to the same budget off the list
+        let (listed_op, unlisted_op) = (Op::BackdatedTrade, Op::AddTrade);
+        assert!(listed(listed_op, Pair::Depth, Measure::Time) && !listed(unlisted_op, Pair::Depth, Measure::Time));
+        assert_eq!(budget_ms(listed_op, 1).0, budget_ms(unlisted_op, 1).0);
+        // past the budget and its spread
+        let past = budget * (1.0 + TIME_SPREAD) + 1.0;
+        let v = judge(unlisted_op, Pair::Depth, &one, &at(past));
+        assert!(time(&v.over) && !time(&v.edge), "{v:?}");
+        assert!(listed_disagree(&[v]).iter().any(|s| s.contains("is over budget")));
+        assert!(listed_disagree(&[judge(listed_op, Pair::Depth, &one, &at(past))]).is_empty());
+        // at the edge, either side of the budget: the same verdict
+        for pi in [budget * (1.0 - TIME_SPREAD) + 0.5, budget - 1.0, budget + 1.0, budget * (1.0 + TIME_SPREAD) - 0.5] {
+            let v = judge(unlisted_op, Pair::Depth, &one, &at(pi));
+            assert!(!time(&v.over) && time(&v.edge), "{pi}: {v:?}");
+            assert!(listed_disagree(&[v]).iter().any(|s| s.contains("at the edge")), "{pi}");
+            assert!(listed_disagree(&[judge(listed_op, Pair::Depth, &one, &at(pi))]).is_empty(), "{pi}");
+        }
+        // under the budget and its spread
+        let under = budget * (1.0 - TIME_SPREAD) - 1.0;
+        let v = judge(unlisted_op, Pair::Depth, &one, &at(under));
+        assert!(!time(&v.over) && !time(&v.edge), "{v:?}");
+        assert!(listed_disagree(&[v]).is_empty());
+        // and listed, it is said and fails nothing: time is noisy
+        let v = judge(listed_op, Pair::Depth, &one, &at(under));
+        assert!(could_come_off(std::slice::from_ref(&v)).iter().any(|s| s.contains("could come off")), "{v:?}");
+        assert!(listed_disagree(&[v]).is_empty());
+        // listed at the edge or past it, nothing is said
+        assert!(could_come_off(&[judge(listed_op, Pair::Depth, &one, &at(budget))]).is_empty());
     }
 }

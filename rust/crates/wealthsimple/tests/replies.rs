@@ -161,6 +161,9 @@ impl Source for Routed<'_> {
     fn card(&mut self, account: &str) -> Answer<Value> {
         self.replay.card(account)
     }
+    fn net_worth_history(&mut self, accounts: &[String], outside: &[String], start: jiff::civil::Date, end: jiff::civil::Date) -> Answer<Option<Vec<Value>>> {
+        self.replay.net_worth_history(accounts, outside, start, end)
+    }
     fn net_worth(&mut self) -> Answer<Option<Value>> {
         self.replay.net_worth()
     }

@@ -328,9 +328,9 @@ pub struct Portfolio {
     pub unrealized_pct: Fig<Option<f64>>,
     pub nav: Option<Fig<Dec>>,
     pub nav_accounts: usize,
-    /// What is owed outside the accounts, under every account and only then:
-    /// none with no debt or under a narrower scope.
-    pub owed: Option<Owed>,
+    /// Net worth, under every account and only then: none with nothing held or
+    /// owed outside or under a narrower scope.
+    pub net_worth: Option<NetWorth>,
     pub has_margin: bool,
     /// None under a past range: no broker statement says what was borrowed then.
     pub margin_used: Option<Fig<Dec>>,
@@ -343,20 +343,60 @@ pub struct Portfolio {
     pub day_change: Option<Partial>,
     pub day_change_pct: Fig<Option<f64>>,
     pub allocation: Vec<Slice>,
+    /// What the allocation's slices come to: the holdings' market value and the
+    /// cash waiting to be invested beside them.
+    pub allocation_total: Fig<Dec>,
     /// The day the holdings are as of, under dates that end before today
     /// (`SPEC.md` §5); none for the holdings now.
     pub as_of: Option<String>,
 }
 
-/// What is owed outside the accounts, in CAD: the total, the net value less it,
-/// and each debt with when it was stated.
+/// Net worth: everything held less everything owed, inside the broker and
+/// out, in CAD, as the broker's net worth feature counts it.
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
 #[serde(rename_all = "camelCase")]
-pub struct Owed {
-    pub total: Fig<Dec>,
-    /// The net value less what is owed; none where no net value is stated.
-    pub net: Option<Fig<Dec>>,
-    pub debts: Vec<OwedDebt>,
+pub struct NetWorth {
+    pub net_worth: Fig<Dec>,
+    pub assets_total: Fig<Dec>,
+    pub liabilities_total: Fig<Dec>,
+    /// The broker's own accounts first (their value after margin), then each outside asset.
+    pub assets: Vec<OwedDebt>,
+    pub liabilities: Vec<OwedDebt>,
+    /// Net worth by day, oldest first, every day from the first anything in scope
+    /// is stated to today, whose point is the tiles' figures: each day's latest
+    /// statement of each account and each thing held or owed outside.
+    pub history: Vec<NetWorthPoint>,
+    /// The days that cannot be stated yet, in runs of consecutive days waiting on
+    /// the same things, oldest first: in no series above, and said under the chart.
+    pub unstated: Vec<UnstatedDays>,
+    /// Under a range ending before today: its last day, whose totals these are;
+    /// no item's own balance is stated for a past day, so no item is listed.
+    pub past_day: Option<String>,
+    /// Under a holding's filter: the holdings' value alone, with no debt and no
+    /// net worth by day.
+    pub holdings: bool,
+}
+
+/// One day's net worth (`v`), everything held (`a`) and everything owed (`o`),
+/// each counted as today's are (the investments before margin, margin a debt).
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[diff(key = d)]
+pub struct NetWorthPoint {
+    pub d: String,
+    pub v: Dec,
+    pub a: Dec,
+    pub o: Dec,
+}
+
+/// A run of consecutive days whose net worth cannot be stated, and what each
+/// waits on, as the gap words `SPEC.md` lists.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[diff(key = from)]
+#[serde(rename_all = "camelCase")]
+pub struct UnstatedDays {
+    pub from: String,
+    pub to: String,
+    pub gaps: Vec<String>,
 }
 
 /// One debt held outside, as the broker's net worth feature states it.
@@ -365,6 +405,9 @@ pub struct Owed {
 #[serde(rename_all = "camelCase")]
 pub struct OwedDebt {
     pub id: String,
+    /// What kind of thing it is, as the broker types it (`LineOfCredit`,
+    /// `RealEstate`); empty for the broker's own accounts.
+    pub kind: String,
     pub name: String,
     pub institution: String,
     /// What is owed, in CAD.

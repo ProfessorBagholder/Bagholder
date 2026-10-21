@@ -232,7 +232,7 @@ impl Reads {
             (Reads::Book, Entity::Position(..)) => fields.contains("*"),
             (Reads::Dashboard(_), Entity::Trade(_) | Entity::Equity(_)) => true,
             (Reads::Dashboard(b), Entity::Benchmark(k)) => k == b,
-            (Reads::Holdings, Entity::Position(..) | Entity::Equity(_) | Entity::Trade(_) | Entity::Broker(_)) => true,
+            (Reads::Holdings, Entity::Position(..) | Entity::Equity(_) | Entity::Trade(_) | Entity::Broker(_) | Entity::Debts) => true,
             (Reads::TradesAndHoldings, Entity::Trade(_) | Entity::Position(..)) => true,
             // the holdings of a past day a screen shows
             (Reads::Holdings | Reads::TradesAndHoldings, Entity::Past) => true,
@@ -523,7 +523,7 @@ impl Positions {
                 }
             })
             .collect();
-        PositionsDoc { portfolio: build::portfolio_totals(cx.engine, &pf), positions }
+        PositionsDoc { portfolio: build::portfolio_totals(cx.engine, &pf, &self.filters), positions }
     }
 }
 
@@ -819,7 +819,7 @@ impl CashflowView {
 
 impl View for CashflowView {
     fn reads(&self, moved: &Moved, _base: bool) -> bool {
-        moved.0.keys().any(|e| matches!(e, Entity::Book | Entity::CashRow(_) | Entity::Payer(_) | Entity::Position(..) | Entity::Broker(_)))
+        moved.0.keys().any(|e| matches!(e, Entity::Book | Entity::CashRow(_) | Entity::Payer(_) | Entity::Position(..) | Entity::Broker(_) | Entity::Debts))
     }
     fn snapshot(&mut self, cx: &Cx) -> Value {
         let d = self.build(cx);

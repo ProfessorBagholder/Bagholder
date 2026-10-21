@@ -841,6 +841,63 @@ fn store_net_values(book: &Book, connection: ConnectionId, stated: &[AccountStat
 /// Each account's cash and, for a margin account, what it can borrow, stored as
 /// statements; one book account that is several of the broker's is theirs added
 /// up. What each stored statement was for.
+/// The first day the net worth page's "All" range asks for.
+pub const ALL_FROM: jiff::civil::Date = jiff::civil::date(2014, 1, 1);
+
+/// The ranges the net worth page asks besides "All", shortest first: one week,
+/// one month, three months, six months and a year back from today. A short range
+/// is answered a value a day; "All" is answered a value a week in its old years.
+pub fn page_ranges() -> [jiff::Span; 5] {
+    [jiff::Span::new().weeks(1), jiff::Span::new().months(1), jiff::Span::new().months(3), jiff::Span::new().months(6), jiff::Span::new().years(1)]
+}
+
+/// The range a read of an outside account's days asks, ending today: "All" for
+/// one with none held yet; else the shortest range of the page's that reaches
+/// back to its last day held, so every day since is stated daily.
+pub fn outside_ranges(last_held: Option<jiff::civil::Date>, today: jiff::civil::Date) -> Vec<(jiff::civil::Date, jiff::civil::Date)> {
+    let back = |span: jiff::Span| today.checked_sub(span).unwrap_or(ALL_FROM).max(ALL_FROM);
+    match last_held {
+        // the whole history once, then the last six months a value a day
+        None => vec![(ALL_FROM, today), (back(page_ranges()[3]), today)],
+        Some(last) => {
+            let start = page_ranges().into_iter().map(back).find(|s| *s <= last).unwrap_or_else(|| back(page_ranges()[4]));
+            vec![(start, today)]
+        }
+    }
+}
+
+/// Each outside account's balance by day, read once a day: each account's
+/// ranges (`outside_ranges`) asked of that account alone and kept span by span.
+/// Whether every one was read.
+fn store_outside_days(book: &Book, adapter: &mut dyn BrokerAdapter, outside: &[bagholder_book::debts::OutsideDebt], today: jiff::civil::Date, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<bool> {
+    let held = book.outside_days()?;
+    let mut whole = true;
+    let mut days = 0;
+    for e in outside {
+        let last = held.get(&e.entity_id).and_then(|d| d.last()).map(|d| d.day);
+        for (from, to) in outside_ranges(last, today) {
+            match adapter.outside_days(e, from, to) {
+                Ok(Some(stated)) => {
+                    days += stated.len();
+                    book.keep_outside_days(&e.entity_id, from, to, &stated, now)?;
+                }
+                // a broker that states no such history
+                Ok(None) => return Ok(false),
+                Err(f) => {
+                    failures.push((format!("the balance by day of {}", e.name), f));
+                    whole = false;
+                    break;
+                }
+            }
+        }
+    }
+    bagholder_core::log::line(&format!("bagholder: outside balances by day read: {} accounts, {days} days", outside.len()));
+    Ok(whole)
+}
+
+/// The part of a connection's reads that is the outside accounts' balances by day.
+const OUTSIDE_DAYS: &str = "outside-days";
+
 fn store_balances(
     book: &Book,
     adapter: &mut dyn BrokerAdapter,
@@ -905,9 +962,44 @@ fn store_balances(
     // what the broker's net worth feature states is held outside it: a debt's
     // balance, read with the statements it sits beside
     match adapter.outside_accounts() {
-        Ok(Some(outside)) => book.keep_outside_debts(connection, now, &outside)?,
+        Ok(Some(outside)) => {
+            book.keep_outside_debts(connection, now, &outside)?;
+            // each outside account's balance by day, read once a day
+            let read_today = book.last_read(connection, OUTSIDE_DAYS)?.is_some_and(|t| now.duration_since(t) < jiff::SignedDuration::from_hours(20));
+            if !read_today && !outside.is_empty() {
+                let today = match book.zone()? {
+                    Some(z) => now.to_zoned(z.zone).date(),
+                    None => now.to_zoned(jiff::tz::TimeZone::UTC).date(),
+                };
+                if store_outside_days(book, adapter, &outside, today, now, failures)? {
+                    book.broker_read(connection, OUTSIDE_DAYS, now)?;
+                }
+            }
+        }
         Ok(None) => {}
         Err(f) => failures.push(("outside accounts".into(), f)),
     }
     Ok(stored.into_iter().collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn day(s: &str) -> jiff::civil::Date {
+        s.parse().unwrap()
+    }
+
+    /// An outside account with no day held is read whole, then its last six
+    /// months a value a day; after, the shortest of the page's ranges that
+    /// reaches back to its last day held, a year at the most.
+    #[test]
+    fn an_outside_accounts_days_are_asked_as_the_page_asks_its_ranges() {
+        let today = day("2026-10-20");
+        assert_eq!(outside_ranges(None, today), [(day("2014-01-01"), today), (day("2026-04-20"), today)]);
+        assert_eq!(outside_ranges(Some(day("2026-10-19")), today), [(day("2026-10-13"), today)], "a week");
+        assert_eq!(outside_ranges(Some(day("2026-10-01")), today), [(day("2026-09-20"), today)], "a month");
+        assert_eq!(outside_ranges(Some(day("2026-06-01")), today), [(day("2026-04-20"), today)], "six months");
+        assert_eq!(outside_ranges(Some(day("2023-01-01")), today), [(day("2025-10-20"), today)], "a year at the most");
+    }
 }

@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { ready, openWithStatus, figures, money, money0, signedMoney, pct, pctPlain, qty, px, hold, cmp, waits, subUrl, symText, type Waits } from './helpers'
+import { ready, openWithStatus, figures, view, money, money0, signedMoney, pct, pctPlain, qty, px, hold, cmp, waits, subUrl, symText, type Waits } from './helpers'
 
 // SPEC §6, Portfolio: tiles, Allocation/Sectors/Regions donuts, the Holdings
 // table and a holding's own page. Figures are checked against the figures document
@@ -196,7 +196,8 @@ test("an option contract's holding page carries neither Buy nor Sell", async ({ 
 
 test('Allocation is one slice a holding up to ten, largest first, and hovering a slice reads its own value and share', async ({ page, request }) => {
   const m = await figures(request)
-  const alloc = m.portfolio.allocation as { label: string; value: string; share: number; id: string | null }[]
+  // the holdings' slices: the cash waiting to be invested is its own, last (the test below)
+  const alloc = (m.portfolio.allocation as { label: string; value: string; share: number; id: string | null }[]).filter((a) => a.id !== 'cash')
   const valued = (m.positions as Position[]).filter((p) => !waits(p.mv))
   // the book's own: one slice a valued holding up to ten, otherwise the ten largest and `Other (N)`
   if (valued.length <= 10) {
@@ -232,6 +233,53 @@ test('Allocation shows the folded Other slice the document sends past ten holdin
   await card.locator('svg path, svg circle').nth(10).dispatchEvent('mouseenter')
   await expect(card.locator('.lbl')).toHaveText('Other (3)')
   await expect(card.locator('.tab').first()).toHaveText('$50')
+})
+
+test('Allocation carries the cash waiting to be invested as a slice of its own, last, and its centre reads Holdings + cash', async ({ page, request }) => {
+  const m = await figures(request)
+  const alloc = m.portfolio.allocation as { label: string; value: string; share: number; id: string | null }[]
+  const cash = alloc[alloc.length - 1]
+  // the made-up book's investment accounts hold cash
+  expect([cash.id, cash.label]).toEqual(['cash', 'Cash'])
+  expect(alloc.filter((a) => a.id === 'cash')).toHaveLength(1)
+  // the cash is the Net worth tab's Uninvested cash, and the slices come to the centre's total
+  expect(cash.value).toBe((m.portfolio.netWorth.assets as { id: string; amount: string }[]).find((a) => a.id === 'cash')!.amount)
+  expect(alloc.reduce((t, a) => t + a.share, 0)).toBeCloseTo(1, 6)
+  await page.goto('/#portfolio')
+  await ready(page)
+  const card = page.locator('.card', { has: page.getByRole('heading', { name: 'Allocation', exact: true }) })
+  await expect(card.locator('.lbl')).toHaveText('Holdings + cash')
+  await expect(card.locator('.tab').first()).toHaveText(money0(m.portfolio.allocationTotal))
+  await expect(card.getByText('Cash', { exact: true })).toBeVisible()
+  await card.locator('svg path, svg circle').nth(alloc.length - 1).dispatchEvent('mouseenter')
+  await expect(card.locator('.lbl')).toHaveText('Cash')
+  await expect(card.locator('.tab').first()).toHaveText(money0(cash.value))
+  await expect(card.locator('.muted').first()).toHaveText(pctPlain(cash.share))
+})
+
+test("under a holding's filter Allocation has no Cash slice and its centre reads Market value", async ({ page, request }) => {
+  const tags = (await figures(request)).options.tags as string[]
+  let tag = ''
+  for (const t of tags) {
+    if ((await view(request, 'positions', { filters: { lists: { tag: [t] } } })).positions.length) {
+      tag = t
+      break
+    }
+  }
+  expect(tag).not.toBe('') // the made-up book holds a tagged position
+  const pf = (await view(request, 'positions', { filters: { lists: { tag: [tag] } } })).portfolio
+  expect((pf.allocation as { id: string | null }[]).some((a) => a.id === 'cash')).toBe(false)
+  await page.goto('/#portfolio')
+  await ready(page)
+  const card = page.locator('.card', { has: page.getByRole('heading', { name: 'Allocation', exact: true }) })
+  await expect(card.locator('.lbl')).toHaveText('Holdings + cash')
+  await page.getByRole('button', { name: 'Filters' }).click()
+  await page.locator('.pop-row', { hasText: /^Tag/ }).click()
+  await page.locator('.pop-row', { hasText: tag }).first().click()
+  await page.getByRole('button', { name: 'Done' }).click()
+  await expect(card.locator('.lbl')).toHaveText('Market value')
+  await expect(card.locator('.tab').first()).toHaveText(money0(pf.allocationTotal))
+  await expect(card.getByText('Cash', { exact: true })).toHaveCount(0)
 })
 
 test('Sectors and Regions read the span the positions cover, excluding Not classified from the count', async ({ page, request }) => {

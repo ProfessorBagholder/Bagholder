@@ -310,6 +310,8 @@ mod tests {
             let conn = book.connections().unwrap()[0].id;
             let debt = bagholder_book::debts::OutsideDebt { entity_id: "efe-1".into(), kind: "PersonalLoan".into(), name: "Loan".into(), institution: "Omicron Trust".into(), last4: None, balance: bagholder_core::Dec::parse("1000").unwrap(), currency: bagholder_core::Currency::CAD, as_of: None };
             book.keep_outside_debts(conn, t, &[debt]).unwrap();
+            let owed = bagholder_book::debts::OutsideDay { day, amount: bagholder_core::Dec::parse("1000").unwrap(), currency: bagholder_core::Currency::CAD };
+            book.keep_outside_days("efe-1", day, day, &[owed], t).unwrap();
             book.answer_repayment("debit:omicron trust", Some("efe-1"), t).unwrap();
         }
         // a month's statement kept from the broker

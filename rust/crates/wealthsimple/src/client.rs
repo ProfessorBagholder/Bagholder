@@ -32,6 +32,7 @@ fn doc(name: &str) -> &'static str {
         "FetchInstitutionalTransfer" => include_str!("../graphql/FetchInstitutionalTransfer.graphql"),
         "FetchCreditCardAccount" => include_str!("../graphql/FetchCreditCardAccount.graphql"),
         "FetchIdentityNetWorthAccounts" => include_str!("../graphql/FetchIdentityNetWorthAccounts.graphql"),
+        "FetchIdentityNetWorthFinancials" => include_str!("../graphql/FetchIdentityNetWorthFinancials.graphql"),
         "FetchAccountCurrentMarginBuyingPowerV2" => include_str!("../graphql/FetchAccountCurrentMarginBuyingPowerV2.graphql"),
         "FetchMonthlyStatementWithTransactions" => include_str!("../graphql/FetchMonthlyStatementWithTransactions.graphql"),
         "FetchTradingBalanceBuyingPower" => include_str!("../graphql/FetchTradingBalanceBuyingPower.graphql"),
@@ -274,6 +275,22 @@ impl Source for Client<'_> {
     fn card(&mut self, account: &str) -> Answer<Value> {
         let data = self.graphql("FetchCreditCardAccount", obj(vec![("id", text(account))]))?;
         Ok(Node::root(&data).obj("creditCardAccount").map_err(|m| mismatch("FetchCreditCardAccount", m))?.value().clone())
+    }
+    fn net_worth_history(&mut self, accounts: &[String], outside: &[String], start: jiff::civil::Date, end: jiff::civil::Date) -> Answer<Option<Vec<Value>>> {
+        let identity = self.identity()?;
+        let op = "FetchIdentityNetWorthFinancials";
+        let list = |xs: &[String]| Value::Array(xs.iter().map(|x| text(x)).collect());
+        // a range as the page asks one, its first and last days as `yyyy-MM-dd`;
+        // every day of it in one answer
+        let days = end.since(start).map(|s| i64::from(s.get_days())).unwrap_or(0).max(0) + 1;
+        let vars = obj(vec![("identityId", text(&identity)), ("accountIds", list(accounts)), ("externalFinancialEntityIds", list(outside)), ("currency", text("CAD")), ("startDate", text(&start.to_string())), ("endDate", text(&end.to_string())), ("first", num(days)), ("accountScope", text("OWN"))]);
+        let data = self.graphql(op, vars)?;
+        let edges = Node::root(&data).obj("identity").and_then(|i| i.obj("netWorth")).and_then(|n| n.obj("financials")).and_then(|f| f.obj("historicalDaily")).and_then(|h| h.list("edges")).map_err(|m| mismatch(op, m))?;
+        let mut out = Vec::new();
+        for e in edges {
+            out.push(e.obj("node").map_err(|m| mismatch(op, m))?.value().clone());
+        }
+        Ok(Some(out))
     }
     fn net_worth(&mut self) -> Answer<Option<Value>> {
         let identity = self.identity()?;

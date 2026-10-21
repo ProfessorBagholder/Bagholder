@@ -37,6 +37,10 @@ pub trait Source {
     /// the accounts held outside Wealthsimple linked or entered there; none from
     /// a capture taken before it was read.
     fn net_worth(&mut self) -> Answer<Option<Value>>;
+    /// The `historicalDaily` nodes of net worth over these accounts and outside
+    /// accounts from `start` to `end`, asked as the net worth page asks a range;
+    /// none from a capture without it.
+    fn net_worth_history(&mut self, accounts: &[String], outside: &[String], start: jiff::civil::Date, end: jiff::civil::Date) -> Answer<Option<Vec<Value>>>;
     /// The position nodes of an account as of a day.
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value>;
     /// The balances replies' accounts.
@@ -583,6 +587,13 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
             }
         }
         Ok(all.into_iter().filter(|(k, _)| accounts.contains(k)).collect())
+    }
+    fn outside_days(&mut self, entity: &bagholder_book::debts::OutsideDebt, start: jiff::civil::Date, end: jiff::civil::Date) -> Answer<Option<Vec<bagholder_book::debts::OutsideDay>>> {
+        // the net worth over that one outside account alone, and no account of Wealthsimple's
+        match self.source.net_worth_history(&[], std::slice::from_ref(&entity.entity_id), start, end)? {
+            Some(nodes) => crate::read::outside_days(&nodes, entity).map(Some).map_err(mismatch),
+            None => Ok(None),
+        }
     }
     fn outside_accounts(&mut self) -> Answer<Option<Vec<bagholder_book::debts::OutsideDebt>>> {
         match self.source.net_worth()? {

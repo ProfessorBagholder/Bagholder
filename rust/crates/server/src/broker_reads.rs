@@ -499,6 +499,8 @@ fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: S
     for a in &read.accounts {
         f.broker_changed(*a)?;
     }
+    // the debts held outside, read with the balances
+    f.debts_changed()?;
     let (failed, lapsed) = failures(&read.failures);
     if lapsed {
         return Ok((Read::Lapsed, false));

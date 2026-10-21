@@ -643,6 +643,8 @@ pub struct Facts {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Debt {
     pub id: String,
+    /// What kind of thing it is, as the broker types it (`LineOfCredit`, `RealEstate`).
+    pub kind: String,
     pub name: String,
     pub institution: String,
     pub balance: Money,
@@ -654,6 +656,13 @@ pub struct Debt {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Debts {
     pub owed: Vec<Debt>,
+    /// What is held outside the broker that is not a debt (a home, a car, an
+    /// account at another institution), as its net worth feature states it.
+    pub assets: Vec<Debt>,
+    /// Each thing held or owed outside the broker, its balance by day as the
+    /// broker's net worth feature states it of that thing alone (a debt's owed
+    /// positive), by its id: each statement held until the next.
+    pub history: BTreeMap<String, BTreeMap<Date, Money>>,
     pub repayments: BTreeMap<TransactionId, String>,
     /// The payees whose payments may repay a debt and nothing says which: the
     /// person is asked, once a payee.

@@ -431,7 +431,7 @@ fn figures_declarations() -> String {
     let decls: Vec<String> = decls![
         crate::wire::Fig<()>,
         Partial, Status, Trade, Position, Fill, Detail, Details, Kpi, Point, Drawdown, Annualized, PnlCurve, Equity, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, GradeBucket, Grades, QueueRow,
-        Slice, crate::wire::figures::OwedDebt, crate::wire::figures::Owed, crate::wire::figures::AskedPayee, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options,
+        Slice, crate::wire::figures::OwedDebt, crate::wire::figures::UnstatedDays, crate::wire::figures::NetWorthPoint, crate::wire::figures::NetWorth, crate::wire::figures::AskedPayee, Portfolio, Account, CashflowTile, CashflowMonth, CashflowHolding, CashflowRow, Cashflow, Waiting, AccountOption, InstrumentOption, Options,
         BookDoc, DashboardDoc, PositionsDoc, TradesDoc, CashflowDoc, TradeDoc,
         crate::wire::markets::MarketTile, crate::wire::markets::WatchItem, crate::wire::markets::DirectoryEntry, crate::wire::markets::MarketsDoc,
         crate::wire::markets::HeatTile, crate::wire::markets::HeatBlock, crate::wire::markets::HeatCounts, crate::wire::markets::HeatmapDoc, crate::wire::markets::ExposureDoc,

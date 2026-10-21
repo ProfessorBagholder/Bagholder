@@ -168,7 +168,12 @@ export type Slice = { label: string, value: Fig<Dec>, share: number,
  */
 id: string | null, };
 
-export type OwedDebt = { id: string, name: string, institution: string, 
+export type OwedDebt = { id: string, 
+/**
+ * What kind of thing it is, as the broker types it (`LineOfCredit`,
+ * `RealEstate`); empty for the broker's own accounts.
+ */
+kind: string, name: string, institution: string, 
 /**
  * What is owed, in CAD.
  */
@@ -178,11 +183,36 @@ amount: Fig<Dec>,
  */
 asOf: string | null, };
 
-export type Owed = { total: Fig<Dec>, 
+export type UnstatedDays = { from: string, to: string, gaps: Array<string>, };
+
+export type NetWorthPoint = { d: string, v: Dec, a: Dec, o: Dec, };
+
+export type NetWorth = { netWorth: Fig<Dec>, assetsTotal: Fig<Dec>, liabilitiesTotal: Fig<Dec>, 
 /**
- * The net value less what is owed; none where no net value is stated.
+ * The broker's own accounts first (their value after margin), then each outside asset.
  */
-net: Fig<Dec> | null, debts: Array<OwedDebt>, };
+assets: Array<OwedDebt>, liabilities: Array<OwedDebt>, 
+/**
+ * Net worth by day, oldest first, every day from the first anything in scope
+ * is stated to today, whose point is the tiles' figures: each day's latest
+ * statement of each account and each thing held or owed outside.
+ */
+history: Array<NetWorthPoint>, 
+/**
+ * The days that cannot be stated yet, in runs of consecutive days waiting on
+ * the same things, oldest first: in no series above, and said under the chart.
+ */
+unstated: Array<UnstatedDays>, 
+/**
+ * Under a range ending before today: its last day, whose totals these are;
+ * no item's own balance is stated for a past day, so no item is listed.
+ */
+pastDay: string | null, 
+/**
+ * Under a holding's filter: the holdings' value alone, with no debt and no
+ * net worth by day.
+ */
+holdings: boolean, };
 
 export type AskedPayee = { key: string, payee: string, 
 /**
@@ -192,10 +222,10 @@ count: number, candidates: Array<OwedDebt>, };
 
 export type Portfolio = { positionCount: number, marketValue: Partial, costBasis: Partial, unrealized: Partial, unrealizedPct: Fig<number | null>, nav: Fig<Dec> | null, navAccounts: number, 
 /**
- * What is owed outside the accounts, under every account and only then:
- * none with no debt or under a narrower scope.
+ * Net worth, under every account and only then: none with nothing held or
+ * owed outside or under a narrower scope.
  */
-owed: Owed | null, hasMargin: boolean, 
+netWorth: NetWorth | null, hasMargin: boolean, 
 /**
  * None under a past range: no broker statement says what was borrowed then.
  */
@@ -204,6 +234,11 @@ marginUsed: Fig<Dec> | null, marginUsedPct: Fig<number | null>, availableMargin:
  * The margin accounts whose buying power the broker did not state.
  */
 availableMarginUnavailable: Array<string>, cash: Fig<Dec>, cashPct: Fig<number | null>, dayChange: Partial | null, dayChangePct: Fig<number | null>, allocation: Array<Slice>, 
+/**
+ * What the allocation's slices come to: the holdings' market value and the
+ * cash waiting to be invested beside them.
+ */
+allocationTotal: Fig<Dec>, 
 /**
  * The day the holdings are as of, under dates that end before today
  * (`SPEC.md` §5); none for the holdings now.

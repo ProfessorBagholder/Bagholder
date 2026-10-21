@@ -67,6 +67,9 @@ pub enum Entity {
     /// The holdings as of a past day a screen shows (`Past`): what they are
     /// worked out from moved.
     Past,
+    /// What the broker's net worth feature states is held and owed outside it,
+    /// and net worth by day: what the net worth and what is owed show.
+    Debts,
 }
 
 /// The holdings as they stood at the close of a past day (`SPEC.md` §5, a range
@@ -105,6 +108,30 @@ impl PastCache {
         let held = c.range(from..).any(|(_, w)| w.strong_count() > 0);
         c.retain(|d, w| *d < from && w.strong_count() > 0);
         held
+    }
+}
+
+/// Net worth by day before today, by the account set it was worked out over
+/// (`scope::net_worth_past`): kept until a change moves what it is worked out
+/// from (`moves_net_worth_past`), so a price change does not work every day
+/// out again.
+#[derive(Default, Debug)]
+struct NetWorthCache(std::sync::Mutex<BTreeMap<BTreeSet<AccountId>, std::sync::Arc<Vec<crate::scope::NetWorthDay>>>>);
+
+/// A copy of the engine works its own days out again.
+impl Clone for NetWorthCache {
+    fn clone(&self) -> NetWorthCache {
+        NetWorthCache::default()
+    }
+}
+
+/// Whether `change` moves net worth by day before today: the ledger's accounts
+/// and cash, the rates, the debts held outside, what the broker states and the
+/// day. Every kind of change is named, so a new one is decided here.
+fn moves_net_worth_past(change: &Change) -> bool {
+    match change {
+        Change::Ledger(_) | Change::Rates(_) | Change::Debts(_) | Change::Broker(..) | Change::Clock(_) => true,
+        Change::Declared(..) | Change::Frequency(..) | Change::Quote(..) | Change::ExDividend(..) | Change::Closes(..) | Change::Benchmark(..) => false,
     }
 }
 
@@ -261,6 +288,7 @@ pub struct Engine {
     /// Each benchmark's total return in CAD, as a level per session.
     benchmarks: BTreeMap<String, crate::stat::benchmark::Levels>,
     past: PastCache,
+    net_worth: NetWorthCache,
     /// The match split into families (`crate::families`): what a change to the
     /// record is matched again in.
     families: Families,
@@ -444,6 +472,7 @@ impl Engine {
             checks: vec![],
             benchmarks: BTreeMap::new(),
             past: PastCache::default(),
+            net_worth: NetWorthCache::default(),
             families,
             shares: BTreeMap::new(),
             symbols: BTreeMap::new(),
@@ -596,7 +625,7 @@ impl Engine {
     /// dates that end before today, those held at the close of their last day.
     pub fn holdings(&self, filters: &Filters) -> crate::scope::Portfolio {
         match filters.past_end(self.inputs.clock.today) {
-            Some(day) => crate::scope::portfolio_as_of(filters, &self.inputs, self.past(day)),
+            Some(day) => crate::scope::portfolio_as_of(filters, &self.inputs, self.past(day), &|a| self.net_worth_past(a)),
             None => self.portfolio(filters),
         }
     }
@@ -696,7 +725,18 @@ impl Engine {
     }
 
     pub fn scope(&self, filters: &Filters) -> Scoped {
-        scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, &self.equity, &self.benchmarks)
+        scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, &self.equity, &self.benchmarks, &|a| self.net_worth_past(a))
+    }
+
+    /// Net worth by day before today over `accounts` (`scope::net_worth_past`),
+    /// worked out once until a change moves it.
+    pub fn net_worth_past(&self, accounts: &BTreeSet<AccountId>) -> std::sync::Arc<Vec<crate::scope::NetWorthDay>> {
+        if let Some(days) = self.net_worth.0.lock().unwrap_or_else(|e| e.into_inner()).get(accounts) {
+            return days.clone();
+        }
+        let days = std::sync::Arc::new(crate::scope::net_worth_past(accounts, &self.inputs));
+        self.net_worth.0.lock().unwrap_or_else(|e| e.into_inner()).insert(accounts.clone(), days.clone());
+        days
     }
 
     /// The trades `filters` shows, in the engine's order.
@@ -711,7 +751,7 @@ impl Engine {
 
     /// The holdings' part of `filters`' scope.
     pub fn portfolio(&self, filters: &Filters) -> crate::scope::Portfolio {
-        crate::scope::portfolio_in_scope(filters, &self.inputs, &self.positions)
+        crate::scope::portfolio_in_scope(filters, &self.inputs, &self.positions, &|a| self.net_worth_past(a))
     }
 
     /// The cashflow's part of `filters`' scope, over the holdings' part.
@@ -741,6 +781,9 @@ impl Engine {
             Change::Closes(i, c) => first_difference(c, self.inputs.market.closes.get(i).unwrap_or(&BTreeMap::new())),
             _ => None,
         };
+        if moves_net_worth_past(&change) {
+            self.net_worth.0.lock().unwrap_or_else(|e| e.into_inner()).clear();
+        }
         if stale.is_some_and(|d| self.past.forget_from(d)) {
             moved.0.entry(Entity::Past).or_default().insert("*");
         }
@@ -963,6 +1006,9 @@ impl Engine {
             }
             Change::Debts(d) => {
                 let before = self.snapshot(Parts::ALL);
+                if self.inputs.facts.debts != d {
+                    moved.0.entry(Entity::Debts).or_default().insert("*");
+                }
                 self.inputs.facts.debts = d;
                 self.cash = build_cashflow(&self.inputs, &self.matched);
                 self.compare(&before, &mut moved);
@@ -1802,6 +1848,9 @@ impl Engine {
         let (mine, theirs) = (&self.inputs.market.quotes, &other.inputs.market.quotes);
         for i in mine.keys().chain(theirs.keys()).collect::<BTreeSet<_>>() {
             quote_moved(*i, theirs.get(i), mine.get(i), &mut m);
+        }
+        if self.inputs.facts.debts != other.inputs.facts.debts {
+            m.0.entry(Entity::Debts).or_default().insert("*");
         }
         m
     }

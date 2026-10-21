@@ -211,3 +211,14 @@ export function per(n: number | null): string {
   if (n == null || Number.isNaN(n)) return '—'
   return '$' + n.toFixed(n < 1 ? 4 : 2).replace(/0+$/, '').replace(/\.$/, '')
 }
+
+const MON_SHORT = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+/** An instant as the viewer reads it: `Today 4:12 PM`, `Oct 11, 5:11 PM`, the year where it is not this one. */
+export function whenWord(iso: string | null | undefined): string {
+  const t = iso ? Date.parse(iso) : NaN
+  if (!isFinite(t)) return '—'
+  const d = new Date(t), now = new Date()
+  const time = (d.getHours() % 12 || 12) + ':' + String(d.getMinutes()).padStart(2, '0') + ' ' + (d.getHours() < 12 ? 'AM' : 'PM')
+  if (d.toDateString() === now.toDateString()) return 'Today ' + time
+  return MON_SHORT[d.getMonth()] + ' ' + d.getDate() + (d.getFullYear() !== now.getFullYear() ? ' ' + d.getFullYear() : '') + ', ' + time
+}

@@ -2,7 +2,7 @@
 // components read `route.tab` and Svelte re-renders the affected parts only —
 // no whole-page redraw, no manual dispatch table.
 
-export const TABS = ['dashboard', 'trades', 'portfolio', 'markets', 'cashflow'] as const
+export const TABS = ['dashboard', 'trades', 'portfolio', 'markets', 'cashflow', 'networth'] as const
 export type Tab = (typeof TABS)[number]
 
 export const TAB_LABEL: Record<Tab, string> = {
@@ -11,6 +11,7 @@ export const TAB_LABEL: Record<Tab, string> = {
   portfolio: 'Portfolio',
   markets: 'Markets',
   cashflow: 'Cashflow',
+  networth: 'Net worth',
 }
 
 // An address an older version wrote, still bookmarked.
