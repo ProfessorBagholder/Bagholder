@@ -994,7 +994,7 @@ fn test_monthly_distributions_run_to_the_current_month() {
     assert_eq!(months, vec![("2026-06".into(), 1.0), ("2026-07".into(), 1.0), ("2026-08".into(), 0.0), ("2026-09".into(), 0.0)], "empty bars up to the current month");
     let tiles: Vec<&Value> = arr(&v["cashflow"]["tiles"]).iter().filter(|t| t.get("perMonth").is_some()).collect();
     let ytd = tiles.iter().find(|t| t["label"] == "2026 YTD").unwrap();
-    assert_eq!(n(&ytd["perMonth"]), 20.0, "the monthly average counts paying months only");
+    near(n(&ytd["perMonth"]), 40.0 / 9.0); // over the year's nine months so far, paying or not
     let v = build_view(&base, Some(&json!({"to": "2026-08-15"})));
     let keys: Vec<&str> = arr(&v["cashflow"]["months"]).iter().map(|m| st(&m["key"])).collect();
     assert_eq!(keys, vec!["2026-06", "2026-07", "2026-08"], "a date filter ends the chart at its bound");
@@ -1068,7 +1068,7 @@ fn test_without_a_margin_account_cash_day_change_and_last_twelve_months_stand_in
     let tiles = tiles_by_label(&v);
     assert!(!tiles.contains_key("Margin used"));
     near(n(&tiles["Last 12 months"]["total"]), 25.0);
-    near(n(&tiles["Last 12 months"]["perMonth"]), 12.5);
+    near(n(&tiles["Last 12 months"]["perMonth"]), 25.0 / 12.0);
     assert_eq!(n(&tiles["Last 12 months"]["count"]), 2.0);
     // one account on, the other a margin account: the margin tiles come back for that scope
     snapshot["accounts"][1]["unifiedAccountType"] = json!("SELF_DIRECTED_NON_REGISTERED_MARGIN");
@@ -1136,7 +1136,7 @@ fn test_yield_on_cost_from_declared_rate() {
     near(n(&h["ytd"]), 7600.0);
     let tiles = tiles_by_label(&v);
     near(n(&tiles["2026 YTD"]["total"]), 7600.0);
-    near(n(&tiles["2026 YTD"]["perMonth"]), 3800.0);
+    near(n(&tiles["2026 YTD"]["perMonth"]), 7600.0 / 9.0);
     near(n(&tiles["Yield on cost"]["yield"]), (2.4 * 20000.0) / (20000.0 * 7.13));
     near(n(&tiles["Yield on cost"]["projected"]), 2.4 * 20000.0 / 12.0);
     let v = build_view(&base, Some(&json!({"lists": {"grade": ["A"]}})));

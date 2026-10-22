@@ -758,11 +758,11 @@
 
 | <a id="cashflow-3"></a>Tile | Value | Subtitle |
 |---|---|---|
-| <a id="cashflow-4"></a>Two years ago, last year, by calendar year, rolling over on January 1 | Sum received that year | Average per paying month |
-| <a id="cashflow-5"></a>YTD | Sum received this year | Average per paying month |
+| <a id="cashflow-4"></a>Two years ago, last year, by calendar year, rolling over on January 1 | Sum received that year | That sum ÷ 12, as `$x/mo avg` |
+| <a id="cashflow-5"></a>YTD | Sum received this year | That sum ÷ this year's months so far (this month among them), as `$x/mo avg` |
 | <a id="cashflow-6"></a>All time | Sum received | `Total earned` |
 | <a id="cashflow-7"></a>Margin used | The Portfolio tab's Margin used over the accounts in scope | A month's margin interest at today's borrowing: each margin account in scope's borrowing in each currency at the yearly rate Wealthsimple states for it in that currency, compounded daily over this month's days as Wealthsimple works it out (borrowed × ((1 + rate ÷ the year's days) ^ the month's days − 1)), summed in CAD, as `$x/mo margin interest`; nothing when nothing is borrowed or for a past range; waiting, named, while a rate is not read (rates are read with the day's sync and Sync now) |
-| <a id="cashflow-8"></a>Last 12 months (no margin account in scope) | Sum received in the trailing twelve months, to today | Average per paying month in that window |
+| <a id="cashflow-8"></a>Last 12 months (no margin account in scope) | Sum received in the trailing twelve months, to today | That sum ÷ 12, as `$x/mo avg` |
 | <a id="cashflow-9"></a>Yield on cost | Annual income of all rated holdings ÷ their book cost | Projected monthly income, that annual income ÷ 12, as `$x/mo` |
 
 <a id="cashflow-10"></a>**Cashflow.** One bar per month from the first payment it shows (a distribution, margin interest or a repayment) to the current month (or to the end of the date filter), CAD, an empty bar for a month with nothing paid yet, six axis labels.

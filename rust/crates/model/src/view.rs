@@ -291,19 +291,21 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Position], margi
     let annual_all: f64 = rated.iter().map(|(_, annual)| *annual).fsum();
     let total: f64 = recs.iter().map(|r| r.amount_cad).fsum();
 
-    let paid_over = |label: String, rows: &[&CashflowRow], months_paid: usize| {
+    // a monthly average is over the period's months, paying or not: a past
+    // year's twelve, this year's so far (this month among them)
+    let paid_over = |label: String, rows: &[&CashflowRow], period_months: usize| {
         let sum: f64 = rows.iter().map(|r| r.amount_cad).fsum();
-        CashflowTile::Paid { label, total: sum + 0.0, per_month: sum / months_paid.max(1) as f64, count: rows.len() }
+        CashflowTile::Paid { label, total: sum + 0.0, per_month: sum / period_months.max(1) as f64, count: rows.len() }
     };
+    let months_so_far: usize = today.get(5..7).and_then(|m| m.parse().ok()).unwrap_or(12);
     let this_yr: i64 = this_year.parse().unwrap_or(0);
     let mut tiles: Vec<CashflowTile> = Vec::new();
     for y in [this_yr - 2, this_yr - 1, this_yr] {
         let ys = y.to_string();
         let rows: Vec<&CashflowRow> = recs.iter().copied().filter(|r| r.date.starts_with(&ys)).collect();
-        let months_paid = keys.iter().filter(|k| k.starts_with(&ys) && bucket[*k].1 > 0).count();
-        tiles.push(paid_over(if y == this_yr { format!("{} YTD", y) } else { ys }, &rows, months_paid));
+        tiles.push(paid_over(if y == this_yr { format!("{} YTD", y) } else { ys }, &rows, if y == this_yr { months_so_far } else { 12 }));
     }
-    tiles.push(paid_over("All time".into(), &recs, keys.iter().filter(|k| bucket[*k].1 > 0).count()));
+    tiles.push(paid_over("All time".into(), &recs, keys.len()));
 
     if has_margin {
         // margin used is the Portfolio tab's figure; under it the average
@@ -318,12 +320,10 @@ pub fn cashflow_view(base: &Base, f: &Filters, positions_all: &[Position], margi
             interest_months: charged_months.len(),
         });
     } else {
-        // without a margin account: the trailing twelve months, averaged over
-        // the months that paid
+        // without a margin account: the trailing twelve months, over twelve
         let since = shift_date(today, -365);
         let window: Vec<&CashflowRow> = recs.iter().copied().filter(|r| r.date > since && r.date.as_str() <= today).collect();
-        let months_paid = window.iter().map(|r| month_of(&r.date)).collect::<BTreeSet<_>>().len();
-        tiles.push(paid_over("Last 12 months".into(), &window, months_paid));
+        tiles.push(paid_over("Last 12 months".into(), &window, 12));
     }
     tiles.push(CashflowTile::Yield { label: "Yield on cost", r#yield: (basis_all != 0.0).then(|| annual_all / basis_all), projected: annual_all / 12.0, earned: earned_all + 0.0, book: basis_all + 0.0 });
 

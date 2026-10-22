@@ -55,13 +55,13 @@
       {
         "count": 1,
         "label": "2026 YTD",
-        "perMonth": 5.0,
+        "perMonth": 0.555556,
         "total": 5.0
       },
       {
         "count": 1,
         "label": "All time",
-        "perMonth": 5.0,
+        "perMonth": 2.5,
         "total": 5.0
       },
       {

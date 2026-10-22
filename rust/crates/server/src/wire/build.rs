@@ -606,7 +606,7 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
         .tiles
         .iter()
         .map(|t| match t {
-            CashTile::Paid { label, total, per_paying_month, .. } => CashflowTile::Paid { label: paid_label(label), total: partial(total), per_month: Fig::of(per_paying_month, |m| m.as_ref().map(dec)) },
+            CashTile::Paid { label, total, per_month, .. } => CashflowTile::Paid { label: paid_label(label), total: partial(total), per_month: Fig::of(per_month, |m| m.as_ref().map(dec)) },
             CashTile::Margin { margin_used, interest_per_month } => CashflowTile::Margin { label: "Margin used".into(), margin_used: fig_money(margin_used), interest_per_month: Fig::of(interest_per_month, |m| m.as_ref().map(dec)) },
             CashTile::Yield { yield_on_cost, projected_per_month, .. } => CashflowTile::Yield { label: "Yield on cost".into(), yield_on_cost: yield_on_cost.clone().into_wire(), projected: fig_money(projected_per_month) },
         })
