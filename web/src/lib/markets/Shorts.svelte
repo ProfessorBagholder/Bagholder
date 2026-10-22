@@ -156,6 +156,7 @@
     </div>
   </div>
   {#if rows.length}
+    <div class="si-wide">
     <div class="si-head"><GridHead table="shorts" cols={SHORTS_COLS} /></div>
     <div class="scroll si-list" style="max-height:340px">
       {#each rows as r (rowKey(r))}
@@ -169,6 +170,7 @@
           <div class="tab" style="text-align:right;font-size:11.5px;color:var(--ink55)">{shortDay(r.asOf)}</div>
         </div>
       {/each}
+    </div>
     </div>
     {#if lookupError}<div class="status-err" style="font-size:12px;margin-top:6px">{lookupError}</div>{/if}
   {:else}

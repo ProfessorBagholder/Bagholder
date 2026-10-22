@@ -10,7 +10,7 @@
   const TILE = ['58%', '40%', '52%', '46%', '62%', '44%']
   const COLS = ['18%', '11%', '9%', '12%', '10%', '13%', '9%']
   const LEGEND = ['70%', '55%', '62%', '48%', '58%']
-  const SPLIT = 'display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px'
+  const SPLIT = '--cols:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr)'
   const range = (n: number) => Array.from({ length: n }, (_, i) => i)
 </script>
 
@@ -19,7 +19,7 @@
 {/snippet}
 
 {#snippet tiles(height: number)}
-  <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
+  <div class="tiles">
     {#each range(6) as i (i)}
       <div class="card elev-sm" style="padding:14px 16px;height:{height}px;display:flex;flex-direction:column;gap:10px">
         {@render bar('46%', 8, i * 70)}{@render bar(TILE[i], 15, i * 70 + 40)}

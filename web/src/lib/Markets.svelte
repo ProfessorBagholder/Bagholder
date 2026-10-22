@@ -19,7 +19,7 @@
   <MarketTiles tiles={markets.tiles} directory={markets.directory} />
   <FearGreed />
   <Heatmap />
-  <div style="display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:14px;align-items:stretch">
+  <div class="split" style="--cols:minmax(0,1fr) 420px;align-items:stretch">
     <News />
     <Watchlist watchlist={markets.watchlist} />
   </div>
