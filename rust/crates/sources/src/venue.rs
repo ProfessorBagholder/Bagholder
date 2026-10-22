@@ -13,8 +13,7 @@
 //! venue, or names one by a code or words no table here knows (a foreign venue, a
 //! file-imported row), is asked of no source: its venue is never guessed from its
 //! currency, and another venue's form is never asked for it, since either reads
-//! another listing's data as this one's (plan `market-data-keyed-by-listing`, The
-//! old app here). Its market data waits for a record that names its venue.
+//! another listing's data as this one's (plan `market-data-keyed-by-listing`). Its market data waits for a record that names its venue.
 
 use crate::contract::Market;
 

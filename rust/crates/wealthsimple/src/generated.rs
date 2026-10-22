@@ -449,7 +449,7 @@ impl Generated {
             listings.push(Listing { id, symbol, sort: if coin { Sort::Coin } else { Sort::Share }, cur, price, contract: None, put: false, name: None, venue: None, status: "TRADING" });
         }
         // about one share in sixteen retired by a corporate action and trading on
-        // under a successor id (the owner's book: 11 of 173 ids stated), so a book
+        // under a successor id (11 of 173 ids in the reference capture), so a book
         // carries successions as a real one does
         let retired: Vec<usize> = (0..listings.len()).filter(|i| listings[*i].sort == Sort::Share && i % 16 == 3).collect();
         for i in retired {

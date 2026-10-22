@@ -77,7 +77,7 @@ pub struct FeedOnly {
 
 /// A month's statement of one of the broker's accounts opening off where the
 /// statement before it closed, with no row for the difference: the broker's
-/// cash moved by it all the same (the owner's crypto account, December 2023,
+/// cash moved by it all the same (a recorded crypto account's statement, December 2023,
 /// a cent), so it is booked, as a cash correction the broker states by its
 /// balances alone.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -651,7 +651,7 @@ impl Reconciled {
     ///   broker's balance at the next month's opening (its closing, where the
     ///   next month opens where it closed), the month reconciles as the feed
     ///   states it: the statement states some movement otherwise and corrects
-    ///   its own balance by that opening (the owner's crypto account, April
+    ///   its own balance by that opening (a recorded crypto account's statements, April
     ///   2025: each purchase a cent short, the May opening back where the feed
     ///   is), and nothing of it is booked;
     /// - else its unmatched rows, and an opening off the month before's closing,
@@ -989,7 +989,7 @@ pub fn paid_leg() -> bagholder_core::Leg {
 }
 
 /// Days after the feed's day a statement may date a movement: it dates one on
-/// the day it posted, the feed on the day it was made. On the owner's
+/// the day it posted, the feed on the day it was made. On recorded
 /// statements (September 2023 to August 2026, 1,028 pairs) 840 posted the
 /// same day, 156 a day later and 32 two to six days later; none earlier.
 pub const POSTS_WITHIN_DAYS: i64 = 7;
@@ -1000,7 +1000,7 @@ pub const LATE_WITHIN_DAYS: i64 = 31;
 
 /// A month's opening and closing balance from its rows' running balance. The
 /// statement lists a day's rows in an order its running balance need not
-/// follow (the owner's July 2024: the last row listed is not the month's
+/// follow (a recorded July 2024 statement: the last row listed is not the month's
 /// close), so the ends are found from the chain itself: the closing is the one
 /// balance after a row that is no row's balance before, the opening the one
 /// balance before a row that is no row's balance after. None where the rows do
@@ -1046,8 +1046,8 @@ fn chain_ends(rows: &[&StatementRow]) -> (Option<Dec>, Option<Dec>) {
 fn match_rows(rows: &[(Place, &StatementRow)], txs: &[&Transaction], booked_source: &SourceName) -> Vec<(usize, usize)> {
     // days from the transaction's to the row's: its own date, or the day it states
     // it was executed, whichever is nearer and not before the transaction's (a
-    // coin's row can be dated a day before the execution it states, the owner's
-    // February 2024: `2024-02-29 … (executed at 2024-03-01)`)
+    // coin's row can be dated a day before the execution it states, a recorded
+    // February 2024 statement: `2024-02-29 … (executed at 2024-03-01)`)
     let lag = |r: &StatementRow, t: &Transaction| {
         [Some(r.day), r.executed].into_iter().flatten().map(|d| (d - t.trade_date).get_days() as i64).filter(|l| *l >= 0).min().unwrap_or(i64::MAX)
     };
@@ -1064,8 +1064,8 @@ fn match_rows(rows: &[(Place, &StatementRow)], txs: &[&Transaction], booked_sour
     let mut tx_of: Vec<Option<usize>> = vec![None; txs.len()];
     let mut row_to: Vec<Option<usize>> = vec![None; rows.len()];
     // the nearest day first, each day of the posting window, then what is left
-    // over paired within a month: a movement can post later still (the owner's
-    // March 2024: nine to eleven days)
+    // over paired within a month: a movement can post later still (a recorded
+    // March 2024 statement: nine to eleven days)
     for days in (0..=POSTS_WITHIN_DAYS).chain([LATE_WITHIN_DAYS]) {
         let near = |r: usize, t: usize| if days <= POSTS_WITHIN_DAYS { lag(rows[r].1, txs[t]) <= days } else { apart(rows[r].1, txs[t]) <= days };
         let phases: [&dyn Fn(usize, usize) -> bool; 6] = [

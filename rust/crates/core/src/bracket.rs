@@ -112,7 +112,7 @@ pub fn classify(not_sent: bool, code: Option<&str>, why: &str) -> RefusalClass {
     if code.is_some_and(|c| NO_SHARES.contains(&c.to_uppercase().as_str())) {
         return RefusalClass::State;
     }
-    // the one refusal on the owner's record (2026-09-10): "Limit price has too many
+    // the one refusal in the recorded replies (2026-09-10): "Limit price has too many
     // decimal places. Max allowed: 2"
     if why.contains("too many decimal places") {
         return RefusalClass::Invalid;
