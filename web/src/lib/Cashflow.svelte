@@ -1,5 +1,6 @@
 <script lang="ts">
   import { roll } from './actions/roll'
+  import { niceTicks } from './ticks'
   import type { CashflowDoc, Partial } from './model'
   import { money, money0, signedMoney, pctPlain, qty, px, color, waiting } from './fmt'
   import { absBelow, plot, sign, waits, type Dec, type Fig } from './dec'
@@ -51,7 +52,9 @@
   const ms = $derived(c.months || [])
   // the top of a bar is what came in; what went out is drawn inside it
   const peak = $derived(Math.max(...ms.map((x) => Math.max(at(x.value), at(x.interest) + at(x.repayments))), 0))
-  const head = $derived(Math.max(100, Math.ceil(peak / 100) * 100))
+  // the axis in round steps (`niceTicks`); its top the step at or above the tallest bar
+  const scale = $derived(niceTicks(0, peak))
+  const head = $derived(scale.hi)
   const axis = $derived.by(() => {
     const want = Math.min(6, ms.length)
     const a: string[] = []
@@ -140,8 +143,8 @@
     </div>
     <div style="display:flex;gap:10px;flex:1;min-height:232px;margin-top:14px">
       <div style="position:relative;width:58px;flex:none;font-size:10px;color:var(--ink60)" class="tab">
-        {#each [0, 1, 2, 3] as i (i)}
-          <span style="position:absolute;left:0;top:{(i / 3 * 94).toFixed(1)}%;transform:translateY(-50%)">{money0(head * (1 - i / 3))}</span>
+        {#each scale.ticks as v (v)}
+          <span style="position:absolute;left:0;top:{((1 - v / head) * 94).toFixed(1)}%;transform:translateY(-50%)">{money0(v)}</span>
         {/each}
       </div>
       <div id="cfPlot" style="position:relative;flex:1;min-width:0;display:flex;gap:4px;align-items:stretch" onmouseleave={() => (cfH = null)} role="presentation">
@@ -161,8 +164,8 @@
             <div class="tv" style="display:flex;justify-content:space-between;gap:16px;color:{color(net)}"><span style="font-weight:400;color:var(--ink60)">Net cashflow</span><span>{signedMoney(net, '', 0)}</span></div>
           </div>
         {/if}
-        {#each [0, 1, 2, 3] as i (i)}
-          <div style="position:absolute;left:0;right:0;top:{(i / 3 * 94).toFixed(1)}%;height:1px;background:{i === 3 ? 'var(--hair)' : 'var(--grid)'}"></div>
+        {#each scale.ticks as v (v)}
+          <div style="position:absolute;left:0;right:0;top:{((1 - v / head) * 94).toFixed(1)}%;height:1px;background:{v === 0 ? 'var(--hair)' : 'var(--grid)'}"></div>
         {/each}
         {#if ms.length}
           {#each ms as b, i (b.key)}

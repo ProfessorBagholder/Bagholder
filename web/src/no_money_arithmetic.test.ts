@@ -29,6 +29,7 @@ const ALLOWED: Record<string, [number, string]> = {
   '/src/lib/ticket/ticket.svelte.ts': [3, "the quantity field's typed number, started from the held units (a Sell's default and its Max) or the server's Max (`ticketNumber`); the order itself is sent as the server's decimal text"],
   '/src/lib/ticket/OrderTicket.svelte': [1, "the units an amount bought, as the server stated them, into the field's number"],
   '/src/lib/ticket/vals.ts': [1, 'the number typed into a field, which the server reads as text'],
+  '/src/lib/ticks.ts': [1, "a chart axis line's round value, a coordinate that labels the axis and is never summed"],
 }
 
 describe('the page does no money arithmetic', () => {
