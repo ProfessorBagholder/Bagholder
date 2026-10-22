@@ -11,7 +11,7 @@
   import { route, startRouter, go, subHash, TABS, TAB_LABEL, type Tab } from './lib/router.svelte'
   import { ICONS } from './lib/icons'
   import { symText } from './lib/sym'
-  import { relTime } from './lib/fmt'
+  import { relTime, monthDay } from './lib/fmt'
   import { activeCount, chips, clearField } from './lib/filters.svelte'
   import Dashboard from './lib/Dashboard.svelte'
   import Cashflow from './lib/Cashflow.svelte'
@@ -310,8 +310,10 @@
     if (s.syncing) return s.syncStep || 'Syncing…'
     if (s.error && !showingEmpty) return s.error
     if (!s.connected) return 'Not connected'
+    // where the book stands against Wealthsimple (SPEC.md pages-13)
+    const standing = !s.standing ? '' : s.standing.state === 'matches' ? 'Matches Wealthsimple as of ' + monthDay(s.standing.asOf) : s.standing.state === 'checking' ? 'Checking against Wealthsimple' : 'Not yet checked against Wealthsimple'
     minuteNow() // said again as the minutes pass
-    return 'Synced ' + (relTime(s.lastSync) || '—')
+    return ['Synced ' + (relTime(s.lastSync) || '—'), standing].filter(Boolean).join(' · ')
   }
 
   // The skeleton is not swapped for the page; it is lifted over it and faded out while

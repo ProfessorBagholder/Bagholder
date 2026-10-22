@@ -60,6 +60,7 @@ fn status_doc(sync_step: &str) -> Status {
         importing: None,
         imported: None,
         model_download: None,
+        standing: Some(crate::status::Standing { state: "matches".into(), as_of: Some("2025-11-18".into()) }),
     }
 }
 
