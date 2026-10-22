@@ -30,9 +30,12 @@ test('a notice stays until the person closes it, however long it is left', async
 test('the newest notice shows, the one it covers shows again once it is closed, and Esc closes', async ({ page, request }) => {
   await page.clock.install()
   await openWithStatus(page, request, { connected: true, email: 'someone@example.test' })
-  await refreshSession(page, { ok: true })
-  await refreshSession(page, { ok: false, error: 'Wealthsimple refused the refresh.' })
   const line = page.locator('#syncline')
+  await refreshSession(page, { ok: true })
+  // the first refresh answered before the second's answer is routed: else both
+  // may be answered as the second, and two equal notices are one (#580)
+  await expect(line).toHaveText('Session refreshed')
+  await refreshSession(page, { ok: false, error: 'Wealthsimple refused the refresh.' })
   await expect(line.locator('.status-err')).toHaveText('Wealthsimple refused the refresh.')
   await page.clock.runFor(10 * 60 * 1000)
   await expect(line.locator('.status-err')).toHaveText('Wealthsimple refused the refresh.')
