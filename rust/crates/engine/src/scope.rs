@@ -593,14 +593,19 @@ fn fig_sum(items: &[Fig<Money>]) -> Fig<Money> {
 /// a leap year (divisible by 4, and by 400 where by 100) and the month's its
 /// calendar days, as the app's own date helpers count them (module 861100 in
 /// chunk 25, module 125672 in the app's main script).
+///
+/// The division is the app's own BigNumber's: 20 places, half up (bignumber.js's
+/// `DECIMAL_PLACES` and `ROUNDING_MODE` defaults); its integer power is exact,
+/// which a `Dec`'s 28 digits carry to within 10^-20 of the factor, far below a
+/// cent; the cent is the page's own `Intl` rounding, half away from zero.
 pub fn month_interest(principal: Dec, rate: Dec, day: Date) -> Fig<Dec> {
-    let daily = rate.div_rounded(Dec::from_int(i64::from(day.days_in_year())), 12, bagholder_core::Rounding::HalfEven)?;
+    let daily = rate.div_rounded(Dec::from_int(i64::from(day.days_in_year())), 20, bagholder_core::Rounding::HalfUp)?;
     let step = Dec::from_int(1).checked_add(daily)?;
     let mut factor = Dec::from_int(1);
     for _ in 0..day.days_in_month() {
         factor = factor.mul_to_fit(step)?;
     }
-    Ok(principal.mul_to_fit(factor.checked_sub(Dec::from_int(1))?)?.round(2, bagholder_core::Rounding::HalfEven))
+    Ok(principal.mul_to_fit(factor.checked_sub(Dec::from_int(1))?)?.round(2, bagholder_core::Rounding::HalfUp))
 }
 
 fn avg_money(total: &Fig<Money>, n: usize) -> Fig<Option<Money>> {
