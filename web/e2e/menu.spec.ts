@@ -64,7 +64,8 @@ test('Connect opens the streamed sign-in view, forwards keystrokes to it, and Ca
   const start = page.waitForRequest('**/api/login/start')
   await page.getByRole('button', { name: 'Connect Wealthsimple' }).click()
   await start
-  expect(started).toBe(1)
+  // the route's handler counts it a moment after the request is made: waited for
+  await expect.poll(() => started).toBe(1)
   await expect(page.getByText('Waiting for Wealthsimple login…')).toBeVisible()
   await expect(page.getByText('Sign in to Wealthsimple')).toBeVisible()
   await expect(page.locator('#loginDlg img')).toBeVisible()
@@ -78,7 +79,7 @@ test('Connect opens the streamed sign-in view, forwards keystrokes to it, and Ca
   const cancel = page.waitForRequest('**/api/login/cancel')
   await page.locator('#loginDlg').getByRole('button', { name: 'Cancel' }).click()
   await cancel
-  expect(cancelled).toBe(1)
+  await expect.poll(() => cancelled).toBe(1)
   await expect(page.getByText('Sign in to Wealthsimple')).toHaveCount(0)
   // each asked once: the dialog's own steps since asked neither again
   expect([started, cancelled]).toEqual([1, 1])
