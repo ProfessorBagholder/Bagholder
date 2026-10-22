@@ -99,7 +99,9 @@
 
   // the repayments' colour: the negative side's, lighter, so it reads as money out
   // and apart from the margin interest beside it
-  const REPAID = 'rgba(var(--neg-rgb),.5)'
+  // solid, as it looks on the card, so drawn over the distributions it keeps the
+  // legend's colour
+  const REPAID = 'color-mix(in srgb, rgb(var(--neg-rgb)) 50%, var(--surface))'
   // one bar a month, its height the distributions: the repayments of outside
   // debts drawn over it from the baseline and the margin interest on them, so
   // a bar never stands taller for money that went out
