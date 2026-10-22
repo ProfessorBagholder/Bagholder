@@ -55,7 +55,7 @@ For the next Architect session, or this one after a compact. Read this whole fil
 
 - **master** `c12fcdaa` (#563 merged). The latest release is **v2.7.0**.
 - **Cleared by you, awaiting green or merge:** #564 (C13 token race), #565 (B6 currency), #567 (C14 cookie host).
-- **Brief 75** (the earlier app gone) is with the CTO: PR 1 the pull, PR 2 the deletion from de4e40d, PR 3 the header line, then 2.10.0; PR 4 the base schema as its own plan, then 3.0.0. The owner may run the counting query (§10); its fifth and sixth lines decide the pooled-accounts plan and the order events.
+- **Brief 75** (the earlier app gone, rewritten for every book and copy on 2026-10-21): #590 (the pull) merged; #591 (the deletion, migration 37 with its code step and the split) cleared at e0c4255d; #592 (the header line) sent back once ("matches" needs every account compared); then PR 4 the upgrade path (stops, the latest mark on the stop, the window exit), then 2.10.0 marked a stop; PR 5 the base schema as its own plan, then 3.0.0 without the latest mark. A comments PR (no comment names a person's account or book) follows #591. Plants so far: the read rule, the split; each failed its test as it should.
 - **#561** (debts show at once, plus the cut short name, planned as 2.7.1): you cleared it earlier. It is green at `8c135884` and unmerged, and no 2.7.1 release exists. Ask the CTO whether its head changed after your clearance, and why it hasn't merged.
 - **The CTO's queue:**
   1. the owner's networth-try (Net worth / Allocation);
