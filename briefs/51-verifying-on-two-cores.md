@@ -71,3 +71,7 @@ A note, not a change: `return Err(NetError::Offline)` after `client::leave(…)?
 ## Addendum, 2026-10-21: one build folder per worktree, sccache off
 
 The shared `CARGO_TARGET_DIR` is withdrawn for tests. A test binary built in one worktree is reused in another and keeps the first worktree's `env!("CARGO_MANIFEST_DIR")`, so every test that reads `tests/replies`, `tests/cases` or `schema/` through it reads the other worktree's files: a case added in one worktree passed locally and failed in CI (#590, found by the CTO). The rule now: one `CARGO_TARGET_DIR` per worktree or clone, and `RUSTC_WRAPPER=` (sccache off) for test builds. A cold build of the engine's cases is about 40 s, which is affordable. Everything else in this brief stands: named tests only, one build at a time (`flock -o`), one CI run per merge head.
+
+## Addendum, 2026-10-21: when a CI job may be rerun
+
+A job is rerun only for a failure outside the code that the job's own log names: a runner never acquired (#564's macOS and Windows jobs), a package registry's timeout (#592's `npm audit`, "audit network timeout at registry.npmjs.org"). Never for a test, which is reproduced locally and fixed. The log line is quoted in the PR.
