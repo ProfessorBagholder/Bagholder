@@ -88,10 +88,9 @@ These live in `/home/md/.claude/projects/-home-md-dev/memory/`:
 ## 7. Scratchpad
 
 `/tmp/claude-1005/-home-md-dev/12a8decb-6b2e-51e6-96e2-82398e1475b1/scratchpad/`:
-- `briefs/` (worktree);
-- `cargo-target/` (the old shared build, withdrawn by brief 51's addendum; remove it);
-- `plant*.sh`;
-- `llm/` (benchmark leftovers, removable);
-- `repro/` (an auditor's test binaries, removable).
+- `briefs/` (the worktree of `architecture-briefs`);
+- `r590/` (a blob-less clone used to review PRs: fetch a PR with `git fetch origin pull/N/head` and `git update-ref refs/heads/pN $(git rev-parse FETCH_HEAD)`; its own `rust/target`, about 4 GB, warm);
+- `plant590.sh` (plants a reversal in `r590`, runs one named test with `CARGO_TARGET_DIR=$PWD/target RUSTC_WRAPPER= flock -o`, restores the tree);
+- `wf1/`, `wf3/` (brief 75's workflow outputs, also committed under `briefs/75/`).
 
 Remove what you no longer need. Never leave model files behind.
