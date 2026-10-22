@@ -1,5 +1,6 @@
 <script lang="ts">
   import { spaceAxis } from './actions/spaceAxis'
+  import { niceTicks } from './ticks'
   import { roll } from './actions/roll'
   import type { DashboardDoc, EquityPoint } from './model'
   import { money, money0, pct, pctPlain, pts, cls, color, stamp, stampDay, hold, shortMoney, waiting } from './fmt'
@@ -27,25 +28,20 @@
   // a figure's height on a chart; one that waits stands at zero, its word in the tip
   const at = (v: Fig<Dec>): number => (waits(v) ? 0 : plot(v))
 
-  // ---- equity geometry (eqGeom / niceMax) ----
-  function niceMax(peak: number): number {
-    if (!(peak > 0)) return 1
-    const step = Math.pow(10, Math.max(0, String(Math.round(peak / 3)).length - 2))
-    return Math.max(step * 3, Math.ceil(peak / (step * 3)) * step * 3)
-  }
+  // ---- equity geometry (eqGeom) ----
   // the curve's span: from zero to its peak, reaching below zero where the P&L does
   function eqGeom(series: EquityPoint[]) {
     const vals = series.map((p) => plot(p.v))
-    const hi = niceMax(Math.max.apply(null, vals.concat([0])))
-    const low = Math.min.apply(null, vals.concat([0]))
-    const lo = low < 0 ? -niceMax(-low) : 0
+    // the axis in round steps (`niceTicks`), zero among them
+    const sc = niceTicks(Math.min.apply(null, vals.concat([0])), Math.max.apply(null, vals.concat([0])))
+    const hi = sc.hi, lo = sc.lo
     const W = 880, H = 260, pad = 8, top = 6
     const n = Math.max(1, vals.length - 1)
     const y = (v: number) => H - pad - ((v - lo) / (hi - lo)) * (H - pad - top)
     const pts = vals.map((v, i) => [(i / n) * W, y(v)] as [number, number])
     const path = pts.map((p, i) => (i ? 'L' : 'M') + p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' ')
     const base = y(0).toFixed(1)
-    const ticks = [0, 1, 2, 3].map((i) => hi - ((hi - lo) * i) / 3)
+    const ticks = sc.ticks.map((v) => ({ v, y: y(v), bottom: v === lo }))
     return { ticks, path, area: path + ' L' + W + ' ' + base + ' L0 ' + base + ' Z', pts, up: vals.length ? vals[vals.length - 1] >= 0 : true }
   }
   // P&L (the realized P&L in scope, running by day) or Value (the accounts' value), remembered on this machine
@@ -132,19 +128,15 @@
   // ---- monthly P&L geometry ----
   const ms = $derived(model.monthly || [])
   const mo = $derived.by(() => {
-    const posMax = Math.max.apply(null, ms.map((x) => Math.max(0, at(x.value))).concat([0]))
-    const negMax = Math.max.apply(null, ms.map((x) => Math.max(0, -at(x.value))).concat([0]))
-    const total = posMax + negMax || 1
-    let base = negMax > 0 ? Math.min(0.93, Math.max(0.35, posMax / total)) : 0.93
-    if (!(posMax > 0) && negMax > 0) base = 0.07
+    const gains = Math.max.apply(null, ms.map((x) => Math.max(0, at(x.value))).concat([0]))
+    const losses = Math.max.apply(null, ms.map((x) => Math.max(0, -at(x.value))).concat([0]))
+    // the axis in round steps (`niceTicks`), one step's height on both sides of zero
+    const sc = niceTicks(-losses, gains)
+    const posMax = gains > 0 ? sc.hi : 0
+    const negMax = losses > 0 ? -sc.lo : 0
+    const base = negMax > 0 ? posMax / (posMax + negMax) : 0.93
     const posH = base * 100, negH = (1 - base) * 100
-    const ticks: [number, number][] = []
-    if (posMax > 0) {
-      ticks.push([0, posMax])
-      ticks.push([posH / 2, posMax / 2])
-    }
-    ticks.push([posH, 0])
-    if (negMax > 0) ticks.push([100, -negMax])
+    const ticks: [number, number][] = sc.ticks.filter((v) => (v > 0 ? posMax > 0 : v < 0 ? negMax > 0 : true)).map((v) => [v >= 0 ? (posMax > 0 ? posH * (1 - v / posMax) : posH) : posH + negH * (-v / negMax), v])
     const want = Math.min(6, ms.length)
     const axis: string[] = []
     for (let i = 0; i < want; i++) axis.push(ms[Math.round((i * (ms.length - 1)) / Math.max(1, want - 1))].label)
@@ -240,8 +232,8 @@
       {:else}
         <div style="display:flex;gap:10px">
           <div class="tab" style="position:relative;width:56px;height:260px;flex:none;font-size:10px;color:var(--ink55)">
-            {#each [2.3, 33.8, 65.4, 96.9] as top, i (top)}
-              <span style="position:absolute;left:0;top:{top}%;transform:translateY(-50%)">{eqTick(g.ticks[i])}</span>
+            {#each g.ticks as t (t.v)}
+              <span style="position:absolute;left:0;top:{((t.y / 260) * 100).toFixed(1)}%;transform:translateY(-50%)">{eqTick(t.v)}</span>
             {/each}
           </div>
           <div bind:this={eqPlot} style="position:relative;flex:1;min-width:0" role="presentation" onmousemove={onEqMove} onmouseleave={onEqLeave}>
@@ -250,7 +242,7 @@
             <div class="tip" hidden={!eqHover} style="left:{eqHover?.x ?? '0'};transform:translateX({eqHover?.tx ?? '-50%'})"><div class="tv {eqHover?.up === false ? 'neg' : 'pos'}">{eqHover?.tv ?? ''}</div><div class="tl">{eqHover?.tl ?? ''}</div></div>
             <svg viewBox="0 0 880 260" preserveAspectRatio="none" style="width:100%;height:260px;display:block">
               <defs><linearGradient id="bhEq" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--{g.up ? 'pos' : 'neg'});stop-opacity:var(--area)" /><stop offset="100%" style="stop-color:var(--{g.up ? 'pos' : 'neg'});stop-opacity:0" /></linearGradient></defs>
-              <line x1="0" y1="6" x2="880" y2="6" style="stroke:var(--grid)" /><line x1="0" y1="88" x2="880" y2="88" style="stroke:var(--grid)" /><line x1="0" y1="170" x2="880" y2="170" style="stroke:var(--grid)" /><line x1="0" y1="252" x2="880" y2="252" style="stroke:var(--hair)" />
+              {#each g.ticks as t (t.v)}<line x1="0" y1={t.y} x2="880" y2={t.y} style="stroke:var(--{t.bottom ? 'hair' : 'grid'})" />{/each}
               <path d={g.area} fill="url(#bhEq)" /><path d={g.path} fill="none" style="stroke:var(--{g.up ? 'pos' : 'neg'})" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
             </svg>
           </div>
@@ -309,8 +301,7 @@
         <div style="position:relative;flex:1;min-width:0;display:flex;gap:5px;align-items:stretch" role="presentation" onmouseleave={() => (moHover = null)}>
           <div class="xline" hidden={!moHover} style="left:{moHover?.x ?? '0'}"></div>
           <div class="tip" hidden={!moHover} style="left:{moHover?.x ?? '0'};transform:translateX({moHover?.tx ?? '-50%'})"><div class="tv" style="color:{moHover?.color ?? ''}">{moHover?.tv ?? ''}</div><div class="tl">{moHover?.tl ?? ''}</div></div>
-          {#if mo.posMax > 0}<div style="position:absolute;left:0;right:0;top:{(mo.posH / 2).toFixed(1)}%;height:1px;background:var(--grid)"></div>{/if}
-          <div style="position:absolute;left:0;right:0;top:{mo.posH.toFixed(1)}%;height:1px;background:var(--hair)"></div>
+          {#each mo.ticks as t (t[1])}<div style="position:absolute;left:0;right:0;top:{t[0].toFixed(1)}%;height:1px;background:var(--{t[1] === 0 ? 'hair' : 'grid'})"></div>{/each}
           {#if ms.length}
             {#each ms as b, i (b.key)}
               {@const v = at(b.value)}

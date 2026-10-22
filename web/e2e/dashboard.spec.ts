@@ -143,9 +143,8 @@ test('the equity curve opens on P&L, a running total that reaches below zero, an
   await expect(card.getByRole('button', { name: 'P&L' })).toHaveClass(/on/)
   // what the running total left out is not counted on the card (docs/decisions.md)
   await expect(card).not.toContainText('waiting')
-  // the axis runs from below zero to above the peak
-  await expect(card.locator('.tab span').first()).toHaveText('$1,200')
-  await expect(card.locator('.tab span').last()).toHaveText('−$420')
+  // the axis runs from below zero to above the peak, in round steps
+  await expect(card.locator('.tab span')).toHaveText(['$1,500', '$1,000', '$500', '$0', '−$500'])
   const plot = card.locator('[role="presentation"]')
   const box = (await plot.boundingBox())!
   await page.mouse.move(box.x + 2, box.y + box.height / 2)

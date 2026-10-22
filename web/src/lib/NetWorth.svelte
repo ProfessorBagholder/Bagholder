@@ -5,6 +5,7 @@
   // By day, every day from the first anything is stated to today: each account's
   // and each outside item's latest statement on or before the day, today the tiles.
   import { roll } from './actions/roll'
+  import { niceTicks } from './ticks'
   import type { PositionsDoc, EquityPoint } from './model'
   import { money0, stamp, stampDay, waiting } from './fmt'
   import { abs, plot } from './dec'
@@ -32,21 +33,16 @@
   // ---- net worth over time: the Dashboard's equity curve, its geometry and hover ----
   // `net`: net worth alone; `split`: everything held and everything owed, two lines on one scale
   let mode = $state<'net' | 'split'>('net')
-  function niceMax(peak: number): number {
-    if (!(peak > 0)) return 1
-    const step = Math.pow(10, Math.max(0, String(Math.round(peak / 3)).length - 2))
-    return Math.max(step * 3, Math.ceil(peak / (step * 3)) * step * 3)
-  }
   function eqGeom(lines: EquityPoint[][]) {
     const vals = lines.map((l) => l.map((p) => plot(p.v)))
     const all = vals.flat().concat([0])
-    const hi = niceMax(Math.max.apply(null, all))
-    const low = Math.min.apply(null, all)
-    const lo = low < 0 ? -niceMax(-low) : 0
+    // the axis in round steps (`niceTicks`), zero among them
+    const sc = niceTicks(Math.min.apply(null, all), Math.max.apply(null, all))
+    const hi = sc.hi, lo = sc.lo
     const W = 880, H = 260, pad = 8, top = 6
     const y = (v: number) => H - pad - ((v - lo) / (hi - lo)) * (H - pad - top)
     const base = y(0).toFixed(1)
-    const ticks = [0, 1, 2, 3].map((i) => hi - ((hi - lo) * i) / 3)
+    const ticks = sc.ticks.map((v) => ({ v, y: y(v), bottom: v === lo }))
     const drawn = vals.map((vs) => {
       const n = Math.max(1, vs.length - 1)
       const pts = vs.map((v, i) => [(i / n) * W, y(v)] as [number, number])
@@ -151,8 +147,8 @@
       {:else}
         <div style="display:flex;gap:10px">
           <div class="tab" style="position:relative;width:56px;height:260px;flex:none;font-size:10px;color:var(--ink55)">
-            {#each [2.3, 33.8, 65.4, 96.9] as top, i (top)}
-              <span style="position:absolute;left:0;top:{top}%;transform:translateY(-50%)">{eqTick(g.ticks[i])}</span>
+            {#each g.ticks as t (t.v)}
+              <span style="position:absolute;left:0;top:{((t.y / 260) * 100).toFixed(1)}%;transform:translateY(-50%)">{eqTick(t.v)}</span>
             {/each}
           </div>
           <div bind:this={eqPlot} style="position:relative;flex:1;min-width:0" role="presentation" onmousemove={onEqMove} onmouseleave={onEqLeave}>
@@ -172,7 +168,7 @@
                   <linearGradient id="bhNw{i}" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" style="stop-color:var(--{lineColor(i)});stop-opacity:var(--area)" /><stop offset="100%" style="stop-color:var(--{lineColor(i)});stop-opacity:0" /></linearGradient>
                 {/each}
               </defs>
-              <line x1="0" y1="6" x2="880" y2="6" style="stroke:var(--grid)" /><line x1="0" y1="88" x2="880" y2="88" style="stroke:var(--grid)" /><line x1="0" y1="170" x2="880" y2="170" style="stroke:var(--grid)" /><line x1="0" y1="252" x2="880" y2="252" style="stroke:var(--hair)" />
+              {#each g.ticks as t (t.v)}<line x1="0" y1={t.y} x2="880" y2={t.y} style="stroke:var(--{t.bottom ? 'hair' : 'grid'})" />{/each}
               {#each g.lines as l, i (i)}
                 <path d={l.area} fill="url(#bhNw{i})" /><path d={l.path} fill="none" style="stroke:var(--{lineColor(i)})" stroke-width="2" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
               {/each}
