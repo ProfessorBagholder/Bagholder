@@ -49,7 +49,8 @@
 
   const c = $derived(model.cashflow)
   const ms = $derived(c.months || [])
-  const peak = $derived(Math.max(...ms.map((x) => at(x.value) + at(x.interest) + at(x.repayments)), 0))
+  // the top of a bar is what came in; what went out is drawn inside it
+  const peak = $derived(Math.max(...ms.map((x) => Math.max(at(x.value), at(x.interest) + at(x.repayments))), 0))
   const head = $derived(Math.max(100, Math.ceil(peak / 100) * 100))
   const axis = $derived.by(() => {
     const want = Math.min(6, ms.length)
@@ -98,16 +99,24 @@
 
   // the repayments' colour: the negative side's, lighter, so it reads as money out
   // and apart from the margin interest beside it
-  const REPAID = 'rgba(var(--neg-rgb),.5)'
-  // one bar a month: its repayments of outside debts at the bottom, its margin
-  // interest on them and its distributions on top, each its own height, so none
-  // ever covers another
+  // solid, as it looks on the card, so drawn over the distributions it keeps the
+  // legend's colour
+  const REPAID = 'color-mix(in srgb, rgb(var(--neg-rgb)) 50%, var(--surface))'
+  // one bar a month, its height the distributions: the repayments of outside
+  // debts drawn over it from the baseline and the margin interest on them, so
+  // a bar never stands taller for money that went out
   function barOrder(b: { key: string; value: Fig<Dec>; interest: Fig<Dec>; repayments: Fig<Dec>; count: number }) {
     const hr = (at(b.repayments) / head) * 94
     const hi = (at(b.interest) / head) * 94
     const hd = b.count === 0 ? 0 : Math.max(1.5, (at(b.value) / head) * 94)
-    const parts = [...(hr > 0 ? [{ h: hr, at: 0, color: REPAID }] : []), ...(hi > 0 ? [{ h: hi, at: hr, color: 'var(--neg)' }] : []), ...(hd > 0 ? [{ h: hd, at: hr + hi, color: 'var(--accent-bar)' }] : [])]
-    return parts.map((p, k) => ({ ...p, radius: k === parts.length - 1 ? '2px 2px 0 0' : '0' }))
+    // more went out than came in: the money out fills the bar and goes on above it
+    const over = hr + hi >= hd
+    const parts = [
+      ...(hd > 0 ? [{ h: hd, at: 0, color: 'var(--accent-bar)', top: !over, key: 'in' }] : []),
+      ...(hr > 0 ? [{ h: hr, at: 0, color: REPAID, top: over && hi === 0, key: 'repaid' }] : []),
+      ...(hi > 0 ? [{ h: hi, at: hr, color: 'var(--neg)', top: over, key: 'interest' }] : []),
+    ]
+    return parts.map((p) => ({ h: p.h, at: p.at, color: p.color, key: p.key, radius: p.top ? '2px 2px 0 0' : '0' }))
   }
 </script>
 
@@ -158,8 +167,8 @@
         {#if ms.length}
           {#each ms as b, i (b.key)}
             <div class="bar-col" data-i={i} style="cursor:default" onmouseenter={() => (cfH = i)} role="presentation">
-              {#each barOrder(b) as bar (bar.color)}
-                <div style="position:absolute;left:0;right:0;bottom:{(6 + bar.at).toFixed(2)}%;height:{bar.h.toFixed(2)}%;background:{bar.color};border-radius:{bar.radius}"></div>
+              {#each barOrder(b) as bar (bar.key)}
+                <div data-part={bar.key} style="position:absolute;left:0;right:0;bottom:{(6 + bar.at).toFixed(2)}%;height:{bar.h.toFixed(2)}%;background:{bar.color};border-radius:{bar.radius}"></div>
               {/each}
             </div>
           {/each}

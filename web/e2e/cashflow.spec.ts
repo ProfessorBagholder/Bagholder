@@ -94,36 +94,39 @@ test('a bar hover reads the month, Distributions, Margin interest and Net cashfl
   // the interest charged is shown with a minus sign (SPEC.md "### Cashflow", hover)
   await expect(line('Margin interest')).toHaveText(signedMoney(negate(b.interest), 0))
   await expect(line('Net cashflow')).toHaveText(signedMoney(b.net, 0))
-  // the interest at the bottom and the distributions on top of it: a month whose
-  // interest outweighs its distributions still shows both
-  const fills = await bar.locator('div').evaluateAll((els) => els.map((e) => ({ bg: (e as HTMLElement).style.background, top: e.getBoundingClientRect().top, bottom: e.getBoundingClientRect().bottom, h: e.getBoundingClientRect().height })))
-  expect(fills[0].bg).toBe('var(--neg)')
+  // the interest drawn over the bar from its baseline; it outweighs the
+  // distributions, so it fills the bar and goes on above it
+  const parts = await bar.locator('[data-part]').evaluateAll((els) => els.map((e) => ({ part: e.getAttribute('data-part'), top: e.getBoundingClientRect().top, bottom: e.getBoundingClientRect().bottom })))
+  const of = (k: string) => parts.find((p) => p.part === k)
+  expect(of('interest')).toBeTruthy()
   if (b.count > 0) {
-    expect(fills.map((f) => f.bg)).toEqual(['var(--neg)', 'var(--accent-bar)'])
-    expect(fills[1].h).toBeGreaterThan(0)
-    expect(fills[0].h).toBeGreaterThan(fills[1].h)
-    expect(Math.abs(fills[1].bottom - fills[0].top)).toBeLessThan(1)
-  } else {
-    expect(fills).toHaveLength(1) // nothing paid that month: the interest alone
+    expect(of('in')).toBeTruthy()
+    expect(Math.abs(of('interest')!.bottom - of('in')!.bottom)).toBeLessThan(1) // both from the baseline
+    expect(of('interest')!.top).toBeLessThan(of('in')!.top) // the interest stands taller
   }
 })
 
-test('in every month the margin interest is at the bottom and the distributions sit on top of it, both showing', async ({ page, request }) => {
+test('every bar\'s height is its month\'s distributions, the money that went out drawn inside it from the baseline', async ({ page, request }) => {
   const m = await figures(request)
-  const months = m.cashflow.months as { key: string; value: string; interest: string; count: number }[]
+  const months = m.cashflow.months as { key: string; value: string; interest: string; repayments: string; count: number }[]
   await page.goto('/#cashflow')
   await ready(page)
-  let both = 0
+  // a bar's top is at its distributions' height, on one scale across the months
+  const tops: { value: number; top: number; base: number }[] = []
   for (const [i, b] of months.entries()) {
-    const fills = await page.locator(`.bar-col[data-i="${i}"] div`).evaluateAll((els) => els.map((e) => ({ bg: (e as HTMLElement).style.background, top: e.getBoundingClientRect().top, bottom: e.getBoundingClientRect().bottom, h: e.getBoundingClientRect().height })))
-    if (cmp(b.interest, '0') > 0 && b.count > 0) {
-      both++
-      expect(fills.map((f) => f.bg), b.key).toEqual(['var(--neg)', 'var(--accent-bar)'])
-      expect(fills[1].h, b.key).toBeGreaterThan(0)
-      expect(Math.abs(fills[1].bottom - fills[0].top), b.key).toBeLessThan(1)
+    if (b.count === 0) continue
+    const parts = await page.locator(`.bar-col[data-i="${i}"] [data-part]`).evaluateAll((els) => els.map((e) => ({ part: e.getAttribute('data-part'), top: e.getBoundingClientRect().top, bottom: e.getBoundingClientRect().bottom })))
+    const d = parts.find((p) => p.part === 'in')!
+    for (const p of parts.filter((p) => p.part === 'interest' || p.part === 'repaid')) {
+      expect(p.bottom, b.key).toBeLessThanOrEqual(d.bottom + 0.5) // drawn from the baseline up
     }
+    tops.push({ value: Number(b.value), top: d.top, base: d.bottom })
   }
-  expect(both).toBeGreaterThan(1) // months on both sides of the interest outweighing the distributions
+  expect(tops.length).toBeGreaterThan(2)
+  const scale = (tops[0].base - tops[0].top) / tops[0].value
+  for (const t of tops) expect(Math.abs((t.base - t.top) - t.value * scale)).toBeLessThan(2) // height by the distributions alone
+  // so a month that paid less never stands taller
+  for (const a of tops) for (const c of tops) if (a.value < c.value) expect(a.base - a.top).toBeLessThanOrEqual(c.base - c.top + 0.5)
 })
 
 test('Cashflow Positions carries Qty, Avg, Book, Market, Distribution, YTD, All time, Projected, Yield on cost and Current yield', async ({ page, request }) => {
