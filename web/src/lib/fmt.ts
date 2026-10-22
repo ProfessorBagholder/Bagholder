@@ -150,10 +150,6 @@ export function stamp(iso: string | null | undefined): string {
 export function stampDay(iso: string | null | undefined): string {
   return iso ? +iso.slice(8, 10) + ' ' + MON[+iso.slice(5, 7) - 1] + " '" + iso.slice(2, 4) : ''
 }
-/** A day as its month and day (`Oct 20`). */
-export function monthDay(iso: string | null | undefined): string {
-  return iso ? MON[+iso.slice(5, 7) - 1] + ' ' + +iso.slice(8, 10) : ''
-}
 /** A dollar amount in thousands, one place (`$18.3k`), else whole dollars: the chart labels. */
 export function shortMoney(v: Amount): string {
   if (v == null) return '—'

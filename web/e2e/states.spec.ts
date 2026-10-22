@@ -77,30 +77,12 @@ test('text cut by an ellipsis is shown whole while the pointer is on it, and onl
 
 test('"Synced … ago" is said again as the minutes pass, without anything arriving', async ({ page, request }) => {
   await page.clock.install({ time: new Date('2026-09-18T15:00:20Z') })
-  await openWithStatus(page, request, { connected: true, syncing: false, error: '', lastSync: '2026-09-18T14:58:00Z', standing: null })
+  await openWithStatus(page, request, { connected: true, syncing: false, error: '', lastSync: '2026-09-18T14:58:00Z' })
   await expect(page.locator('#syncline')).toHaveText('Synced 2 min ago')
   await page.clock.fastForward(60_000)
   await expect(page.locator('#syncline')).toHaveText('Synced 3 min ago')
   await page.clock.fastForward(5 * 60_000)
   await expect(page.locator('#syncline')).toHaveText('Synced 8 min ago')
-})
-
-// brief 75 §5: where the book stands against Wealthsimple, beside the time
-for (const [standing, said] of [
-  [{ state: 'matches', asOf: '2026-09-17' }, 'Synced 2 min ago · Matches Wealthsimple as of Sep 17'],
-  [{ state: 'checking', asOf: null }, 'Synced 2 min ago · Checking against Wealthsimple'],
-  [{ state: 'unchecked', asOf: null }, 'Synced 2 min ago · Not yet checked against Wealthsimple'],
-] as const) {
-  test(`the sync line says where the book stands: ${standing.state}`, async ({ page, request }) => {
-    await page.clock.install({ time: new Date('2026-09-18T15:00:20Z') })
-    await openWithStatus(page, request, { connected: true, syncing: false, error: '', lastSync: '2026-09-18T14:58:00Z', standing })
-    await expect(page.locator('#syncline')).toHaveText(said)
-  })
-}
-
-test('a standing difference takes the line, never the standing beside it', async ({ page, request }) => {
-  await openWithStatus(page, request, { connected: true, syncing: false, error: 'CAD cash in the TFSA: Wealthsimple states $0.00, the book holds $1.00.', lastSync: '2026-09-18T14:58:00Z', standing: null })
-  await expect(page.locator('#syncline')).toHaveText('CAD cash in the TFSA: Wealthsimple states $0.00, the book holds $1.00.')
 })
 
 test('a tile\'s figure rolls to its new value and comes to rest as plain text', async ({ page, request }) => {
