@@ -518,6 +518,9 @@ fn run(path: &Path) -> Vec<String> {
             if let Some(v) = k.get("margin_used") {
                 c.money("portfolio margin used", v, &sc.portfolio.margin_used.clone().expect("margin used, as the broker states it now"));
             }
+            if let Some(v) = k.get("margin_interest_month") {
+                c.money("portfolio margin interest a month", v, &sc.portfolio.margin_interest_month.clone().expect("a month's interest, at today's borrowing"));
+            }
             if let Some(v) = k.get("margin_used_pct") {
                 c.ratio_fig("portfolio margin used %", v, &sc.portfolio.margin_used_pct);
             }

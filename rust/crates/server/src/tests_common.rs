@@ -111,6 +111,9 @@ pub fn order_accounts_in(a: &Arc<App>) {
     let margin = book.account_by_ref(&AccountRef::new(ws.clone(), "acct-margin")).unwrap().unwrap();
     let read = book.broker_read(conn, "buying-power", now).unwrap();
     book.store_buying_power(margin, now, &Ok(Money::new(Dec::parse("12680.45").unwrap(), Currency::CAD)), &read).unwrap();
+    // its yearly margin interest rates, made up
+    let rates = book.broker_read(conn, "margin-rates", now).unwrap();
+    book.store_margin_rates(margin, now, &[(Currency::CAD, Dec::parse("0.0495").unwrap()), (Currency::USD, Dec::parse("0.0695").unwrap())].into(), &rates).unwrap();
     // the TFSA backs the margin account (its Margin Boost)
     let tfsa = book.account_by_ref(&AccountRef::new(ws.clone(), "acct-tfsa")).unwrap().unwrap();
     let accounts = book.broker_read(conn, "accounts", now).unwrap();

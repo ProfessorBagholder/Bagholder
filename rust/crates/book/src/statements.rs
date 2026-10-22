@@ -66,6 +66,9 @@ pub struct Stated {
     /// The newest statement of what it can borrow, when it was stated: an
     /// amount, or the broker's reason it cannot say.
     pub buying_power: Option<(jiff::Timestamp, std::result::Result<Money, String>)>,
+    /// The newest statement of its yearly margin interest rates, when it was
+    /// stated: a fraction per currency, the currencies that statement states.
+    pub margin_rates: Option<(jiff::Timestamp, BTreeMap<Currency, Dec>)>,
 }
 
 /// A position as a statement of units states it.
@@ -81,13 +84,15 @@ pub struct UnitsLine {
 
 /// A table of statements kept as periods, and which of its rows are periods.
 #[derive(Clone, Copy)]
-struct Periods {
+struct Periods<'a> {
     table: &'static str,
-    only: &'static str,
+    only: &'a str,
 }
-const CASH: Periods = Periods { table: "statements", only: "kind = 'cash'" };
-const POWER: Periods = Periods { table: "buying_power", only: "1 = 1" };
-const VALUE: Periods = Periods { table: "account_values", only: "1 = 1" };
+const CASH: Periods<'static> = Periods { table: "statements", only: "kind = 'cash'" };
+const POWER: Periods<'static> = Periods { table: "buying_power", only: "1 = 1" };
+const VALUE: Periods<'static> = Periods { table: "account_values", only: "1 = 1" };
+/// A margin account's rates are periods per currency (`margin_rates_of`).
+const RATES: &str = "margin_rates";
 
 /// A kept period: its row, its first and last moment, and the read that last stated it.
 struct Period {
@@ -380,7 +385,7 @@ impl Book {
     #[allow(clippy::type_complexity)]
     fn store_period<V: PartialEq>(
         &self,
-        p: Periods,
+        p: Periods<'_>,
         account: AccountId,
         at: jiff::Timestamp,
         read: &ReadId,
@@ -491,6 +496,26 @@ impl Book {
                 )?;
                 Ok(())
             })
+        })
+    }
+
+    /// Store a margin account's yearly interest rates, each currency's a
+    /// fraction (0.0445 for 4.45%), stated at `stated_at`.
+    pub fn store_margin_rates(&self, account: AccountId, stated_at: jiff::Timestamp, rates: &BTreeMap<Currency, Dec>, read: &ReadId) -> Result<()> {
+        self.atomically(|| {
+            for (c, rate) in rates {
+                let only = format!("currency = '{c}'");
+                let p = Periods { table: RATES, only: &only };
+                let load = |rowid: i64| -> Result<String> { Ok(self.conn().query_row("SELECT rate FROM margin_rates WHERE rowid = ?1", params![rowid], |r| r.get(0))?) };
+                self.store_period(p, account, stated_at, read, &rate.to_text(), &load, &|first, last, read, last_read, v| {
+                    self.conn().execute(
+                        "INSERT INTO margin_rates (account_id, stated_at, currency, rate, read_id, first_ns, first_seq, last_ns, last_seq, last_read_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                        params![account.to_string(), at_text(from_ns("margin_rates", "first_ns", first.ns)?), c.to_string(), v, read, first.ns, first.seq, last.ns, last.seq, last_read],
+                    )?;
+                    Ok(())
+                })?;
+            }
+            Ok(())
         })
     }
 
@@ -700,6 +725,21 @@ impl Book {
                 _ => return Err(crate::BookError::Corrupt { table: t, column: "unavailable", value: a.clone(), why: "states both an amount and a reason, or neither".into() }),
             };
             out.buying_power = Some((from_ns(t, "last_ns", at)?, stated));
+        }
+        // the newest statement of rates: each currency whose newest period the
+        // last read stated
+        let mut stmt = self.conn().prepare_cached(
+            "SELECT m.last_ns, m.currency, m.rate FROM margin_rates m
+             WHERE m.account_id = ?1 AND m.last_ns = (SELECT MAX(last_ns) FROM margin_rates WHERE account_id = ?1)
+             ORDER BY m.currency",
+        )?;
+        let rows = stmt.query_map(params![a], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        for row in rows {
+            let (at, c, rate) = row?;
+            let t = "margin_rates";
+            let e = out.margin_rates.get_or_insert_with(|| (jiff::Timestamp::UNIX_EPOCH, BTreeMap::new()));
+            e.0 = from_ns(t, "last_ns", at)?;
+            e.1.insert(text::currency(t, "currency", &c)?, text::dec(t, "rate", &rate)?);
         }
         Ok(out)
     }

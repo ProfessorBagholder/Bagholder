@@ -74,6 +74,9 @@ pub enum Gap {
     /// A margin account whose buying power its broker has not stated yet (it is
     /// read with the balances): what can be borrowed waits on it.
     BuyingPowerUnread(bagholder_core::AccountId),
+    /// A margin account borrowing in a currency its broker states no interest
+    /// rate for yet (it is read with the day's pull): the month's interest waits on it.
+    MarginRateUnread { account: bagholder_core::AccountId, currency: Currency },
     /// An account whose broker states a day's net deposits in another currency
     /// than the day before: a total restated is not money moved, so the day's
     /// flow, and the return over it, wait on deposits stated in one currency.
@@ -109,6 +112,7 @@ impl Gap {
             Gap::ScheduleUnstated(_) => "schedule-unstated",
             Gap::FormUnstated(_) => "form-unstated",
             Gap::BuyingPowerUnread(_) => "buying-power-unread",
+            Gap::MarginRateUnread { .. } => "margin-rate-unread",
             Gap::DepositsRestated { .. } => "deposits-restated",
             Gap::Arithmetic(_) => "arithmetic",
         }
@@ -140,6 +144,7 @@ impl fmt::Display for Gap {
             Gap::ScheduleUnstated(i) => write!(f, "no source that can be read states how often {i} pays"),
             Gap::FormUnstated(i) => write!(f, "whether {i}'s latest distribution is paid in cash or in units is not stated, and its payment has not posted"),
             Gap::BuyingPowerUnread(a) => write!(f, "what account {a} can borrow has not been read"),
+            Gap::MarginRateUnread { account, currency } => write!(f, "account {account}'s margin interest rate in {currency} has not been read"),
             Gap::DepositsRestated { account, day } => write!(f, "account {account}'s net deposits on {day} are stated in another currency than the day before"),
             Gap::Arithmetic(why) => write!(f, "{why}"),
         }

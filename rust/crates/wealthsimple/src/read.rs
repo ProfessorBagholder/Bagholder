@@ -210,6 +210,56 @@ pub fn buying_power(node: &Value, account: &str) -> Read<Result<Dec, String>> {
     }
 }
 
+/// A margin account's yearly interest rate on what it borrows, per currency
+/// (`FetchAccountAppliedRates`'s `account`, asked for rate type MARGIN_INTEREST,
+/// of the account asked for): `AppliedMarginInterestRates`' `cadPositionRate`
+/// and `usdPositionRate`, none for a currency it states none in.
+///
+/// The shape is the one Wealthsimple's own web app reads (its build
+/// `assets.wealthsimple.com/app-09214df49cd2deb0.js`, chunk 309, read
+/// 2026-10-21): `appliedRates` is selected by its `__typename` (the app's helper
+/// over `{appliedRates, type: "AppliedMarginInterestRates"}`), so one object or
+/// a list of them is read; each rate goes straight into a BigNumber, which takes
+/// decimal text or a number, read here exactly. It is a fraction: the app's month
+/// of interest (module 270324) is `principal × (1 + rate ÷ days in the year) ^
+/// days in the month − principal`, which only a fraction makes a month's
+/// interest. A rate outside 0 to 1 is a mismatch, never converted.
+pub fn margin_rates(node: &Value, account: &str) -> Read<BTreeMap<Currency, Dec>> {
+    let n = Node::root(node);
+    let id = n.text("id")?;
+    if id != account {
+        return Err(n.field("id")?.mismatch(format!("the account {id}, not {account}, which was asked")));
+    }
+    let field = n.field("appliedRates")?;
+    let candidates = match field.value() {
+        Value::Array(_) => field.as_list()?,
+        Value::Null => vec![],
+        _ => vec![field.clone()],
+    };
+    let mut found = None;
+    for c in candidates {
+        if c.text("__typename")? == "AppliedMarginInterestRates" {
+            found = Some(c);
+            break;
+        }
+    }
+    let mut out = BTreeMap::new();
+    let Some(applied) = found else { return Ok(out) };
+    for (key, currency) in [("cadPositionRate", Currency::CAD), ("usdPositionRate", Currency::USD)] {
+        let f = applied.field(key)?;
+        let rate = match f.value() {
+            Value::Null => continue,
+            Value::String(_) => f.as_dec_text()?,
+            _ => f.as_dec()?,
+        };
+        if rate.is_negative() || rate >= Dec::from_int(1) {
+            return Err(f.mismatch(format!("{} is not a yearly rate as a fraction", rate.to_text())));
+        }
+        out.insert(currency, rate);
+    }
+    Ok(out)
+}
+
 /// What is owed on a credit card now (`creditCardAccount.balance.current`: the
 /// posted purchases less payments; `pending` is apart), of the card account
 /// asked for.

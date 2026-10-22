@@ -272,6 +272,11 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             book.store_units(*id, today, &[], &read, now)?;
         }
     }
+    // each margin account's interest rates, with the day's pull alone: a rate
+    // changes seldom, and the five-minute balances do not ask it again
+    if daily {
+        store_margin_rates(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
+    }
     // the movements the activity feed left out, for an account whose cash now
     // disagrees with the broker's: read from its monthly statements, every
     // account's, closed ones too
@@ -637,6 +642,29 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         }
     }
     Ok(BalancesRead { accounts: accounts.into_iter().collect(), failures, cash_moved })
+}
+
+/// Each margin account's yearly interest rates; a failed read is its own failed part.
+fn store_margin_rates(
+    book: &Book,
+    adapter: &mut dyn BrokerAdapter,
+    connection: ConnectionId,
+    keys_of: &BTreeMap<AccountId, String>,
+    margin: &BTreeSet<AccountId>,
+    now: jiff::Timestamp,
+    failures: &mut Vec<(String, Failure)>,
+) -> Result<()> {
+    for (id, k) in keys_of.iter().filter(|(id, _)| margin.contains(id)) {
+        match adapter.margin_rates(k) {
+            Ok(Some(rates)) => {
+                let read = book.broker_read(connection, "margin-rates", now)?;
+                book.store_margin_rates(*id, now, &rates, &read)?;
+            }
+            Ok(None) => {}
+            Err(f) => failures.push((format!("margin rate:{k}"), f)),
+        }
+    }
+    Ok(())
 }
 
 /// A closed account's cash now, stated as nothing: what closing means, asked

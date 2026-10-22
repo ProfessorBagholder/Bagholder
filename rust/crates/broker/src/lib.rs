@@ -228,6 +228,11 @@ pub trait BrokerAdapter {
     /// An account's positions as of a day.
     /// What each margin account can borrow now, in CAD, or why the broker cannot say.
     fn buying_power(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, Result<Dec, String>>>;
+    /// A margin account's yearly interest rate on what it borrows, per currency,
+    /// as a fraction (0.0445 for 4.45%): none from a broker that states none.
+    fn margin_rates(&mut self, _account: &str) -> Answer<Option<BTreeMap<Currency, Dec>>> {
+        Ok(None)
+    }
     fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>>;
     /// The person's accounts held outside the broker that the broker's own net
     /// worth feature states (`docs/plans/debts-held-outside-wealthsimple.md`):

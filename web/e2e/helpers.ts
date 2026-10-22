@@ -158,7 +158,7 @@ const WAITS_FOR: Record<string, string> = {
   'basis-unknown': 'cost', 'event-unknown': 'event', 'event-on-short': 'event', 'no-expiry-record': 'expiry',
   'adjustment-conflict': 'record', 'effect-conflict': 'record', 'beyond-held': 'record', 'record-problem': 'record',
   'currency-unstated': 'currency', 'value-unstated': 'value', 'payer-not-read': 'payer', 'no-distribution-yet': 'unpaid',
-  'schedule-unstated': 'schedule', 'form-unstated': 'form', 'buying-power-unread': 'unread', 'deposits-restated': 'deposits', arithmetic: 'overflow',
+  'schedule-unstated': 'schedule', 'form-unstated': 'form', 'buying-power-unread': 'unread', 'margin-rate-unread': 'unread', 'deposits-restated': 'deposits', arithmetic: 'overflow',
 }
 export function waiting(f: Waits): string {
   const g = f.gaps[0] ?? ''

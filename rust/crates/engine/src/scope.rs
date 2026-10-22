@@ -420,6 +420,9 @@ pub struct Portfolio {
     /// What is borrowed, as the broker states it now; none for a past day, which
     /// no broker statement describes.
     pub margin_used: Option<Fig<Money>>,
+    /// The interest a month of today's borrowing costs at each margin account's
+    /// rate (`month_interest`), in CAD; none for a past day.
+    pub margin_interest_month: Option<Fig<Money>>,
     pub margin_used_pct: Fig<Option<Ratio>>,
     pub available_margin: Option<Fig<Money>>,
     /// Margin accounts whose buying power the broker could not state, and why.
@@ -478,7 +481,7 @@ impl Portfolio {
 #[derive(Clone, Debug, PartialEq)]
 pub enum CashTile {
     Paid { label: PaidLabel, total: Partial, count: usize, per_paying_month: Fig<Option<Money>> },
-    Margin { margin_used: Fig<Money>, interest_per_month: Fig<Option<Money>>, interest_months: usize },
+    Margin { margin_used: Fig<Money>, interest_per_month: Fig<Option<Money>> },
     Yield { yield_on_cost: Fig<Option<Ratio>>, projected_per_month: Fig<Money>, earned: Fig<Money>, book: Fig<Money>, left_out: usize },
 }
 
@@ -582,6 +585,29 @@ fn fig_sum(items: &[Fig<Money>]) -> Fig<Money> {
 }
 
 /// The mean of `n` amounts totalling `total`; none of none.
+/// A month's interest on `principal` at a yearly `rate` (a fraction), for the
+/// month `day` is in, as Wealthsimple's web app works it out (its build
+/// `app-09214df49cd2deb0.js`, chunk 309, module 270324, read 2026-10-21):
+/// compounded daily over the month's days, the principal × ((1 + rate ÷ the
+/// year's days) ^ the month's days − 1), to the cent. The year's days are 366 in
+/// a leap year (divisible by 4, and by 400 where by 100) and the month's its
+/// calendar days, as the app's own date helpers count them (module 861100 in
+/// chunk 25, module 125672 in the app's main script).
+///
+/// The division is the app's own BigNumber's: 20 places, half up (bignumber.js's
+/// `DECIMAL_PLACES` and `ROUNDING_MODE` defaults); its integer power is exact,
+/// which a `Dec`'s 28 digits carry to within 10^-20 of the factor, far below a
+/// cent; the cent is the page's own `Intl` rounding, half away from zero.
+pub fn month_interest(principal: Dec, rate: Dec, day: Date) -> Fig<Dec> {
+    let daily = rate.div_rounded(Dec::from_int(i64::from(day.days_in_year())), 20, bagholder_core::Rounding::HalfUp)?;
+    let step = Dec::from_int(1).checked_add(daily)?;
+    let mut factor = Dec::from_int(1);
+    for _ in 0..day.days_in_month() {
+        factor = factor.mul_to_fit(step)?;
+    }
+    Ok(principal.mul_to_fit(factor.checked_sub(Dec::from_int(1))?)?.round(2, bagholder_core::Rounding::HalfUp))
+}
+
 fn avg_money(total: &Fig<Money>, n: usize) -> Fig<Option<Money>> {
     let total = total.clone()?;
     if n == 0 {
@@ -1182,6 +1208,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days:
     let accounts_market = Partial::of(&positions.iter().filter(|p| f.accounts.is_empty() || f.accounts.contains(&p.account)).map(signed_market).collect::<Vec<_>>());
     let navs = current_navs(inputs, &accounts);
     let mut used: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
+    let mut interest: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut cash_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut invested_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
     let mut chequing_by: BTreeMap<Currency, Fig<Dec>> = BTreeMap::new();
@@ -1209,6 +1236,22 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days:
             };
             if let Ok(total) = slot {
                 *slot = total.checked_add(v.abs()).map_err(Gaps::from);
+            }
+            // a month of what it borrows, at its own rate in that currency
+            if v.is_negative() && is_margin(a) {
+                let month = match b.margin_rates.get(c) {
+                    Some(rate) => month_interest(v.abs(), *rate, inputs.clock.today),
+                    None => Err(Gaps::of(Gap::MarginRateUnread { account: a.account.id, currency: *c })),
+                };
+                let e = interest.entry(*c).or_insert(Ok(Dec::ZERO));
+                *e = match (e.clone(), month) {
+                    (Ok(t), Ok(m)) => t.checked_add(m).map_err(Gaps::from),
+                    (Err(mut g), Err(h)) => {
+                        g.merge(&h);
+                        Err(g)
+                    }
+                    (Err(g), _) | (_, Err(g)) => Err(g),
+                };
             }
             // a positive balance: a chequing account's is cash to spend, an
             // investment account's waits to be invested, a card's is neither
@@ -1331,6 +1374,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days:
         net_value,
         margin_used_by: used,
         margin_used: Some(margin_used),
+        margin_interest_month: Some(to_cad_sum(&interest)),
         available_margin: match (unread.first(), available.is_empty()) {
             (Some(a), _) => Some(Err(Gaps::of(Gap::BuyingPowerUnread(*a)))),
             (None, false) => Some(fig_sum(&available)),
@@ -1406,6 +1450,7 @@ pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate:
     p.cash = cash;
     p.margin_used_by = BTreeMap::new();
     p.margin_used = None;
+    p.margin_interest_month = None;
     p.margin_used_pct = Ok(None);
     p.available_margin = None;
     // no statement describes a past day's debts
@@ -1505,10 +1550,14 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
     }
     tiles.push(paid_tile(PaidLabel::AllTime, dividends.clone(), paying_months(&|_| true)));
     if portfolio.has_margin {
-        let charges: Vec<usize> = other.iter().copied().filter(|i| rows[*i].kind == Payment::InterestCharge).collect();
-        let charged: BTreeSet<(i16, i8)> = charges.iter().map(|i| (rows[*i].day.year(), rows[*i].day.month())).collect();
-        let total = partial(&mut charges.iter().copied()).total.map(Money::neg);
-        tiles.push(CashTile::Margin { margin_used: portfolio.margin_used.clone().unwrap_or(Ok(Money::zero(Currency::CAD))), interest_per_month: avg_money(&total, charged.len()), interest_months: charged.len() });
+        // a month of today's borrowing at each account's rate; nothing where
+        // nothing is borrowed, or for a past day
+        let interest_per_month = match &portfolio.margin_interest_month {
+            Some(Ok(m)) if m.amount.is_zero() => Ok(None),
+            Some(m) => m.clone().map(Some),
+            None => Ok(None),
+        };
+        tiles.push(CashTile::Margin { margin_used: portfolio.margin_used.clone().unwrap_or(Ok(Money::zero(Currency::CAD))), interest_per_month });
     } else {
         let since = today.checked_sub(365.days()).unwrap_or(Date::MIN);
         let ix: Vec<usize> = dividends.iter().copied().filter(|i| rows[*i].day > since && rows[*i].day <= today).collect();

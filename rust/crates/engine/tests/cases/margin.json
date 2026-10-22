@@ -52,5 +52,210 @@
         "margin_used_pct": 0.2
       }
     }
+  },
+  {
+    "name": "A month's margin interest is each margin account's borrowing at its own rate, compounded daily over the month",
+    "spec": "SPEC.md §7 Cashflow, cashflow-7: 'A month's margin interest at today's borrowing: each margin account in scope's borrowing in each currency at the yearly rate Wealthsimple states for it in that currency, compounded daily over this month's days as Wealthsimple works it out (borrowed × ((1 + rate ÷ the year's days) ^ the month's days − 1)), summed in CAD … waiting, named, while a rate is not read'",
+    "working": [
+      "Margin account M borrows CAD 288,210 at a stated yearly rate of 0.0445; margin account N borrows CAD 10,000 at 0.0545 (every figure made up).",
+      "October 2026 has 31 days; 2026 has 365.",
+      "M: 288,210 × ((1 + 0.0445 ÷ 365) ^ 31 − 1) = 1,091.2702… → 1,091.27.",
+      "N: 10,000 × ((1 + 0.0545 ÷ 365) ^ 31 − 1) = 46.3914… → 46.39.",
+      "A month's margin interest: 1,091.27 + 46.39 = 1,137.66 (not 298,210 × one rate)."
+    ],
+    "today": "2026-10-21",
+    "accounts": [
+      {
+        "id": "M",
+        "kind": "margin"
+      },
+      {
+        "id": "N",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "G"
+      }
+    ],
+    "quotes": {
+      "G": {
+        "price": "100"
+      }
+    },
+    "transactions": [
+      {
+        "id": "m0",
+        "account": "M",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "deposit",
+        "cash": "100000"
+      },
+      {
+        "id": "m1",
+        "account": "M",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "G",
+        "qty": "3882.10",
+        "cash": "-388210"
+      }
+    ],
+    "brokers": {
+      "M": {
+        "cash": {
+          "CAD": "-288210"
+        },
+        "margin_rates": {
+          "CAD": "0.0445"
+        }
+      },
+      "N": {
+        "cash": {
+          "CAD": "-10000"
+        },
+        "margin_rates": {
+          "CAD": "0.0545"
+        }
+      }
+    },
+    "expect": {
+      "kpi": {
+        "filters": {},
+        "margin_used": "298210.00",
+        "margin_interest_month": "1137.66"
+      }
+    }
+  },
+  {
+    "name": "A month's margin interest waits, named, while a currency borrowed in has no rate read",
+    "spec": "SPEC.md §7 Cashflow, cashflow-7: 'A month's margin interest at today's borrowing: each margin account in scope's borrowing in each currency at the yearly rate Wealthsimple states for it in that currency, compounded daily over this month's days as Wealthsimple works it out (borrowed × ((1 + rate ÷ the year's days) ^ the month's days − 1)), summed in CAD … waiting, named, while a rate is not read'",
+    "working": [
+      "Margin account M borrows CAD 288,210 at 0.0445, and USD 1,000, for which Wealthsimple has stated no rate yet.",
+      "The USD part cannot be worked out, so the month's interest waits on M's USD rate: never the CAD part alone."
+    ],
+    "today": "2026-10-21",
+    "accounts": [
+      {
+        "id": "M",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "G"
+      }
+    ],
+    "quotes": {
+      "G": {
+        "price": "100"
+      }
+    },
+    "transactions": [
+      {
+        "id": "m0",
+        "account": "M",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "deposit",
+        "cash": "100000"
+      },
+      {
+        "id": "m1",
+        "account": "M",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "G",
+        "qty": "3882.10",
+        "cash": "-388210"
+      }
+    ],
+    "brokers": {
+      "M": {
+        "cash": {
+          "CAD": "-288210",
+          "USD": "-1000"
+        },
+        "margin_rates": {
+          "CAD": "0.0445"
+        }
+      }
+    },
+    "expect": {
+      "kpi": {
+        "filters": {},
+        "margin_interest_month": {
+          "gaps": [
+            "margin-rate-unread"
+          ]
+        }
+      }
+    }
+  },
+  {
+    "name": "A month's margin interest in a leap year's February counts its 29 days over the year's 366",
+    "spec": "SPEC.md §7 Cashflow, cashflow-7: 'A month's margin interest at today's borrowing: each margin account in scope's borrowing in each currency at the yearly rate Wealthsimple states for it in that currency, compounded daily over this month's days as Wealthsimple works it out (borrowed × ((1 + rate ÷ the year's days) ^ the month's days − 1)), summed in CAD … waiting, named, while a rate is not read'",
+    "working": [
+      "Margin account M borrows CAD 288,210 at a stated yearly rate of 0.0445 (every figure made up); today is 2028-02-10.",
+      "February 2028 has 29 days; 2028 has 366.",
+      "M: 288,210 × ((1 + 0.0445 ÷ 366) ^ 29 − 1) = 1,017.9475… → 1,017.95."
+    ],
+    "today": "2028-02-10",
+    "accounts": [
+      {
+        "id": "M",
+        "kind": "margin"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "G"
+      }
+    ],
+    "quotes": {
+      "G": {
+        "price": "100"
+      }
+    },
+    "transactions": [
+      {
+        "id": "m0",
+        "account": "M",
+        "day": "2026-01-02",
+        "at": "2026-01-02T15:00:00Z",
+        "kind": "deposit",
+        "cash": "100000"
+      },
+      {
+        "id": "m1",
+        "account": "M",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "G",
+        "qty": "3882.10",
+        "cash": "-388210"
+      }
+    ],
+    "brokers": {
+      "M": {
+        "cash": {
+          "CAD": "-288210"
+        },
+        "margin_rates": {
+          "CAD": "0.0445"
+        }
+      }
+    },
+    "expect": {
+      "kpi": {
+        "filters": {},
+        "margin_interest_month": "1017.95"
+      }
+    }
   }
 ]
