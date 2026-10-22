@@ -95,7 +95,7 @@ test('a bar hover reads the month, Distributions, Margin interest and Net cashfl
   await expect(line('Margin interest')).toHaveText(signedMoney(negate(b.interest), 0))
   await expect(line('Net cashflow')).toHaveText(signedMoney(b.net, 0))
   // the interest drawn over the bar from its baseline; it outweighs the
-  // distributions, so a line marks their height
+  // distributions, so it fills the bar and goes on above it
   const parts = await bar.locator('[data-part]').evaluateAll((els) => els.map((e) => ({ part: e.getAttribute('data-part'), top: e.getBoundingClientRect().top, bottom: e.getBoundingClientRect().bottom })))
   const of = (k: string) => parts.find((p) => p.part === k)
   expect(of('interest')).toBeTruthy()
@@ -103,7 +103,6 @@ test('a bar hover reads the month, Distributions, Margin interest and Net cashfl
     expect(of('in')).toBeTruthy()
     expect(Math.abs(of('interest')!.bottom - of('in')!.bottom)).toBeLessThan(1) // both from the baseline
     expect(of('interest')!.top).toBeLessThan(of('in')!.top) // the interest stands taller
-    expect(Math.abs(of('in-line')!.top - of('in')!.top)).toBeLessThan(1) // the distributions' height marked
   }
 })
 

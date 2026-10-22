@@ -109,13 +109,12 @@
     const hr = (at(b.repayments) / head) * 94
     const hi = (at(b.interest) / head) * 94
     const hd = b.count === 0 ? 0 : Math.max(1.5, (at(b.value) / head) * 94)
+    // more went out than came in: the money out fills the bar and goes on above it
     const over = hr + hi >= hd
     const parts = [
       ...(hd > 0 ? [{ h: hd, at: 0, color: 'var(--accent-bar)', top: !over, key: 'in' }] : []),
       ...(hr > 0 ? [{ h: hr, at: 0, color: REPAID, top: over && hi === 0, key: 'repaid' }] : []),
       ...(hi > 0 ? [{ h: hi, at: hr, color: 'var(--neg)', top: over, key: 'interest' }] : []),
-      // more went out than came in: the distributions' height still shows, a line across
-      ...(over && hd > 0 ? [{ h: 0.6, at: hd - 0.6, color: 'var(--accent-bar)', top: false, key: 'in-line' }] : []),
     ]
     return parts.map((p) => ({ h: p.h, at: p.at, color: p.color, key: p.key, radius: p.top ? '2px 2px 0 0' : '0' }))
   }
