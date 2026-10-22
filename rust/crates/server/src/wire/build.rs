@@ -639,7 +639,7 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
                 next_ex_date: h.rate.next_ex.map(|d| d.to_string()),
                 next_pay_date: h.rate.next_pay.map(|d| d.to_string()),
                 ex_past: h.rate.next_ex.is_some_and(|d| d < today),
-                pay_past: h.rate.next_pay.is_some_and(|d| d < today),
+                pay_past: pay_done(h.rate.next_ex, h.rate.next_pay, today, figs.cash.iter().filter(|r| r.kind == bagholder_engine::cashflow::Payment::Dividend && r.account == p.account && r.instrument == Some(p.instrument)).map(|r| r.day)),
                 annual: fig_money(&h.annual),
                 per_month: fig_dec(&per_month),
                 yoc: h.yield_on_cost.clone().into_wire(),
@@ -1309,5 +1309,33 @@ mod contracts {
         assert_eq!(with, Some(Fig::Stated(Dec(bagholder_core::Dec::parse("10500").unwrap()))), "9000 CAD and 1000 USD at 1.50");
         let without = total(&case(serde_json::json!({})));
         assert!(matches!(&without, Some(Fig::Waits { gaps }) if !gaps.is_empty()), "no USD rate: the total waits on it, {without:?}");
+    }
+}
+
+/// Whether a holding's pay day is done (`SPEC.md` cashflow-26): its date before
+/// today, or the payment it is for arrived, a distribution of the holding
+/// received on or after its ex-date.
+pub(crate) fn pay_done(next_ex: Option<bagholder_core::jiff::civil::Date>, next_pay: Option<bagholder_core::jiff::civil::Date>, today: bagholder_core::jiff::civil::Date, received: impl IntoIterator<Item = bagholder_core::jiff::civil::Date>) -> bool {
+    let Some(pay) = next_pay else { return false };
+    pay < today || next_ex.is_some_and(|ex| received.into_iter().any(|d| d >= ex))
+}
+
+#[cfg(test)]
+mod pay_day_tests {
+    use super::pay_done;
+
+    fn d(s: &str) -> bagholder_core::jiff::civil::Date {
+        s.parse().unwrap()
+    }
+
+    #[test]
+    fn a_pay_day_is_done_once_its_payment_arrives_or_its_date_passes() {
+        let (ex, pay) = (Some(d("2026-10-15")), Some(d("2026-10-22")));
+        assert!(!pay_done(ex, pay, d("2026-10-22"), [d("2026-09-22")]), "the pay day itself, the payment not yet arrived");
+        assert!(pay_done(ex, pay, d("2026-10-22"), [d("2026-09-22"), d("2026-10-22")]), "the pay day itself, the payment arrived");
+        assert!(pay_done(ex, pay, d("2026-10-21"), [d("2026-10-21")]), "paid a day early");
+        assert!(pay_done(ex, pay, d("2026-10-23"), []), "past");
+        assert!(!pay_done(ex, pay, d("2026-10-16"), [d("2026-10-14")]), "the last payment, before this ex-date");
+        assert!(!pay_done(ex, None, d("2026-10-23"), [d("2026-10-22")]), "no pay day to mute");
     }
 }
