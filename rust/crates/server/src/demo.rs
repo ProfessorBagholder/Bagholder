@@ -571,6 +571,46 @@ mod tests {
         assert!(write(home.path()).unwrap_err().contains("already holds a book"));
     }
 
+    /// On each holding's own pay day, as the Cashflow page is sent it: a holding
+    /// whose payment has arrived is done, one whose payment has not is not
+    /// (`SPEC.md` cashflow-26), through the figures the page is built from.
+    #[test]
+    fn on_its_pay_day_a_holding_s_pay_day_is_done_once_its_payment_has_arrived() {
+        let home = tempfile::tempdir().unwrap();
+        write(home.path()).unwrap();
+        let at: bagholder_core::jiff::Timestamp = SYNCED.parse().unwrap();
+        let f = crate::figures::Figures::open(home.path(), at).unwrap();
+        f.state_zone("America/Toronto", at).unwrap();
+        let filters = bagholder_engine::scope::Filters::default();
+        let (doc, pay_days) = f
+            .read(|e| {
+                let pf = e.portfolio(&filters);
+                let doc = crate::wire::build::cashflow_doc(e, &filters, &pf);
+                let days: Vec<(String, String, String)> = doc.holdings.iter().filter_map(|h| Some((h.symbol.clone(), h.account.clone(), h.next_pay_date.clone()?))).collect();
+                (doc.rows.len(), days)
+            })
+            .unwrap();
+        assert!(doc > 0 && !pay_days.is_empty(), "the made-up book pays distributions");
+        let mut paid = 0;
+        for (symbol, account, pay) in pay_days {
+            let day: bagholder_core::jiff::civil::Date = pay.parse().unwrap();
+            let h = f
+                .read(|e| {
+                    let pf = e.portfolio(&filters);
+                    let d = crate::wire::build::cashflow_doc_on(e, &filters, &pf, day);
+                    let h = d.holdings.iter().find(|h| h.symbol == symbol && h.account == account).unwrap().clone();
+                    let arrived = h.next_ex_date.as_ref().is_some_and(|ex| d.rows.iter().any(|r| r.symbol == symbol && r.account == account && r.date >= *ex));
+                    (h.pay_past, arrived)
+                })
+                .unwrap();
+            assert_eq!(h.0, h.1, "{symbol} in {account} on its pay day {pay}: done exactly when its payment has arrived");
+            if h.1 {
+                paid += 1;
+            }
+        }
+        assert!(paid > 0, "a holding paid by its pay day is in the book");
+    }
+
     #[test]
     fn the_equity_path_is_the_same_on_every_run() {
         let nav = nav_series();

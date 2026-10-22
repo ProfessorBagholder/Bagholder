@@ -592,8 +592,13 @@ pub fn portfolio_totals(engine: &Engine, pf: &bagholder_engine::scope::Portfolio
 
 /// The Cashflow tab under `filters`, over the holdings' part of the scope.
 pub fn cashflow_doc(engine: &Engine, filters: &Filters, pf: &bagholder_engine::scope::Portfolio) -> Cashflow {
+    cashflow_doc_on(engine, filters, pf, engine.inputs().clock.today)
+}
+
+/// `cashflow_doc` as it stands on `today`.
+pub(crate) fn cashflow_doc_on(engine: &Engine, filters: &Filters, pf: &bagholder_engine::scope::Portfolio, today: bagholder_core::jiff::civil::Date) -> Cashflow {
     let c = engine.cashflow(filters, pf);
-    cashflow(engine.inputs(), &engine.figures(), &c, engine.inputs().clock.today)
+    cashflow(engine.inputs(), &engine.figures(), &c, today)
 }
 
 fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagholder_engine::scope::Cashflow, today: bagholder_core::jiff::civil::Date) -> Cashflow {
