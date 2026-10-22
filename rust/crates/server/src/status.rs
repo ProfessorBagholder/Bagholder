@@ -71,9 +71,22 @@ pub struct Standing {
     pub as_of: Option<String>,
 }
 
-/// The book's standing from the broker checks and what each account's broker
-/// states; none where a difference stands, which the error line says.
-pub fn standing_of(checks: &[bagholder_engine::equity::BrokerCheck], brokers: &std::collections::BTreeMap<bagholder_core::AccountId, bagholder_engine::input::BrokerAccount>) -> Option<Standing> {
+/// The accounts the book holds units in now: any holding whose latest count is
+/// not nothing (one that cannot be counted is held).
+fn holding(e: &bagholder_engine::Engine) -> std::collections::BTreeSet<bagholder_core::AccountId> {
+    e.figures().matched.units.iter().filter(|(_, by_day)| by_day.values().next_back().is_some_and(|q| q.as_ref().map_or(true, |q| !q.is_zero()))).map(|((a, _), _)| *a).collect()
+}
+
+/// The book's standing from the broker checks, what each account's broker
+/// states, and the accounts the book holds units in; none where a difference
+/// stands, which the error line says. An account is compared once its cash is
+/// stated at its last full read and, where the book holds units in it, its units
+/// are stated: it matches only when every stated account was compared.
+pub fn standing_of(
+    checks: &[bagholder_engine::equity::BrokerCheck],
+    brokers: &std::collections::BTreeMap<bagholder_core::AccountId, bagholder_engine::input::BrokerAccount>,
+    holding: &std::collections::BTreeSet<bagholder_core::AccountId>,
+) -> Option<Standing> {
     let state = |s: &str, as_of: Option<String>| Some(Standing { state: s.to_string(), as_of });
     if checks.iter().any(|c| c.differences.iter().any(|d| !d.pending())) {
         return None;
@@ -82,6 +95,10 @@ pub fn standing_of(checks: &[bagholder_engine::equity::BrokerCheck], brokers: &s
         return state("unchecked", None);
     }
     if checks.iter().any(|c| c.pending || c.differences.iter().any(|d| d.pending())) {
+        return state("checking", None);
+    }
+    let compared = |a: &bagholder_core::AccountId, b: &bagholder_engine::input::BrokerAccount| b.cash_read.is_some() && (!holding.contains(a) || b.held_as_of.is_some());
+    if !brokers.iter().all(|(a, b)| compared(a, b)) {
         return state("checking", None);
     }
     match brokers.values().filter_map(|b| b.held_as_of).min() {
@@ -172,7 +189,7 @@ pub fn status(app: &Arc<App>) -> Status {
     sources.extend(app.figures.get().and_then(|f| f.read(broker_failures)).unwrap_or_default());
     sources.extend(crate::feeds::feed_failures(app));
     sources.extend(orders::order_failures(app));
-    let standing = app.figures.get().and_then(|f| f.read(|e| standing_of(e.figures().checks, &e.inputs().market.brokers))).flatten();
+    let standing = app.figures.get().and_then(|f| f.read(|e| standing_of(e.figures().checks, &e.inputs().market.brokers, &holding(e)))).flatten();
     let st = app.state.lock().unwrap();
     let connected = st.connected && sess.as_ref().map(|x| !x.access_token.is_empty()).unwrap_or(false);
     let error = failures(&st, &sources);
@@ -810,28 +827,45 @@ mod tests {
 
     #[test]
     fn the_sync_line_says_matches_as_of_the_day_the_units_are_stated() {
+        // the third holds no units, so its cash alone compares it
         let (checks, brokers) = checked(&[(true, Some("2026-10-20"), false, vec![]), (true, Some("2026-10-18"), false, vec![]), (true, None, false, vec![])]);
-        let s = super::standing_of(&checks, &brokers).unwrap();
+        let s = super::standing_of(&checks, &brokers, &brokers.keys().take(2).copied().collect()).unwrap();
         assert_eq!((s.state.as_str(), s.as_of.as_deref()), ("matches", Some("2026-10-18")), "the earliest day any account's units are stated as of");
         // a difference that stands is the error line's, never a standing beside it
         let (checks, brokers) = checked(&[(true, Some("2026-10-20"), false, vec![cash_off(false)])]);
-        assert_eq!(super::standing_of(&checks, &brokers), None);
+        assert_eq!(super::standing_of(&checks, &brokers, &brokers.keys().copied().collect()), None);
     }
 
     #[test]
     fn says_checking_while_a_statement_is_newer_than_the_read_or_a_difference_is_pending() {
         let (checks, brokers) = checked(&[(true, Some("2026-10-20"), true, vec![]), (true, Some("2026-10-20"), false, vec![])]);
-        assert_eq!(super::standing_of(&checks, &brokers).unwrap().state, "checking", "a statement newer than its account's read");
+        assert_eq!(super::standing_of(&checks, &brokers, &brokers.keys().copied().collect()).unwrap().state, "checking", "a statement newer than its account's read");
         let (checks, brokers) = checked(&[(true, Some("2026-10-20"), false, vec![cash_off(true)])]);
-        assert_eq!(super::standing_of(&checks, &brokers).unwrap().state, "checking", "a difference waiting on the balance that confirms it");
+        assert_eq!(super::standing_of(&checks, &brokers, &brokers.keys().copied().collect()).unwrap().state, "checking", "a difference waiting on the balance that confirms it");
+    }
+
+    /// An account never compared does not match, though nothing about it
+    /// differs: its cash never stated at a full read, or units held in it never
+    /// stated (brief 75 §5).
+    #[test]
+    fn says_checking_while_a_stated_account_was_never_compared() {
+        // cash: one account stated at its read, one never
+        let (checks, brokers) = checked(&[(true, Some("2026-10-20"), false, vec![]), (false, Some("2026-10-20"), false, vec![])]);
+        assert_eq!(super::standing_of(&checks, &brokers, &brokers.keys().copied().collect()).unwrap().state, "checking", "an account whose cash was never compared");
+        // units: an account the book holds units in, its units never stated
+        let (checks, brokers) = checked(&[(true, Some("2026-10-20"), false, vec![]), (true, None, false, vec![])]);
+        assert_eq!(super::standing_of(&checks, &brokers, &brokers.keys().copied().collect()).unwrap().state, "checking", "units held and never compared");
+        // holding nothing, no units statement needed: it matches
+        let lone: std::collections::BTreeSet<_> = brokers.keys().take(1).copied().collect();
+        assert_eq!(super::standing_of(&checks, &brokers, &lone).unwrap().state, "matches", "an account holding no units is compared by its cash");
     }
 
     #[test]
     fn says_not_yet_checked_before_any_read() {
         let (checks, brokers) = checked(&[]);
-        assert_eq!(super::standing_of(&checks, &brokers).unwrap().state, "unchecked", "no account stated");
+        assert_eq!(super::standing_of(&checks, &brokers, &brokers.keys().copied().collect()).unwrap().state, "unchecked", "no account stated");
         let (checks, brokers) = checked(&[(false, None, true, vec![]), (false, Some("2026-10-20"), true, vec![])]);
-        assert_eq!(super::standing_of(&checks, &brokers).unwrap().state, "unchecked", "no account has a statement at its last full read");
+        assert_eq!(super::standing_of(&checks, &brokers, &brokers.keys().copied().collect()).unwrap().state, "unchecked", "no account has a statement at its last full read");
     }
 
     #[test]
