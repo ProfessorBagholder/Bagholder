@@ -211,7 +211,7 @@ test('a header click re-sorts Distribution history', async ({ page, request }) =
   await expect(card.locator('tbody tr').first().locator('td').nth(1)).toContainText(bySymbolDesc[0].symbol)
 })
 
-test('a next ex-date or pay day already past is muted; one still to come, the pay day itself included, is not', async ({ page, request }) => {
+test('a next ex-date or pay day already past is muted; one still to come is not', async ({ page, request }) => {
   let sym = ''
   await openWithStatus(page, request, {}, '#cashflow', (m) => {
     const h = (m.cashflow as { holdings: Record<string, unknown>[] }).holdings[0]
@@ -232,3 +232,25 @@ test('a next ex-date or pay day already past is muted; one still to come, the pa
   expect(await colour('2026-01-05')).toBe(muted)
   expect(await colour('2099-01-15')).not.toBe(muted)
 })
+
+// SPEC.md cashflow-26: a pay day is done once its date has passed or its payment
+// has arrived; held for every holding the server sends, against the history rows
+// the same page is sent, so the server's flag is the rule on real data
+test('every holding\'s pay day is muted exactly when its date has passed or its payment has arrived', async ({ request }) => {
+  const m = await figures(request)
+  const today = new Date().toISOString().slice(0, 10)
+  const rows = m.cashflow.rows as { date: string; symbol: string; account: string }[]
+  const holdings = m.cashflow.holdings as { symbol: string; account: string; nextExDate: string | null; nextPayDate: string | null; payPast: boolean }[]
+  let checked = 0
+  for (const h of holdings) {
+    if (!h.nextPayDate) {
+      expect(h.payPast, h.symbol).toBe(false)
+      continue
+    }
+    const paid = !!h.nextExDate && rows.some((r) => r.symbol === h.symbol && r.account === h.account && r.date >= h.nextExDate!)
+    expect(h.payPast, `${h.symbol} pay ${h.nextPayDate} ex ${h.nextExDate}`).toBe(h.nextPayDate < today || paid)
+    checked++
+  }
+  expect(checked).toBeGreaterThan(0)
+})
+
