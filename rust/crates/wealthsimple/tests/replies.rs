@@ -913,6 +913,38 @@ fn buying_power_of_another_shape_or_meaning_is_a_mismatch() {
     assert_eq!(another.path, "id");
 }
 
+// -- margin rates (FetchAccountAppliedRates, MARGIN_INTEREST) ------------------
+//
+// The shape Wealthsimple's own web app reads (`read::margin_rates`): `appliedRates`
+// one object or a list, selected by `__typename`; each rate decimal text or a
+// number, a yearly fraction. Every figure made up.
+
+fn rates_of(applied: &str) -> Result<std::collections::BTreeMap<Currency, Dec>, bagholder_sources::reply::Mismatch> {
+    let v = bagholder_core::json::parse(&format!(r#"{{"id":"anon-margin-1","appliedRates":{applied},"__typename":"Account"}}"#)).unwrap();
+    read::margin_rates(&v, "anon-margin-1")
+}
+
+#[test]
+fn margin_rates_are_each_currency_s_yearly_fraction_as_text_or_a_number() {
+    let both = [(Currency::CAD, dec("0.0445")), (Currency::USD, dec("0.0695"))].into_iter().collect();
+    assert_eq!(rates_of(r#"{"__typename":"AppliedMarginInterestRates","cadPositionRate":"0.0445","usdPositionRate":"0.0695"}"#).unwrap(), both);
+    assert_eq!(rates_of(r#"{"__typename":"AppliedMarginInterestRates","cadPositionRate":0.0445,"usdPositionRate":0.0695}"#).unwrap(), both, "a number read exactly");
+    // a list, selected by its type
+    assert_eq!(rates_of(r#"[{"__typename":"AppliedCashInterestRates","cadInterestRate":"0.01","usdInterestRate":"0.01"},{"__typename":"AppliedMarginInterestRates","cadPositionRate":"0.0445","usdPositionRate":"0.0695"}]"#).unwrap(), both);
+    // a currency with no rate stated has none; no margin rates at all, none
+    assert_eq!(rates_of(r#"{"__typename":"AppliedMarginInterestRates","cadPositionRate":"0.0445","usdPositionRate":null}"#).unwrap(), [(Currency::CAD, dec("0.0445"))].into_iter().collect());
+    assert!(rates_of("null").unwrap().is_empty());
+}
+
+#[test]
+fn a_margin_rate_that_is_not_a_yearly_fraction_or_of_another_account_is_a_mismatch() {
+    let percent = rates_of(r#"{"__typename":"AppliedMarginInterestRates","cadPositionRate":"4.45","usdPositionRate":null}"#).unwrap_err();
+    assert!(percent.why.contains("not a yearly rate"), "{}", percent.why);
+    assert!(rates_of(r#"{"__typename":"AppliedMarginInterestRates","cadPositionRate":true,"usdPositionRate":null}"#).is_err(), "neither text nor a number");
+    let v = bagholder_core::json::parse(r#"{"id":"anon-margin-2","appliedRates":null}"#).unwrap();
+    assert_eq!(read::margin_rates(&v, "anon-margin-1").unwrap_err().path, "id");
+}
+
 // -- positions (FetchHoldingsExportPositionsAsOfDate) --------------------------
 
 #[test]

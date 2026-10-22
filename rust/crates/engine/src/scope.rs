@@ -586,9 +586,13 @@ fn fig_sum(items: &[Fig<Money>]) -> Fig<Money> {
 
 /// The mean of `n` amounts totalling `total`; none of none.
 /// A month's interest on `principal` at a yearly `rate` (a fraction), for the
-/// month `day` is in, as Wealthsimple's web app works it out: compounded daily
-/// over the month's days, the principal × ((1 + rate ÷ the year's days) ^ the
-/// month's days − 1), to the cent.
+/// month `day` is in, as Wealthsimple's web app works it out (its build
+/// `app-09214df49cd2deb0.js`, chunk 309, module 270324, read 2026-10-21):
+/// compounded daily over the month's days, the principal × ((1 + rate ÷ the
+/// year's days) ^ the month's days − 1), to the cent. The year's days are 366 in
+/// a leap year (divisible by 4, and by 400 where by 100) and the month's its
+/// calendar days, as the app's own date helpers count them (module 861100 in
+/// chunk 25, module 125672 in the app's main script).
 pub fn month_interest(principal: Dec, rate: Dec, day: Date) -> Fig<Dec> {
     let daily = rate.div_rounded(Dec::from_int(i64::from(day.days_in_year())), 12, bagholder_core::Rounding::HalfEven)?;
     let step = Dec::from_int(1).checked_add(daily)?;
