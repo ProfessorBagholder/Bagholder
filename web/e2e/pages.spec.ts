@@ -3,8 +3,9 @@ import { openWithStatus } from './helpers'
 
 // Behaviours of single cards that a rendering of the page alone does not show.
 
-test('value-axis labels that would touch are not both shown', async ({ page, request }) => {
-  // one large gain and one small loss: "$0" and the loss sit a few pixels apart
+test('value-axis labels never touch, a small loss beside a large gain included', async ({ page, request }) => {
+  // one large gain and one small loss: the axis runs in whole round steps, the
+  // loss side one step down, so every label has its step's room
   await openWithStatus(page, request, {}, '', (m) => {
     m.monthly = [
       { key: '2026-01', label: "Jan '26", value: '9000', count: 3, tradeIds: [] },
@@ -12,9 +13,9 @@ test('value-axis labels that would touch are not both shown', async ({ page, req
     ]
   })
   const axis = page.locator('[data-axis]')
-  await expect(axis.locator('span')).toHaveCount(4)
-  await expect(axis.locator('span[hidden]')).toHaveCount(1)
-  await expect(axis.locator('span[hidden]')).toHaveText('−$40')
+  await expect(axis.locator('span')).toHaveCount(7)
+  await expect(axis.locator('span[hidden]')).toHaveCount(0)
+  await expect(axis.locator('span').last()).toHaveText('−$2,000')
   const overlapping = await axis.evaluate((el) => {
     const rs = Array.from(el.children).filter((c) => !(c as HTMLElement).hidden).map((c) => c.getBoundingClientRect()).sort((a, b) => a.top - b.top)
     return rs.some((r, i) => i > 0 && r.top < rs[i - 1].bottom)
