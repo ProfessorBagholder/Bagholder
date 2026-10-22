@@ -14,38 +14,21 @@ use bagholder_core::{GroupId, InstrumentId, Leg, RecordId, TradeId, TransactionI
 use crate::text::{self, at as at_text};
 use crate::{new_uuid, Book, BookError, Rank, Result};
 
-/// What `Book::reattach` did.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum Reattached {
-    Attached,
-    /// Left orphaned, with this reason.
-    Kept(String),
-}
-
 impl Book {
     /// The trade opened by `opening`, made the first time it is asked for. The
     /// opening must be a transaction in the book that moves a position of the
     /// instrument named: its own instrument, or, for an assignment or an
-    /// exercise, the underlying its contract delivers. `legacy_key` is the key an
-    /// earlier version of the app knew the trade by, where it was imported.
-    pub fn open_trade(&self, opening: &Opening, legacy_key: Option<&str>, at: jiff::Timestamp) -> Result<TradeId> {
+    /// exercise, the underlying its contract delivers.
+    pub fn open_trade(&self, opening: &Opening, at: jiff::Timestamp) -> Result<TradeId> {
         self.atomically(|| {
-            if let Some(key) = legacy_key {
-                if let Some(t) = self.trade_by_legacy_key(key)? {
-                    return Ok(t);
-                }
-            }
             if let Some(t) = self.trade_on(opening)? {
-                if let Some(key) = legacy_key {
-                    self.conn().execute("UPDATE trades SET legacy_key = ? WHERE id = ? AND legacy_key IS NULL", params![key, t.to_string()])?;
-                }
                 return Ok(t);
             }
             self.check_opening(opening)?;
             let id = TradeId::from_uuid(new_uuid(at));
             self.conn().execute(
-                "INSERT INTO trades(id, anchor_record, anchor_leg, anchor_instrument, legacy_key, created_at) VALUES (?, ?, ?, ?, ?, ?)",
-                params![id.to_string(), opening.transaction.record.to_string(), opening.transaction.leg.as_str(), self.own_anchor(opening)?.to_string(), legacy_key, at_text(at)],
+                "INSERT INTO trades(id, anchor_record, anchor_leg, anchor_instrument, created_at) VALUES (?, ?, ?, ?, ?)",
+                params![id.to_string(), opening.transaction.record.to_string(), opening.transaction.leg.as_str(), self.own_anchor(opening)?.to_string(), at_text(at)],
             )?;
             Ok(id)
         })
@@ -75,23 +58,6 @@ impl Book {
             }
         }
         Ok(())
-    }
-
-    /// A trade an earlier version of the app knew by `legacy_key` and whose
-    /// opening cannot be found: kept orphaned, with the reason, so what the person
-    /// wrote on it is not lost. The same key again is the same trade.
-    pub fn orphan_trade(&self, legacy_key: &str, reason: &str, at: jiff::Timestamp) -> Result<TradeId> {
-        self.atomically(|| {
-            if let Some(t) = self.trade_by_legacy_key(legacy_key)? {
-                return Ok(t);
-            }
-            let id = TradeId::from_uuid(new_uuid(at));
-            self.conn().execute(
-                "INSERT INTO trades(id, orphaned_reason, legacy_key, created_at) VALUES (?, ?, ?, ?)",
-                params![id.to_string(), reason, legacy_key, at_text(at)],
-            )?;
-            Ok(id)
-        })
     }
 
     pub(crate) fn orphan(&self, trade: TradeId, reason: &str) -> Result<()> {
@@ -254,36 +220,6 @@ impl Book {
         Ok(out)
     }
 
-    /// Put an orphaned trade back on the round trip opened by `to`, its id and
-    /// journal kept: a repair of what an earlier build orphaned though its round
-    /// trip still stood. A trade the book gave that round trip since (with no
-    /// note and in no group, so nothing of the person's is on it) gives way to
-    /// it; one with a note of its own, or in a group, keeps the round trip, and
-    /// the orphan stays orphaned with that reason.
-    pub fn reattach(&self, orphan: TradeId, to: &Opening) -> Result<Reattached> {
-        self.atomically(|| {
-            if !matches!(self.trade(orphan)?.anchor, Anchor::Orphaned(_)) {
-                return Err(BookError::Refused(format!("trade {orphan} is not orphaned")));
-            }
-            if let Some(holder) = self.trade_on(to)? {
-                let why = if self.journal(JournalSubject::Trade(holder))?.is_some() {
-                    Some(format!("the round trip it was written on has a note of its own, on trade {holder}"))
-                } else if self.groups()?.iter().any(|g| g.members.contains(&holder)) {
-                    Some(format!("the round trip it was written on is trade {holder}, which is in a group"))
-                } else {
-                    None
-                };
-                if let Some(why) = why {
-                    self.conn().execute("UPDATE trades SET orphaned_reason = ? WHERE id = ?", params![why, orphan.to_string()])?;
-                    return Ok(Reattached::Kept(why));
-                }
-                self.conn().execute("DELETE FROM trades WHERE id = ?", [holder.to_string()])?;
-            }
-            self.anchor_on(orphan, to)?;
-            Ok(Reattached::Attached)
-        })
-    }
-
     /// Whether the repair `name` has been done on this book.
     pub fn repaired(&self, name: &str) -> Result<bool> {
         Ok(self.conn().query_row("SELECT 1 FROM settings WHERE key = ?", [format!("repair.{name}")], |_| Ok(())).optional()?.is_some())
@@ -314,11 +250,6 @@ impl Book {
         Ok(None)
     }
 
-    pub fn trade_by_legacy_key(&self, key: &str) -> Result<Option<TradeId>> {
-        let found: Option<String> = self.conn().query_row("SELECT id FROM trades WHERE legacy_key = ?", [key], |r| r.get(0)).optional()?;
-        found.map(|s| text::parsed("trades", "id", &s, TradeId::parse)).transpose()
-    }
-
     pub fn trade(&self, id: TradeId) -> Result<Trade> {
         self.trades_where("WHERE id = ?", [id.to_string()])?.pop().map(|(_, t)| t).ok_or_else(|| BookError::Refused(format!("no trade {id}")))
     }
@@ -341,15 +272,15 @@ impl Book {
     /// Trades, each anchored on the instrument the book reads its anchor as.
     fn trades_where(&self, filter: &str, args: impl rusqlite::Params) -> Result<Vec<(Rank, Trade)>> {
         let sql = format!(
-            "SELECT id, anchor_record, anchor_leg, COALESCE(j.into_id, anchor_instrument), orphaned_reason, legacy_key, trades.created_at, trades.rowid
+            "SELECT id, anchor_record, anchor_leg, COALESCE(j.into_id, anchor_instrument), orphaned_reason, trades.created_at, trades.rowid
              FROM trades LEFT JOIN instrument_joins j ON j.instrument_id = trades.anchor_instrument {filter} ORDER BY trades.created_at, trades.rowid"
         );
         let mut stmt = self.conn().prepare_cached(&sql)?;
-        type Row = (String, Option<String>, Option<String>, Option<String>, Option<String>, Option<String>, String, i64);
-        let rows = stmt.query_map(args, |r| -> rusqlite::Result<Row> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?)) })?;
+        type Row = (String, Option<String>, Option<String>, Option<String>, Option<String>, String, i64);
+        let rows = stmt.query_map(args, |r| -> rusqlite::Result<Row> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?)) })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, record, leg, instrument, orphaned, legacy_key, made, rowid) = row?;
+            let (id, record, leg, instrument, orphaned, made, rowid) = row?;
             let anchor = match (record, leg, instrument, orphaned) {
                 (Some(r), Some(l), Some(i), None) => Anchor::Opening(Opening {
                     transaction: TransactionId::new(text::parsed("trades", "anchor_record", &r, RecordId::parse)?, text::parsed("trades", "anchor_leg", &l, Leg::parse)?),
@@ -358,7 +289,7 @@ impl Book {
                 (None, None, None, Some(why)) => Anchor::Orphaned(why),
                 (r, l, i, o) => return Err(text::corrupt("trades", "anchor_record", &format!("{r:?} {l:?} {i:?} {o:?}"), "neither anchored on an instrument nor orphaned")),
             };
-            out.push(((made, rowid), Trade { id: text::parsed("trades", "id", &id, TradeId::parse)?, anchor, legacy_key }));
+            out.push(((made, rowid), Trade { id: text::parsed("trades", "id", &id, TradeId::parse)?, anchor }));
         }
         Ok(out)
     }
@@ -460,21 +391,11 @@ impl Book {
     // groups
     // ------------------------------------------------------------------
 
-    /// A group of trades the person made. `legacy_key` is its id in an earlier
-    /// version of the app; the same key again is the same group.
-    pub fn add_group(&self, members: &[TradeId], locked: bool, legacy_key: Option<&str>, at: jiff::Timestamp) -> Result<GroupId> {
+    /// A group of trades the person made.
+    pub fn add_group(&self, members: &[TradeId], locked: bool, at: jiff::Timestamp) -> Result<GroupId> {
         self.atomically(|| {
-            if let Some(key) = legacy_key {
-                let found: Option<String> = self.conn().query_row("SELECT id FROM trade_groups WHERE legacy_key = ?", [key], |r| r.get(0)).optional()?;
-                if let Some(id) = found {
-                    return text::parsed("trade_groups", "id", &id, GroupId::parse);
-                }
-            }
             let id = GroupId::from_uuid(new_uuid(at));
-            self.conn().execute(
-                "INSERT INTO trade_groups(id, locked, legacy_key, created_at) VALUES (?, ?, ?, ?)",
-                params![id.to_string(), locked as i64, legacy_key, at_text(at)],
-            )?;
+            self.conn().execute("INSERT INTO trade_groups(id, locked, created_at) VALUES (?, ?, ?)", params![id.to_string(), locked as i64, at_text(at)])?;
             for (i, t) in members.iter().enumerate() {
                 self.conn().execute(
                     "INSERT INTO trade_group_members(group_id, position, trade_id) VALUES (?, ?, ?)",

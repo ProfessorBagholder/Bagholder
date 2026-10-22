@@ -920,7 +920,8 @@ fn a_bracket_carried_over_from_the_earlier_app_has_its_card() {
     let place = bagholder_book::orders::BracketPlace { venue_mic: None, venue_name: None, id: "b-old".into(), broker: "wealthsimple".into(), broker_account: "acct".into(), broker_security: "sec".into(), symbol: "SHOP".into(), currency: Currency::parse("USD").unwrap() };
     let first = BracketEvent::Imported { phase: Phase::Ended, quantity: d("10"), stop: World::stop("95"), target: Some(d("110")), exit: None, attempts: 0, why: None, outcome: Some("target".into()), seen_held: true, row: "{}".into() };
     let entry = bagholder_core::order::OrderEvent::Imported { state: OrderState::Filled, broker_id: Some("ws-1".into()), filled: d("10"), average: Some(d("100")), why: None, row: "{}".into() };
-    w.book.import_orders(&[(place, first, t0(), t0() + SignedDuration::from_hours(1))], &[(order("e-old", Some(("b-old", OrderRole::Entry))), entry, t0(), t0())]).unwrap();
+    w.book.carried_bracket(&place, &first, t0(), t0() + SignedDuration::from_hours(1)).unwrap();
+    w.book.carried_order(&order("e-old", Some(("b-old", OrderRole::Entry))), &entry, t0(), t0()).unwrap();
     // a size Wealthsimple's quote stated for it
     w.app.orders.units.lock().unwrap().insert("sec".into(), Dec::ONE);
     let doc = crate::orders::orders_doc(&w.app);

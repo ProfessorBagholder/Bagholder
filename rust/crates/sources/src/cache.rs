@@ -22,7 +22,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::contract::{Benchmark, DataKind};
 use crate::outcome::OutcomeKind;
 
-pub static MIGRATIONS: [Migration; 8] = [
+pub static MIGRATIONS: [Migration; 9] = [
     Migration { number: 1, name: "the market cache", sql: include_str!("../migrations/001-the-market-cache.sql") },
     Migration { number: 2, name: "reads", sql: include_str!("../migrations/002-reads.sql") },
     Migration { number: 3, name: "benchmark trackers and option chains", sql: include_str!("../migrations/003-benchmark-trackers-and-option-chains.sql") },
@@ -31,6 +31,7 @@ pub static MIGRATIONS: [Migration; 8] = [
     Migration { number: 6, name: "market data by listing", sql: include_str!("../migrations/006-market-data-by-listing.sql") },
     Migration { number: 7, name: "reads that failed", sql: include_str!("../migrations/007-reads-that-failed.sql") },
     Migration { number: 8, name: "documents no longer listed", sql: include_str!("../migrations/008-documents-no-longer-listed.sql") },
+    Migration { number: 9, name: "the earlier app gone", sql: include_str!("../migrations/009-the-earlier-app-gone.sql") },
 ];
 
 pub static SCHEMA: Schema = Schema {
@@ -39,45 +40,6 @@ pub static SCHEMA: Schema = Schema {
     application_id: 0x4248_4D43,
     migrations: &MIGRATIONS,
 };
-
-/// The filer a filing row stored by ticker (the schema before migration 6) belongs
-/// to, read from the row itself: a SEDAR+ row's profile, else its ticker's stored
-/// SEDAR+ profile; an SEC row's CIK from its address, as a number. `{meta}` is the
-/// schema's `meta` table. Migration 6 carries the cache's own rows by this rule
-/// (`migration_6_attributes_filers_by_the_one_rule` holds its text to it), and
-/// `carry_filings` an earlier store's.
-pub const FILER_OF_ROW: &str = "CASE
-        WHEN f.source = 'SEDAR+' AND COALESCE(f.profile_no, '') <> '' THEN f.profile_no
-        WHEN f.source = 'SEDAR+' THEN (SELECT NULLIF(m.value, '') FROM {meta} m WHERE m.key = 'sedar_profile:' || f.symbol)
-        WHEN f.source = 'SEC' AND instr(f.url, '/edgar/data/') > 0
-            THEN CAST(CAST(substr(substr(f.url, instr(f.url, '/edgar/data/') + 12), 1, instr(substr(f.url, instr(f.url, '/edgar/data/') + 12), '/') - 1) AS INTEGER) AS TEXT)
-        WHEN f.source = 'SEC' AND instr(f.url, 'CIK=') > 0
-            THEN CAST(CAST(substr(f.url, instr(f.url, 'CIK=') + 4) AS INTEGER) AS TEXT)
-    END";
-
-/// Carry the filings an attached schema `from` holds by ticker (the shape before
-/// migration 6) into this cache's filings, as migration 6 carries the cache's own:
-/// one row per document with its filer, the most complete read of a document
-/// stored under two tickers, the ticker each filer was stored under kept for the
-/// book's told marks. The rows carried, and the rows dropped for naming no filer.
-pub fn carry_filings(conn: &Connection, from: &str) -> rusqlite::Result<(usize, usize)> {
-    let filer = FILER_OF_ROW.replace("{meta}", &format!("{from}.meta"));
-    conn.execute_batch(&format!("DROP TABLE IF EXISTS temp.filed; CREATE TEMP TABLE filed AS SELECT f.*, {filer} AS filer FROM {from}.filings f;"))?;
-    let named = "filer IS NOT NULL AND filer NOT IN ('', '0')";
-    conn.execute(&format!("INSERT OR IGNORE INTO main.filings_carried (symbol, source, filer) SELECT DISTINCT symbol, source, filer FROM temp.filed WHERE {named}"), [])?;
-    let carried = conn.execute(
-        &format!(
-            "INSERT OR IGNORE INTO main.filings (source, id, filer, category, issuer, type, title, date, date_text, size, url, subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads, fetched_at)
-             SELECT source, id, filer, category, issuer, type, title, date, date_text, size, url, subject, summary, enriched_at, enrich_version, enrich_final, enrich_reads, fetched_at
-             FROM (SELECT *, ROW_NUMBER() OVER (PARTITION BY source, id ORDER BY COALESCE(enrich_final, 0) DESC, COALESCE(enrich_version, 0) DESC, enriched_at IS NULL, enriched_at DESC, fetched_at DESC) AS rank
-                   FROM temp.filed WHERE {named}) WHERE rank = 1"
-        ),
-        [],
-    )?;
-    let dropped: i64 = conn.query_row(&format!("SELECT COUNT(*) FROM temp.filed WHERE NOT ({named})"), [], |r| r.get(0))?;
-    conn.execute_batch("DROP TABLE temp.filed")?;
-    Ok((carried, dropped as usize))
-}
 
 /// How many outcomes each source keeps beyond the newest of each kind.
 pub const OUTCOMES_KEPT: i64 = 1000;

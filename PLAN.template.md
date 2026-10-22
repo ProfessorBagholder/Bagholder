@@ -12,7 +12,7 @@ One paragraph: the change, and the figures, screens or `SPEC.md` sections it tou
 
 ## The old app here
 
-What the old app does in this area, what is wrong with it (with its entry in `docs/old-app-mistakes.md`, adding one where it is new), and what this plan does instead. For anything carried over (a rule, a structure, a formula, a default, a fallback): why it is right, shown against `SPEC.md` and `docs/architecture.md`, never because it exists or has always worked that way. What the person sees and does on screen stays as it is unless `SPEC.md` changes; where it falls short of the category's products, that is a proposal to the owner (`CLAUDE.md`, first rule), not a change in this plan. At the gate, anything carried over without this answer is a finding.
+What the old app does in this area, what is wrong with it, and what this plan does instead. For anything carried over (a rule, a structure, a formula, a default, a fallback): why it is right, shown against `SPEC.md` and `docs/architecture.md`, never because it exists or has always worked that way. What the person sees and does on screen stays as it is unless `SPEC.md` changes; where it falls short of the category's products, that is a proposal to the owner (`CLAUDE.md`, first rule), not a change in this plan. At the gate, anything carried over without this answer is a finding.
 
 ## How the leading products do it
 
@@ -38,7 +38,7 @@ Observable and binary; each names how it is verified. If any fails, it is not do
 
 ## Surfaces to check beyond the diff
 
-The named places a reviewer must look that the diff alone does not show: a caller, a generated file (`web/src/lib/generated/wire.ts`), a book migration and its schema snapshot, `TIMED_WAITS`, `docs/old-app-mistakes.md`.
+The named places a reviewer must look that the diff alone does not show: a caller, a generated file (`web/src/lib/generated/wire.ts`), a book migration and its schema snapshot, `TIMED_WAITS`.
 
 ## Right to refuse
 

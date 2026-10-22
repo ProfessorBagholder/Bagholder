@@ -162,8 +162,8 @@ pub enum OrderEvent {
     ModifyAsked { limit_price: Option<Dec>, quantity: Option<Dec> },
     /// The broker refused the change.
     ModifyRefused { why: String },
-    /// Carried over from the earlier app's store once, where it stood then: the
-    /// state, the broker's id, what had filled, and the row as it was (JSON text).
+    /// An order the app found already placed, where it stood then: the state, the
+    /// broker's id, what had filled, and the row it was found as (JSON text).
     Imported { state: OrderState, broker_id: Option<String>, filled: Dec, average: Option<Dec>, why: Option<String>, row: String },
 }
 
@@ -226,7 +226,7 @@ impl std::fmt::Display for NotAllowed {
 }
 
 impl OrderFold {
-    /// The order as its first event makes it: `Written`, or `Imported` from the earlier app.
+    /// The order as its first event makes it: `Written`, or `Imported`, found already placed.
     pub fn start(first: &OrderEvent) -> Result<OrderFold, NotAllowed> {
         match first {
             OrderEvent::Imported { state, broker_id, filled, average, why, .. } => {

@@ -7,6 +7,8 @@ mod common;
 use bagholder_book::schema::{MIGRATIONS, SCHEMA};
 use bagholder_book::Book;
 use bagholder_sqlite::migrate::{self, Schema};
+use bagholder_core::account::{AccountRef, AccountStatus, AccountType};
+use bagholder_core::Broker;
 use common::*;
 
 /// The schema version `n` produces, from migrations 1 to `n`.
@@ -64,9 +66,9 @@ fn the_header_and_the_record_of_migrations_agree() {
 }
 
 #[test]
-fn an_earlier_apps_database_is_not_opened_as_a_book() {
+fn a_file_that_is_not_a_book_is_not_opened_as_one() {
     let dir = tempfile::tempdir().unwrap();
-    let path = dir.path().join("bagholder.db");
+    let path = dir.path().join("other.db");
     rusqlite::Connection::open(&path).unwrap().execute_batch("CREATE TABLE activities (id TEXT); INSERT INTO activities VALUES ('a');").unwrap();
     let before = std::fs::read(&path).unwrap();
     assert!(matches!(Book::open(&path, "test", t0()), Err(bagholder_book::BookError::Migrate(migrate::MigrateError::Foreign { .. }))));
@@ -241,6 +243,12 @@ fn migration_26_keeps_what_every_account_s_statements_answer() {
         drop(conn);
         let (book, done) = Book::open(&path, "test", t0()).unwrap();
         assert_eq!(done.to, MIGRATIONS.len() as u32);
+        // migration 37 forgets every full read, so the next sync reads whole: the
+        // reads noted again, as that sync would
+        for (n, a) in accounts.iter().enumerate() {
+            assert_eq!(book.activity_read_at(*a).unwrap(), None);
+            book.note_activity_read(*a, read_at[&n], true).unwrap();
+        }
         for (n, a) in accounts.iter().enumerate() {
             let mut mine: Vec<&Row> = rows.iter().filter(|r| r.0 == n).collect();
             // the model: by instant, then the order written; a value now replaced at one instant
@@ -298,4 +306,219 @@ fn a_book_from_before_migration_30_has_its_names_refolded_by_the_rule() {
     let names: Vec<(String, Option<String>, Option<String>, String, String)> =
         book.names(id).unwrap().into_iter().map(|n| (n.symbol, n.venue_mic, n.venue_name, n.first_seen.to_string(), n.last_seen.to_string())).collect();
     assert_eq!(names, [("ZQV".to_string(), Some("XTSE".to_string()), Some("TSX".to_string()), "2026-03-01".to_string(), "2026-03-05".to_string())]);
+}
+
+/// What a book holds of the broker's and the person's, before migration 37: one
+/// book per kind of brief 75 §2, built through the book's own writes. `pooled`:
+/// the five broker ids on two accounts, of two and three ids, as the import
+/// built them; else one account each. `imported`: the import's records in every
+/// state beside the broker's, as a book that ran the import holds them.
+struct Seeded {
+    dir: tempfile::TempDir,
+}
+
+fn seeded(pooled: bool, imported: bool) -> Seeded {
+    use bagholder_core::journal::{JournalEntry, JournalSubject};
+    use serde_json::json;
+    let f = Fixture::new();
+    let t = |key: &str| -> AccountRef { AccountRef::new(Broker::named("wealthsimple"), key) };
+    let ty = AccountType::Known { kind: bagholder_core::account::AccountKind::Cash, registration: bagholder_core::account::Registration::Tfsa, managed: false, joint: false };
+    if pooled {
+        f.book.add_account(f.connection, &[t("ws-1"), t("ws-2")], &ty, AccountStatus::Open, Some("Pooled two"), t0()).unwrap();
+        f.book.add_account(f.connection, &[t("ws-3"), t("ws-4"), t("ws-5")], &ty, AccountStatus::Closed, Some("Pooled three"), t0()).unwrap();
+    } else {
+        f.book.add_account(f.connection, &[t("ws-1")], &ty, AccountStatus::Open, Some("Pooled two"), t0()).unwrap();
+        f.book.add_account(f.connection, &[t("ws-2")], &ty, AccountStatus::Open, Some("Pooled two"), t0()).unwrap();
+        for k in ["ws-3", "ws-4", "ws-5"] {
+            f.book.add_account(f.connection, &[t(k)], &ty, AccountStatus::Closed, Some("Pooled three"), t0()).unwrap();
+        }
+    }
+    let broker = Spelled::v(1);
+    let store = |m: &Spelled, key: &str, v: serde_json::Value| f.book.store(m, &f.incoming(key, &v.to_string()), t0()).unwrap().record;
+    let deposit = |a: &str, cash: &str, day: &str| json!({"leg": "cash", "account": a, "kind": "deposit", "cash": cash, "date": day});
+    // the broker's own records, in every account
+    let r1 = store(&broker, "b-1", legs(vec![deposit("ws-1", "1000", "2026-01-02"), buy("ws-1", share("CA0000000001", "ZQA"), "10", "-100", "2026-01-05T15:00:00Z")]));
+    let r2 = store(&broker, "b-2", legs(vec![deposit("ws-2", "500", "2026-01-02"), buy("ws-2", share("CA0000000002", "ZQB"), "5", "-50", "2026-01-06T15:00:00Z")]));
+    store(&broker, "b-3", legs(vec![deposit("ws-3", "300", "2026-01-03")]));
+    let r4 = store(&broker, "b-4", legs(vec![deposit("ws-4", "400", "2026-01-03"), buy("ws-4", share("CA0000000004", "ZQD"), "4", "-40", "2026-01-07T15:00:00Z")]));
+    store(&broker, "b-5", json!({"hold": {"account": "ws-5", "kind": "buy", "currency": "CAD", "amount": "25"}}));
+    let (t1, t2, t4) = (f.book.open_trade(&f.opens(r1), t0()).unwrap(), f.book.open_trade(&f.opens(r2), t0()).unwrap(), f.book.open_trade(&f.opens(r4), t0()).unwrap());
+    let note = |thesis: &str, tags: &[&str]| JournalEntry { thesis: thesis.into(), grade: None, tags: tags.iter().map(|s| s.to_string()).collect() };
+    f.book.set_journal(JournalSubject::Trade(t1), &note("why one", &["a", "b"]), t0()).unwrap();
+    let g = f.book.add_group(&[t2, t4], false, t0()).unwrap();
+    f.book.set_journal(JournalSubject::Group(g), &note("why the two", &["c"]), t0()).unwrap();
+    // a record of the person's own, superseded by the broker's row of it
+    let csv = Spelled { source: "csv", version: 1 };
+    let c1 = store(&csv, "c-1", legs(vec![deposit("ws-2", "70", "2026-01-09")]));
+    let import = Spelled { source: "bagholder-import", version: 1 };
+    if imported {
+        // live import records: one booking a transfer out, one a trade with a note on it
+        store(&import, "i-live", legs(vec![json!({"leg": "cash", "account": "ws-3", "kind": "transfer-out", "cash": "-300", "date": "2026-01-10"})]));
+        let held = store(&import, "i-trade", legs(vec![buy("ws-1", share("CA0000000009", "ZQZ"), "1", "-9", "2026-01-08T15:00:00Z")]));
+        let on = f.book.open_trade(&f.opens(held), t0()).unwrap();
+        f.book.set_journal(JournalSubject::Trade(on), &note("why the import's", &[]), t0()).unwrap();
+        // superseded by the broker's own row, and removed
+        let sup = store(&import, "i-sup", legs(vec![deposit("ws-4", "60", "2026-01-11")]));
+        f.book.store_superseding(&broker, &f.incoming("b-6", &legs(vec![deposit("ws-4", "60", "2026-01-11")]).to_string()), &[sup], "the broker's own row", t0()).unwrap();
+        let rem = store(&import, "i-rem", legs(vec![deposit("ws-5", "1", "2026-01-12")]));
+        f.book.mark_removed(rem, t0()).unwrap();
+        // a link whose from side holds the person's record and an import record
+        let il = store(&import, "i-link", legs(vec![deposit("ws-2", "70", "2026-01-09")]));
+        f.book.store_superseding(&broker, &f.incoming("b-7", &legs(vec![deposit("ws-2", "70", "2026-01-09")]).to_string()), &[c1, il], "the broker's own row", t0()).unwrap();
+    } else {
+        store(&broker, "b-6", legs(vec![deposit("ws-4", "60", "2026-01-11")]));
+        f.book.store_superseding(&broker, &f.incoming("b-7", &legs(vec![deposit("ws-2", "70", "2026-01-09")]).to_string()), &[c1], "the broker's own row", t0()).unwrap();
+    }
+    // a row in every table of the person's own
+    let c = f.book.conn_for_tests();
+    let inst: String = c.query_row("SELECT instrument_id FROM instrument_refs WHERE value = 'CA0000000001'", [], |r| r.get(0)).unwrap();
+    c.execute_batch(&format!(
+        "INSERT INTO brackets (id, broker, broker_account, broker_security, symbol, currency, created_at, phase, updated_at) VALUES ('bk-1', 'wealthsimple', 'ws-1', 'sec-1', 'ZQA', 'CAD', 'x', 'ended', 'x');
+         INSERT INTO bracket_events (bracket_id, seq, at, asker, kind, body) VALUES ('bk-1', 1, 'x', 'person', 'imported', '{{}}');
+         INSERT INTO orders (id, broker, broker_account, broker_security, symbol, currency, side, order_type, quantity, time_in_force, bracket_id, role, request, created_at, state, filled, updated_at)
+            VALUES ('o-1', 'wealthsimple', 'ws-1', 'sec-1', 'ZQA', 'CAD', 'buy', 'limit', '1', 'day', 'bk-1', 'entry', '{{}}', 'x', 'filled', '1', 'x');
+         INSERT INTO order_events (order_id, seq, at, asker, kind, body) VALUES ('o-1', 1, 'x', 'person', 'imported', '{{}}');
+         INSERT INTO notifications (at, kind, key, title) VALUES ('x', 'fill', 'n-1', 'Filled');
+         INSERT INTO told (scope, event, at) VALUES ('news:ZQA@TSX', 'e-1', 'x');
+         INSERT INTO push_subscriptions (endpoint, p256dh, auth, made_at) VALUES ('https://push.example/1', 'k', 'a', 'x');
+         INSERT INTO watched (instrument_id, added_at) VALUES ('{inst}', 'x');
+         INSERT INTO tiles (instrument_id, position) VALUES ('{inst}', 1);"
+    ))
+    .unwrap();
+    Seeded { dir: f.dir }
+}
+
+/// The seeded book as a version-36 file holds it: every row copied into a file
+/// built from migrations 1 to 36, the change log's triggers set aside while the
+/// rows go in, so it holds exactly the rows the book wrote. Then what only a
+/// version-36 book can hold: the import's keys on a trade and a group, every
+/// account's full read, and the marks of the carries and repairs.
+fn as_v36(seeded: &Seeded) -> std::path::PathBuf {
+    let path = seeded.dir.path().join("v36.db");
+    let v36: &'static Schema = Box::leak(Box::new(Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..36] }));
+    let (conn, _) = migrate::open(v36, &path, "test", t0()).unwrap();
+    // the rows go in table by table: each reference holds once all are in
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+    conn.execute("ATTACH DATABASE ?1 AS src", [seeded.dir.path().join("book.db").to_string_lossy()]).unwrap();
+    let triggers: Vec<(String, String)> = conn.prepare("SELECT name, sql FROM main.sqlite_master WHERE type = 'trigger'").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    for (name, _) in &triggers {
+        conn.execute_batch(&format!("DROP TRIGGER main.\"{name}\"")).unwrap();
+    }
+    let tables: Vec<String> = conn.prepare("SELECT name FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations'").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    let columns = |schema: &str, t: &str| -> Vec<String> { conn.prepare(&format!("SELECT name FROM pragma_table_info('{t}', '{schema}')")).unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect() };
+    for t in &tables {
+        let theirs = columns("src", t);
+        let both: Vec<String> = columns("main", t).into_iter().filter(|c| theirs.contains(c)).map(|c| format!("\"{c}\"")).collect();
+        // a row a migration seeded (`successions_due`) is the seeded book's own
+        conn.execute_batch(&format!("DELETE FROM main.\"{t}\"; INSERT INTO main.\"{t}\" ({0}) SELECT {0} FROM src.\"{t}\"", both.join(", "))).unwrap();
+    }
+    for (_, sql) in &triggers {
+        conn.execute_batch(sql).unwrap();
+    }
+    conn.execute_batch(
+        "UPDATE trades SET legacy_key = 'old-' || rowid;
+         UPDATE trade_groups SET legacy_key = 'old-group-' || rowid;
+         INSERT INTO activity_reads (account_id, read_at, complete, at_ns) SELECT id, '2026-01-20T00:00:00Z', 1, 1 FROM accounts;
+         INSERT INTO settings (key, value, source, set_at) VALUES ('carried.notices', '1', 'app', 'x'), ('following.carried', '1', 'app', 'x'),
+            ('carried.told-by-listing', '1', 'app', 'x'), ('repair.carried-notes-reattached', '1', 'app', 'x'), ('statements.said', '1', 'app', 'x');",
+    )
+    .unwrap();
+    drop(conn);
+    path
+}
+
+/// Each broker record's legs as the book holds them: its key and leg, the broker
+/// id of the account the leg is on, and what it moves.
+fn broker_legs(book: &Book) -> std::collections::BTreeSet<(String, String, String, String)> {
+    let c = book.conn_for_tests();
+    c.prepare(
+        "SELECT r.source_key, t.leg, (SELECT GROUP_CONCAT(value) FROM account_refs WHERE account_id = t.account_id), t.kind || ' ' || COALESCE(t.quantity, '') || ' ' || COALESCE(t.cash, '')
+         FROM transactions t JOIN source_records r ON r.id = t.record_id WHERE r.source = 'test-broker'",
+    )
+    .unwrap()
+    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
+    .unwrap()
+    .map(Result::unwrap)
+    .collect()
+}
+
+/// Every row of the person's own tables, as text.
+fn persons_rows(c: &rusqlite::Connection) -> Vec<String> {
+    let mut out = Vec::new();
+    for t in ["journal", "journal_tags", "trade_groups", "trade_group_members", "orders", "order_events", "brackets", "bracket_events", "notifications", "told", "push_subscriptions", "watched", "tiles"] {
+        let cols: Vec<String> = c.prepare(&format!("SELECT name FROM pragma_table_info('{t}') WHERE name <> 'legacy_key'")).unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        let sql = format!("SELECT {} FROM \"{t}\" ORDER BY 1", cols.iter().map(|c| format!("quote(\"{c}\")")).collect::<Vec<_>>().join(" || '|' || "));
+        for row in c.prepare(&sql).unwrap().query_map([], |r| r.get::<_, String>(0)).unwrap() {
+            out.push(format!("{t}: {}", row.unwrap()));
+        }
+    }
+    out
+}
+
+/// Migration 37 (brief 75 §1, §2), over a book of every kind: the import's
+/// records go in every state with all they derived; a trade anchored on a live
+/// one is orphaned with its note kept; the person's rows stay field for field;
+/// the CSV record a link still holds stays superseded; the columns kept for the
+/// import go, and every full read, and the marks; each account the import pooled
+/// is split to one per broker id with every trade's anchor unchanged; and the
+/// broker's records stand exactly as in a book that never ran the import.
+#[test]
+fn migration_37_leaves_only_the_broker_s_and_the_person_s_records_and_a_migrated_book_equals_a_fresh_one() {
+    let fresh = seeded(false, false);
+    let (fresh_book, _) = Book::open_in(fresh.dir.path(), "test", t0()).unwrap();
+    for (pooled, imported) in [(false, false), (false, true), (true, false), (true, true)] {
+        let what = format!("pooled {pooled}, imported {imported}");
+        let s = seeded(pooled, imported);
+        let path = as_v36(&s);
+        let (before, persons) = {
+            let c = bagholder_sqlite::open_db(&path).unwrap();
+            let anchors: Vec<(String, String)> = c.prepare("SELECT id, COALESCE(anchor_record, '') || '/' || COALESCE(anchor_leg, '') FROM trades ORDER BY id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+            (anchors, persons_rows(&c))
+        };
+        // a pooled book cannot be split without the mappings: refused, left at 36
+        if pooled {
+            assert!(Book::open(&path, "test", t0()).is_err(), "{what}");
+            assert_eq!(migrate::version(&bagholder_sqlite::open_db(&path).unwrap()).unwrap(), 36, "{what}");
+        }
+        // opened again later, with them (a snapshot is named for its second)
+        let (book, done) = Book::open_mapped(&path, "test", at("2026-09-23T12:00:01Z"), &[&Spelled::v(1)]).unwrap();
+        assert_eq!((done.from, done.to), (36, MIGRATIONS.len() as u32), "{what}");
+        let c = book.conn_for_tests();
+        let count = |sql: &str| -> i64 { c.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(count("SELECT COUNT(*) FROM source_records WHERE source = 'bagholder-import'"), 0, "{what}");
+        for (t, col) in [("transactions", "record_id"), ("record_revisions", "record_id"), ("record_refs", "record_id"), ("record_problems", "record_id"), ("record_holds", "record_id"), ("link_records", "record_id"), ("adjustments", "record_id")] {
+            assert_eq!(count(&format!("SELECT COUNT(*) FROM {t} WHERE {col} NOT IN (SELECT id FROM source_records)")), 0, "{what}: {t}");
+        }
+        assert_eq!(count("SELECT COUNT(*) FROM pragma_table_info('trades') WHERE name = 'legacy_key'") + count("SELECT COUNT(*) FROM pragma_table_info('trade_groups') WHERE name = 'legacy_key'"), 0, "{what}");
+        assert_eq!(count("SELECT COUNT(*) FROM activity_reads"), 0, "{what}");
+        assert_eq!(count("SELECT COUNT(*) FROM settings WHERE key IN ('carried.notices', 'following.carried', 'carried.told-by-listing', 'repair.carried-notes-reattached', 'statements.said')"), 0, "{what}");
+        // one account per broker id
+        assert_eq!(count("SELECT COUNT(*) FROM (SELECT account_id FROM account_refs GROUP BY account_id HAVING COUNT(*) > 1)"), 0, "{what}");
+        assert_eq!(count("SELECT COUNT(*) FROM accounts"), 5, "{what}");
+        // the broker's records as a fresh book holds them
+        assert_eq!(broker_legs(&book), broker_legs(&fresh_book), "{what}");
+        assert_eq!(persons_rows(c), persons, "{what}: the person's rows, field for field");
+        // every trade on a broker record keeps its anchor; the import's is orphaned with its note
+        let after: std::collections::BTreeMap<String, (String, Option<String>)> = c
+            .prepare("SELECT id, COALESCE(anchor_record, '') || '/' || COALESCE(anchor_leg, ''), orphaned_reason FROM trades")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, (r.get(1)?, r.get(2)?))))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        for (id, anchor) in &before {
+            match after.get(id) {
+                Some((a, None)) => assert_eq!(a, anchor, "{what}: trade {id} keeps its anchor"),
+                Some((a, Some(why))) => {
+                    assert!(imported && a == "/", "{what}: trade {id} orphaned: {why}");
+                    assert_eq!(count(&format!("SELECT COUNT(*) FROM journal WHERE trade_id = '{id}' AND thesis = 'why the import''s'")), 1, "{what}: its note kept");
+                }
+                None => panic!("{what}: trade {id} gone"),
+            }
+        }
+        // the person's record a link still holds stays superseded
+        assert_eq!(c.query_row("SELECT state FROM source_records WHERE source_key = 'c-1'", [], |r| r.get::<_, String>(0)).unwrap(), "superseded", "{what}");
+        assert_eq!(count("SELECT COUNT(*) FROM links l WHERE NOT EXISTS (SELECT 1 FROM link_records f WHERE f.link_id = l.id AND f.side = 'from')"), 0, "{what}");
+        drop(book);
+    }
 }

@@ -16,6 +16,9 @@ Out of scope, on purpose: every screen, figure and word (`SPEC.md` changes only 
 
 ## The old app here
 
+> Historical (2026-10-20): the earlier store this section names is gone; nothing of the earlier app is kept (`docs/decisions.md`, 2026-10-20; `docs/plans/remove-the-earlier-app.md`).
+
+
 - The Rust server opens `bagholder.db` at every start (`server/src/app.rs`), with the old schema's migrations and relabels, and keeps in it the notification history (`notifications`, `told`, meta `notify_settings`, `notify_seen:*`), everything the market readers read (`news`, `filings`, `exposures`, `gauges`, `shorts`, `universes`, `price_history`, `history_fetches`, `price_bars`, `bar_fetches`, and meta `tmx_form:*`, `bars_source:*`, `coinbase_product:*`, `yahoo_miss:*`, `bars_miss:*`, `news_source_fetched:*`, `filings_sources:*`, `filings:held-since`, `update_check`), and the `gen` counters that rebuild the markets context. `docs/architecture.md` §6 places the first group in the book and the second in the market cache; neither has a place for them yet.
 - Three readers still read tables the switch dropped from the old store: `tables::benchmark_days` (`benchmark_prices`, for days-to-cover), `history::read_fx` (`fx_rates`, for a chart in another currency), and `feeds::exposure_loop`'s wait on the `gen` counters of `activities`, `watchlist` and `securities`. Each reads nothing now and fails quietly: entries added to `docs/old-app-mistakes.md` "The cutover (stage 6)" with their tests.
 - Removing the old builds breaks, by the survey of 2026-09-26: `main.rs` `root_dir()` finds the checkout by `ledger.html`, and the updater's git mode and the debug page loading depend on it; `http/assets.rs` serves `/ledger.html`, `/v2` and `/lightweight-charts.js`; `notify.rs` uses the root `favicon.png` as the notification icon (byte-identical to `web/public/favicon.png`); the Rust tests in `main.rs` and `tests_misc.rs` that parse the page or compare its `PROTOCOL`; the CI's Python and Go jobs, `release.yml`'s Python and Go jobs and the Rust package step copying the page; `docker.yml`, where the Python image owns `:latest`; `rust/Dockerfile`'s copy of the page; `docker-compose.yml`; `.dockerignore`, `.gitignore`; `README.md`, `SPEC.md` (§2 Versions, the container, §7), `MOBILE.md`, `DISCLOSURES.md`, `CLAUDE.md`, `tests/README.md`.
@@ -34,6 +37,9 @@ None.
 ## Approach
 
 ### 6a
+
+> Historical (2026-10-20): the earlier store this section names is gone; nothing of the earlier app is kept (`docs/decisions.md`, 2026-10-20; `docs/plans/remove-the-earlier-app.md`).
+
 - **Book migration 015** (`rust/crates/book/migrations/015-notifications.sql`, schema snapshot `v15.sql`): `notifications` and `told` as the old store has them (columns and meaning kept), in the book. Notification settings and seen marks become book `settings` keys (`notify.settings`, `notify.seen.<stream>`), through `Book::setting`/`set_setting`. Carried once from the old store, in one transaction, marked by a book setting; the old tables are not read after.
 - **Market cache migration 004** (`rust/crates/sources/migrations/004-the-earlier-readers.sql`): the old store's market tables, their indexes, the `gen` counters and triggers for them, and a `meta` table for the readers' memory keys and `update_check`. Carried once from the old store with `ATTACH` and `INSERT … SELECT`, marked in the cache; then the old tables are not read.
 - **One connection pool on the market cache** replaces `App.store` for everything above: `feeds.rs`, `market_context.rs`, `notify.rs` (settings and history go to the book), `update.rs`, `search.rs`, `history`'s background reads, the exposure context. `bagholder.db` is opened at start only to carry, then closed.
@@ -84,6 +90,9 @@ Initialled at the gate: the carry run on a copy of the owner's data and the coun
 
 ## Verification
 
+> Historical (2026-10-20): the earlier store this section names is gone; nothing of the earlier app is kept (`docs/decisions.md`, 2026-10-20; `docs/plans/remove-the-earlier-app.md`).
+
+
 **6a** (2026-09-26):
 - Written to `bagholder.db` after the carry: only by Clear data, emptying a cleared kind (`carry::clear_old_store`); the boundary test holds every other server file to not naming it.
 - `RUSTFLAGS="-D warnings" cargo test -q --workspace` green; `cargo clippy --workspace --lib --bins` clean. `web/`: `npm run check` 0 errors, `npx vitest run` 140 passed, `npx vite build` built. `npx playwright test`: 276 passed.
@@ -126,3 +135,6 @@ Initialled at the gate: the carry run on a copy of the owner's data and the coun
 - Found on this machine and fixed: the Rust folder held a `bagholder.db` an earlier Rust build left (five days older, never made into a book), and the first start would have imported it rather than the Python app's live one. The newer is taken and the older set aside (`legacy_import` `a_database_of_its_own_older_than_the_python_app_s_is_set_aside_and_the_python_app_s_taken`); on copies of both, the start took the Python app's (6,156 transactions to 2026-09-25) and kept the other in `snapshots/`.
 
 ## Handoff
+
+> Historical (2026-10-20): the earlier store this section names is gone; nothing of the earlier app is kept (`docs/decisions.md`, 2026-10-20; `docs/plans/remove-the-earlier-app.md`).
+

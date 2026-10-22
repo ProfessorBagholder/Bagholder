@@ -5,7 +5,6 @@ session.json
 *.db
 *.db-wal
 *.db-shm
-bagholder.db
 client_id
 user_agent
 chrome/

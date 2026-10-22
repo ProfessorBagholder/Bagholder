@@ -30,8 +30,6 @@ use crate::engine_inputs;
 
 /// The market cache's file in the data folder.
 pub const CACHE_FILE: &str = "market.db";
-/// The old store's file, imported once into a new book.
-pub const OLD_FILE: &str = "bagholder.db";
 
 fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
@@ -227,7 +225,7 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, held: &Held, at: T
                 }
             }
             for key in &identity.needs_trade {
-                book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, None, at)?;
+                book.open_trade(&Opening { transaction: key.opening.clone(), instrument: key.instrument }, at)?;
                 done += 1;
             }
             // the trades orphaned, in set writes: each still only where it is
@@ -253,10 +251,8 @@ pub(crate) fn settle_trades(book: &Book, engine: &mut Engine, held: &Held, at: T
 
 /// The engine built whole from the book and the cache in `zone` at `now`, in one
 /// snapshot, with everything the change log holds then taken as applied (and
-/// dropped from it); every round trip given its trade, and the notes carried
-/// from the earlier app put back on the round trips an earlier build orphaned
-/// them from (`legacy_import::reattach_carried_notes`, once per book).
-fn built(home: &Path, book: &Book, cache: &MarketCache, zone: &TimeZone, now: Timestamp) -> Result<Built, String> {
+/// dropped from it); every round trip given its trade.
+fn built(book: &Book, cache: &MarketCache, zone: &TimeZone, now: Timestamp) -> Result<Built, String> {
     // the debts' fingerprint read with them, so the first change after the build
     // reads them again only where they moved
     let (mut e, upto, debts_print) = in_snapshot(book, || Ok((build(book, cache, clock(zone, now)?)?, book.changes_upto().map_err(err)?, book.debts_print().map_err(err)?)))?;
@@ -266,10 +262,6 @@ fn built(home: &Path, book: &Book, cache: &MarketCache, zone: &TimeZone, now: Ti
     let movements = std::sync::Mutex::new(crate::csv_import::Movements::build(&e.inputs().ledger));
     let held = Held::new(&applied, &movements);
     settle_trades(book, &mut e, &held, now)?;
-    if crate::legacy_import::reattach_carried_notes(home, book, &e, now)? {
-        catch_up(book, &mut e, &held)?;
-        settle_trades(book, &mut e, &held, now)?;
-    }
     let applied = applied.load(std::sync::atomic::Ordering::SeqCst);
     let movements = movements.into_inner().unwrap_or_else(|e| e.into_inner());
     Ok(Built { engine: e, applied, movements, debts_print })
@@ -362,8 +354,8 @@ fn prepared(book: &Book, cache: &MarketCache, at: Timestamp) -> Result<(), Strin
 }
 
 /// Why the figure path could not be opened: the market cache, said under the
-/// cache's own name as every other borrow of it is, or the book (the book itself,
-/// or the earlier database carried into it), said as the book's.
+/// cache's own name as every other borrow of it is, or the book, said as the
+/// book's.
 #[derive(Clone, Debug, PartialEq)]
 pub enum OpenFailure {
     Cache(String),
@@ -385,19 +377,15 @@ impl From<OpenFailure> for String {
 }
 
 impl Figures {
-    /// Open the figure path in `home` at `at`: the old store imported into a new
-    /// book the first time (its journal, groups and notes carried; the first pull
-    /// then supersedes its rows), both files brought to this build's schema, and
-    /// the engine built when the book holds a zone. A book or cache this build
+    /// Open the figure path in `home` at `at`: both files brought to this build's
+    /// schema, and the engine built when the book holds a zone. A book or cache this build
     /// cannot open is said by what failed, and the open is tried again later.
     pub fn open(home: &Path, at: Timestamp) -> Result<Figures, OpenFailure> {
-        let book_path = home.join(bagholder_book::BOOK_FILE);
-        let old = home.join(OLD_FILE);
-        if !book_path.exists() && old.exists() {
-            crate::legacy_import::import(&old, home, at).map_err(|e| OpenFailure::Book(format!("The earlier database could not be carried into the book: {e}")))?;
-        }
         let f = Figures { home: home.to_path_buf(), engine: RwLock::new(None), wake: std::sync::atomic::AtomicBool::new(false), version: std::sync::atomic::AtomicU64::new(1), log: std::sync::Mutex::new(Default::default()), names: RwLock::new(None), heard: std::sync::OnceLock::new(), book_heard: std::sync::OnceLock::new(), failures_conn: std::sync::Mutex::new(None), applied: std::sync::atomic::AtomicI64::new(0), debts_print: std::sync::Mutex::new(None), movements: Default::default(), rederived: std::sync::atomic::AtomicBool::new(false) };
-        let (book, _) = Book::open_in(home, crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Book(format!("The book could not be opened: {e}")))?;
+        // a migration's code step reads records with every source's mapping
+        let mut read_with: Vec<&dyn bagholder_book::mapping::Mapping> = mappings().to_vec();
+        read_with.push(&bagholder_wealthsimple::statement::StatementMapping);
+        let (book, _) = Book::open_in_mapped(home, crate::app::APP_VERSION, at, &read_with).map_err(|e| OpenFailure::Book(format!("The book could not be opened: {e}")))?;
         let (cache, _) = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, at).map_err(|e| OpenFailure::Cache(format!("The market cache could not be opened: {e}")))?;
         // the records derived again and the prices kept under a guessed venue forgotten,
         // both before anything is built: either failing is said on the page and tried
@@ -411,7 +399,7 @@ impl Figures {
             return Ok(f);
         }
         if let Some(z) = book.zone().map_err(|e| OpenFailure::Book(format!("The book could not be read: {e}")))? {
-            match built(home, &book, &cache, &z.zone, at) {
+            match built(&book, &cache, &z.zone, at) {
                 Ok(b) => {
                     let mut engine = f.engine.write().unwrap_or_else(|e| e.into_inner());
                     f.install(&mut engine, &book, b);
@@ -437,7 +425,7 @@ impl Figures {
         let Some(z) = book.zone().map_err(err)? else { return Ok(()) };
         let mut engine = self.engine.write().unwrap_or_else(|e| e.into_inner());
         if engine.is_none() {
-            let b = built(&self.home, &book, &self.cache()?, &z.zone, now)?;
+            let b = built(&book, &self.cache()?, &z.zone, now)?;
             self.install(&mut engine, &book, b);
             drop(engine);
             self.logged(None);
@@ -453,7 +441,7 @@ impl Figures {
         let book = self.book()?;
         let Some(z) = book.zone().map_err(err)? else { return Ok(()) };
         let mut engine = self.engine.write().unwrap_or_else(|e| e.into_inner());
-        match self.cache().and_then(|c| built(&self.home, &book, &c, &z.zone, now)) {
+        match self.cache().and_then(|c| built(&book, &c, &z.zone, now)) {
             Ok(b) => self.install(&mut engine, &book, b),
             Err(e) => {
                 // what the engine held is no longer the record: the next zone a
@@ -672,7 +660,7 @@ impl Figures {
         let mut engine = self.engine.write().unwrap_or_else(|e| e.into_inner());
         match engine.as_mut() {
             None => {
-                let b = built(&self.home, &book, &self.cache()?, &zone, now)?;
+                let b = built(&book, &self.cache()?, &zone, now)?;
                 self.install(&mut engine, &book, b);
                 drop(engine);
                 self.logged(None);
@@ -883,8 +871,8 @@ pub enum Since {
 
 
 /// Every source's mapping, as the book stores records under it.
-pub fn mappings() -> [&'static dyn bagholder_book::mapping::Mapping; 5] {
-    [&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::import::mapping::ImportMapping, &bagholder_book::person::PersonMapping, &bagholder_broker::csv::CsvMapping, &bagholder_book::fills::FillMapping]
+pub fn mappings() -> [&'static dyn bagholder_book::mapping::Mapping; 4] {
+    [&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::person::PersonMapping, &bagholder_broker::csv::CsvMapping, &bagholder_book::fills::FillMapping]
 }
 
 /// Derive again every record a newer version of its mapping reads differently: a
@@ -1681,8 +1669,8 @@ mod tests {
         same_as_fresh(&f, later);
     }
 
-    /// A record replaced by another (an imported row by the broker's own, as the
-    /// first pull after an import does) moves the trades on it to the new row in
+    /// A record replaced by another (a provisional fill by the broker's own row)
+    /// moves the trades on it to the new row in
     /// the same write. The engine held its trades as they were before: settling
     /// the round trips against those would call the moved trade's old opening gone
     /// and orphan it over the book's own anchor, cutting its journal loose (the
@@ -1758,7 +1746,7 @@ mod tests {
         let hit = |text: &str| text.lines().filter(|l| !l.trim_start().starts_with("//")).any(|l| forbidden.iter().any(|f| l.contains(f)));
         assert!(hit("let z = TimeZone::system();"), "the scan finds what it looks for");
         let crates = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..");
-        let mut files: Vec<PathBuf> = ["server/src/figures.rs", "server/src/due.rs", "server/src/engine_inputs.rs", "server/src/read_sources.rs", "server/src/compare.rs"].iter().map(|f| crates.join(f)).collect();
+        let mut files: Vec<PathBuf> = ["server/src/figures.rs", "server/src/due.rs", "server/src/engine_inputs.rs", "server/src/read_sources.rs"].iter().map(|f| crates.join(f)).collect();
         let mut dirs: Vec<PathBuf> = ["engine/src", "sources/src", "book/src", "broker/src", "wealthsimple/src"].iter().map(|d| crates.join(d)).collect();
         while let Some(d) = dirs.pop() {
             for e in std::fs::read_dir(&d).unwrap().flatten() {

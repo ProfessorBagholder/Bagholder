@@ -560,10 +560,9 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_made_up_book_is_pulled_with_its_journal_and_facts_and_no_earlier_store() {
+    fn the_made_up_book_is_pulled_with_its_journal_and_facts() {
         let home = tempfile::tempdir().unwrap();
         write(home.path()).unwrap();
-        assert!(!home.path().join(crate::figures::OLD_FILE).exists(), "nothing writes the earlier app's database");
         let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, SYNCED.parse().unwrap()).unwrap();
         assert_eq!(book.accounts().unwrap().len(), 4);
         assert_eq!(book.journal_entries().unwrap().len(), build().notes.len());

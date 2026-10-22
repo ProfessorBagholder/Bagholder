@@ -243,11 +243,13 @@ name = "bagholder-market"
 version = "2.9.0"
 dependencies = [
  "bagholder-core",
+ "bagholder-diff",
+ "bagholder-diff-derive",
  "bagholder-market",
  "bagholder-model",
  "bagholder-net",
  "bagholder-sources",
- "bagholder-store",
+ "bagholder-sqlite",
  "flate2",
  "openssl",
  "pdf-extract",
@@ -256,6 +258,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "ts-rs",
  "unicode-normalization",
 ]
 
@@ -300,7 +303,6 @@ dependencies = [
  "bagholder-net",
  "bagholder-sources",
  "bagholder-sqlite",
- "bagholder-store",
  "bagholder-wealthsimple",
  "bagholder-ws",
  "futures-util",
@@ -343,25 +345,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "bagholder-store"
-version = "2.9.0"
-dependencies = [
- "bagholder-core",
- "bagholder-diff",
- "bagholder-diff-derive",
- "bagholder-model",
- "bagholder-sources",
- "bagholder-sqlite",
- "indexmap",
- "regex",
- "rusqlite",
- "serde",
- "serde_json",
- "tempfile",
- "ts-rs",
-]
-
-[[package]]
 name = "bagholder-wealthsimple"
 version = "2.9.0"
 dependencies = [
@@ -380,7 +363,7 @@ version = "2.9.0"
 dependencies = [
  "bagholder-model",
  "bagholder-net",
- "bagholder-store",
+ "bagholder-sqlite",
  "bagholder-ws",
  "serde",
  "serde_json",

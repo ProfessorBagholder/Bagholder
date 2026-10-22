@@ -2,7 +2,8 @@
 //! manager would only start it again into the same failure, with no page and no
 //! update button. For a failure planted in each such step, the built server is
 //! started on a home of its own: it listens, `/` serves the page, and the header
-//! names the failure.
+//! names the failure. And a start opens no store but the book and the market
+//! cache (brief 75, test 9).
 
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpListener, TcpStream};
@@ -33,12 +34,19 @@ impl Drop for Server {
 /// The server started on `home`, once it says it listens (the line it prints when
 /// bound), with `HOME` its own so no other app's data on this machine is read.
 fn started(home: &Path, user_home: &Path) -> Server {
+    started_by(Command::new(env!("CARGO_BIN_EXE_bagholder")), home, user_home, &[])
+}
+
+/// The server started by `command` (the server itself, or a tracer running it),
+/// with `extra` variables beside the test's own.
+fn started_by(mut command: Command, home: &Path, user_home: &Path, extra: &[(&str, String)]) -> Server {
     let root = user_home.join("root");
     std::fs::create_dir_all(root.join("web/dist")).unwrap();
     std::fs::write(root.join("web/dist/index.html"), PAGE).unwrap();
     let port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_bagholder"))
+    let mut child = command
         .env_clear()
+        .envs(extra.iter().map(|(k, v)| (*k, v.as_str())))
         .env("PATH", std::env::var_os("PATH").unwrap_or_default())
         .env("HOME", user_home)
         .env("USERPROFILE", user_home)
@@ -149,30 +157,60 @@ fn a_market_cache_this_build_cannot_open_is_said_and_the_server_stays_up() {
     assert_eq!((&h["dataVersion"], &h["coreVersion"]), (&serde_json::Value::Null, &serde_json::Value::Null));
 }
 
+/// The stores a start opens: every file the server and what it runs open, by
+/// the system calls that open one, read from the trace `strace` keeps of the
+/// built server. A store is a file SQLite keeps (a database, its write-ahead log,
+/// its shared memory, its journal); each must be the book's or the market cache's.
+/// Any other SQLite file beside them, in the data folder and in the user's
+/// `.bagholder` folder, is never opened and is left byte for byte as it was.
+#[cfg(target_os = "linux")]
 #[test]
-fn an_earlier_database_that_cannot_be_carried_into_a_new_book_is_said_and_the_server_stays_up() {
+fn a_start_opens_only_the_book_and_the_market_cache() {
     let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    std::fs::write(home.path().join("bagholder.db"), NOT_A_DATABASE).unwrap();
-    up_saying(&started(home.path(), user.path()), "The earlier database could not be carried into the book: file is not a database.");
-    // no book was made beside it, so the next start tries again
-    assert!(!home.path().join("book.db").exists());
-}
-
-#[test]
-fn an_earlier_store_that_cannot_be_carried_beside_a_book_is_said_and_the_server_stays_up() {
-    let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    // a book of its own first, from an ordinary start
-    drop(started(home.path(), user.path()));
-    std::fs::write(home.path().join("bagholder.db"), NOT_A_DATABASE).unwrap();
-    up_saying(&started(home.path(), user.path()), "The earlier store could not be opened: file is not a database.");
-}
-
-#[test]
-fn the_python_apps_database_that_cannot_be_carried_is_said_and_the_server_stays_up() {
-    let (home, user) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    std::fs::create_dir_all(user.path().join(".bagholder")).unwrap();
-    std::fs::write(user.path().join(".bagholder").join("bagholder.db"), NOT_A_DATABASE).unwrap();
-    up_saying(&started(home.path(), user.path()), "The earlier database could not be carried into the book: file is not a database.");
+    let unrelated = ["unrelated.db", "store.db", "other.sqlite"];
+    let mut bytes = Vec::new();
+    for dir in [home.path().to_path_buf(), user.path().join(".bagholder")] {
+        std::fs::create_dir_all(&dir).unwrap();
+        for name in unrelated {
+            rusqlite::Connection::open(dir.join(name)).unwrap().execute_batch("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT); INSERT INTO meta VALUES ('k', 'v');").unwrap();
+            bytes.push((dir.join(name), std::fs::read(dir.join(name)).unwrap()));
+        }
+    }
+    let trace = user.path().join("opened.trace");
+    // the server stops when this ends (`BAGHOLDER_EXIT_WITH`), and the tracer with it
+    let mut work = Command::new("sleep").arg("600").spawn().expect("sleep runs");
+    let mut tracer = Command::new("strace");
+    tracer.args(["-f", "-qq", "-e", "trace=open,openat,openat2,creat", "-o"]).arg(&trace).arg(env!("CARGO_BIN_EXE_bagholder"));
+    let mut server = started_by(tracer, home.path(), user.path(), &[("BAGHOLDER_EXIT_WITH", work.id().to_string())]);
+    // a page opening: the header on its stream, and a view of the book
+    streamed(&server);
+    get(server.port, "/api/view?key=book&params=%7B%7D");
+    work.kill().unwrap();
+    work.wait().unwrap();
+    let done = server.child.wait().unwrap();
+    assert!(done.success(), "the server and its tracer stop with the work they were started for: {done}");
+    let text = std::fs::read_to_string(&trace).unwrap();
+    // each opened path, as the call names it: the first quoted argument
+    let opened: std::collections::BTreeSet<String> = text.lines().filter(|l| l.contains("open") || l.contains("creat(")).filter_map(|l| l.split('"').nth(1)).map(str::to_string).collect();
+    assert!(opened.iter().any(|p| p.ends_with("/book.db")), "the trace holds the start's opens: {opened:?}");
+    let store = |p: &str| [".db", ".sqlite", "-wal", "-shm", "-journal"].iter().any(|e| p.ends_with(e));
+    let book = home.path().join("book.db").to_string_lossy().into_owned();
+    let cache = home.path().join("market.db").to_string_lossy().into_owned();
+    let allowed: Vec<String> = [&book, &cache].iter().flat_map(|f| ["", "-wal", "-shm", "-journal"].map(|s| format!("{f}{s}"))).collect();
+    let others: Vec<&String> = opened.iter().filter(|p| store(p) && !allowed.contains(p)).collect();
+    assert!(others.is_empty(), "a start opened a store that is neither the book nor the market cache: {others:?}");
+    for (path, was) in &bytes {
+        assert_eq!(&std::fs::read(path).unwrap(), was, "{} is byte for byte as it was", path.display());
+    }
+    // the start made only the book, the cache, their journals and snapshots
+    let made: Vec<String> = std::fs::read_dir(home.path()).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().into_owned()).filter(|n| store(n) && !unrelated.contains(&n.as_str())).collect();
+    assert!(made.iter().all(|n| n.starts_with("book.db") || n.starts_with("market.db")), "{made:?}");
+    for dir in [home.path().to_path_buf(), user.path().join(".bagholder")] {
+        for name in unrelated {
+            assert!(!opened.iter().any(|p| p.ends_with(&format!("/{name}"))), "{name} in {} was opened", dir.display());
+            assert!(!dir.join(format!("{name}-shm")).exists() && !dir.join(format!("{name}-journal")).exists(), "{name} was read by SQLite");
+        }
+    }
 }
 
 /// Whether the figure path is open: `/api/view` refuses with "the figures are not

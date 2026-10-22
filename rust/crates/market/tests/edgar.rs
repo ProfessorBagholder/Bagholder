@@ -3,7 +3,7 @@
 use bagholder_core::ListingKey;
 use bagholder_market::disclosures::{self as d, Fetched, Gathered, Regulators, SourceError};
 use bagholder_market::edgar;
-use bagholder_store::feeds::{FiledDocument, Filer, Regulator};
+use bagholder_market::stored::feeds::{FiledDocument, Filer, Regulator};
 use serde_json::{json, Value};
 use std::cell::RefCell;
 
@@ -219,7 +219,7 @@ impl Regulators for Regs {
             Regulator::Sec => self.sec.clone(),
         }
     }
-    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_store::feeds::Interlisted>)> {
+    fn interlisted(&self) -> Fetched<(String, Vec<bagholder_market::stored::feeds::Interlisted>)> {
         Ok(("2026-10-01".into(), vec![]))
     }
 }

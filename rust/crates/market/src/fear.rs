@@ -11,7 +11,7 @@ use serde_json::Value;
 
 use crate::http::{get_text, UA};
 use bagholder_model::lenient;
-use bagholder_store::feeds::{Gauge, GaugePart, GaugePoint, GaugeReading};
+use crate::stored::feeds::{Gauge, GaugePart, GaugePoint, GaugeReading};
 
 pub const STOCK_URL: &str = "https://production.dataviz.cnn.io/index/fearandgreed/graphdata";
 pub const CRYPTO_URL: &str = "https://api.alternative.me/fng/?limit={}";

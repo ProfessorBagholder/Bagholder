@@ -24,7 +24,7 @@ pub use bagholder_model::exposure::{is_fund, issuer_of, norm_sector};
 use bagholder_model::lenient;
 use bagholder_model::textrules::trim_space;
 use bagholder_model::value::FSum;
-use bagholder_store::feeds::{ExposureRecord, Weights};
+use crate::stored::feeds::{ExposureRecord, Weights};
 
 pub const UA: &str = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0 Safari/537.36";
 /// Between two requests to the same issuer.
@@ -39,7 +39,7 @@ pub use bagholder_model::venues::{FUND_KEY, SHARE_KEY};
 /// from, for the name search that opens its own reader.
 pub struct Ctx<'a> {
     pub conn: &'a Connection,
-    pub pool: std::sync::Arc<bagholder_store::pool::Pool>,
+    pub pool: std::sync::Arc<bagholder_sqlite::pool::Pool>,
     pub today: String,
 }
 
@@ -1148,10 +1148,10 @@ fn stored(e: rusqlite::Error) -> String {
 /// The record kept under `key` while it is fresh; a store that cannot be read
 /// is the failure, never a record to fetch again.
 fn cache_get(ctx: &Ctx, key: &str) -> Result<Option<ExposureRecord>, String> {
-    Ok(bagholder_store::feeds::exposure_record(ctx.conn, key).map_err(stored)?.and_then(fresh))
+    Ok(crate::stored::feeds::exposure_record(ctx.conn, key).map_err(stored)?.and_then(fresh))
 }
 
-fn fresh(rec: bagholder_store::feeds::StoredExposure) -> Option<ExposureRecord> {
+fn fresh(rec: crate::stored::feeds::StoredExposure) -> Option<ExposureRecord> {
     let fetched = rec.fetched_at.clone();
     let (d, _) = fetched.split_once('T')?;
     if fetched.len() != 20 || !fetched.ends_with('Z') {
@@ -1172,7 +1172,7 @@ fn fresh(rec: bagholder_store::feeds::StoredExposure) -> Option<ExposureRecord> 
 }
 
 fn store_exposure(ctx: &Ctx, key: &str, rec: &ExposureRecord) -> Result<(), String> {
-    bagholder_store::feeds::replace_exposure(ctx.conn, key, rec, &crate::now_stamp()).map_err(stored)
+    crate::stored::feeds::replace_exposure(ctx.conn, key, rec, &crate::now_stamp()).map_err(stored)
 }
 
 /// A classified share as an exposure record, cached by its listing

@@ -17,8 +17,8 @@ use bagholder_market::{exposure, fear, history, news, shorts};
 use bagholder_model::instruments;
 use bagholder_model::venues::tmx_symbol;
 use bagholder_model::securities::Security;
-use bagholder_store::bars::ChartBars;
-use bagholder_store::feeds::{self as sf, NewsItem, StoredGauge, StoredShorts};
+use bagholder_market::stored::bars::ChartBars;
+use bagholder_market::stored::feeds::{self as sf, NewsItem, StoredGauge, StoredShorts};
 
 
 use crate::app::{log, now_iso, now_unix, parse_instant, spawn, App};
@@ -868,7 +868,7 @@ pub struct ShortReport {
 pub struct ShortsView {
     pub symbol: String,
     pub exchange: String,
-    pub market: bagholder_store::feeds::ShortMarket,
+    pub market: bagholder_market::stored::feeds::ShortMarket,
     pub name: String,
     pub as_of: String,
     /// The position sold short.
@@ -884,7 +884,7 @@ pub struct ShortsView {
     pub average_volume: Option<crate::wire::Dec>,
     pub days_to_cover: Option<f64>,
     pub volume_of: String,
-    pub volume_span: Option<bagholder_store::feeds::VolumeSpan>,
+    pub volume_span: Option<bagholder_market::stored::feeds::VolumeSpan>,
     pub short_volume: Option<crate::wire::Dec>,
     pub total_volume: Option<crate::wire::Dec>,
     /// The shares traded that were not sold short.
@@ -1938,8 +1938,8 @@ mod tests {
                     HistoryAnswer::Ok(h) => panic!("{} {tf} answered with {} bars after its miss", q.symbol, h.tf),
                 }
                 let rung = app.events.stamp();
-                let bar = bagholder_store::bars::TimeBar { time: 1_700_000_000, px: bagholder_store::bars::Ohlcv { open: Some(1.0), high: Some(1.0), low: Some(1.0), close: 1.0, volume: None } };
-                bagholder_store::market::upsert_price_bars(&c, &key, tf, &[bar], "test").unwrap();
+                let bar = bagholder_market::stored::bars::TimeBar { time: 1_700_000_000, px: bagholder_market::stored::bars::Ohlcv { open: Some(1.0), high: Some(1.0), low: Some(1.0), close: 1.0, volume: None } };
+                bagholder_market::stored::charts::upsert_price_bars(&c, &key, tf, &[bar], "test").unwrap();
                 assert_ne!(app.events.stamp(), rung, "bars stored reach the bus");
                 let stored = docs();
                 assert_eq!(bagholder_model::patch::typed(&missed[i], &stored[i]), vec![json!(["set", ["available"], before[i].available])], "{} {tf}: bars stored offer it again", q.symbol);
@@ -2014,7 +2014,7 @@ mod tests {
         let rates = &all["USD"];
         assert_eq!((rates.get("2025-11-17").copied(), rates.get("2025-11-18").copied()), (Some(1.4012), Some(1.405)));
         assert_eq!(all["EUR"].get("2025-11-18").copied(), Some(1.62));
-        let bar = |date: &str| bagholder_store::bars::DayBar { date: date.into(), px: bagholder_store::bars::Ohlcv { open: None, high: None, low: None, close: 10.0, volume: None } };
+        let bar = |date: &str| bagholder_market::stored::bars::DayBar { date: date.into(), px: bagholder_market::stored::bars::Ohlcv { open: None, high: None, low: None, close: 10.0, volume: None } };
         let got = history::in_position_currency(&bank_rates(&app), &[bar("2025-11-18"), bar("2025-11-19")], "USD", "CAD").unwrap();
         assert_eq!(got.iter().map(|b| (b.date.as_str(), (b.px.close * 1000.0).round() / 1000.0)).collect::<Vec<_>>(), vec![("2025-11-18", 14.05), ("2025-11-19", 14.05)], "each day at its rate, or the last before it");
     }
@@ -2178,7 +2178,7 @@ mod tests {
     /// fractions; a count that is not a number fails the whole reading.
     #[test]
     fn test_short_selling_is_sent_in_exact_counts_with_its_ratios() {
-        use bagholder_store::feeds::{ShortMarket, ShortPoint, Shorts};
+        use bagholder_market::stored::feeds::{ShortMarket, ShortPoint, Shorts};
         let stored = |shares: f64| StoredShorts {
             shorts: Shorts {
                 symbol: "QNC".into(), exchange: "TSX-V".into(), market: ShortMarket::Ca, name: "Quantum eMotion".into(), as_of: "2026-09-15".into(),

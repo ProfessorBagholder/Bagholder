@@ -39,8 +39,8 @@ fn db() -> Db {
 
 /// A listing's news, as a read stores it.
 fn news(conn: &Connection, symbol: &str, headline: &str) {
-    let item = NewsItem { id: format!("tmx:{headline}"), headline: headline.into(), source: "Business Wire".into(), url: String::new(), published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: bagholder_store::feeds::NewsKind::Release, via: Feed::Tmx };
-    bagholder_store::feeds::replace_news(conn, &bagholder_core::ListingKey::on(symbol, "TSX").unwrap(), "TSX", &[item], &app::now_iso()).unwrap();
+    let item = NewsItem { id: format!("tmx:{headline}"), headline: headline.into(), source: "Business Wire".into(), url: String::new(), published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: bagholder_market::stored::feeds::NewsKind::Release, via: Feed::Tmx };
+    bagholder_market::stored::feeds::replace_news(conn, &bagholder_core::ListingKey::on(symbol, "TSX").unwrap(), "TSX", &[item], &app::now_iso()).unwrap();
 }
 
 // ---------------------------------------------------------------------------
@@ -126,7 +126,7 @@ fn set_checked_at(secs_ago: f64) {
     let c = app_ref().cache().unwrap();
     let mut rec = update::update_status(&app()).unwrap();
     rec.checked_at = app::stamp_of((app::now_unix() - secs_ago) as i64);
-    bagholder_store::tables::set_meta(&c, "update_check", &serde_json::to_string(&rec).unwrap()).unwrap();
+    bagholder_market::stored::meta::set_meta(&c, "update_check", &serde_json::to_string(&rec).unwrap()).unwrap();
 }
 
 #[test]
@@ -186,18 +186,18 @@ fn test_a_daily_chart_is_answered_as_stored_while_a_due_read_runs_in_the_backgro
     let (today, now, _) = bagholder_market::clock_now();
     let from = bagholder_model::dates::shift_date(&today, -40);
     let day = bagholder_model::dates::shift_date(&today, -30);
-    let px = bagholder_store::bars::Ohlcv { open: Some(10.0), high: Some(10.5), low: Some(9.5), close: 10.2, volume: Some(1000.0) };
+    let px = bagholder_market::stored::bars::Ohlcv { open: Some(10.0), high: Some(10.5), low: Some(9.5), close: 10.2, volume: Some(1000.0) };
     let dlyq = bagholder_core::ListingKey::on("DLYQ", "TSX").unwrap();
-    bagholder_store::market::upsert_price_history(&conn, &dlyq, &[bagholder_store::bars::DayBar { date: day.clone(), px }], "test").unwrap();
+    bagholder_market::stored::charts::upsert_price_history(&conn, &dlyq, &[bagholder_market::stored::bars::DayBar { date: day.clone(), px }], "test").unwrap();
     // read from the span's start, but long ago: the copy is stale and the span reaches today
-    bagholder_store::market::mark_history_fetched(&conn, &dlyq, &from, "2020-01-02T00:00:00Z").unwrap();
+    bagholder_market::stored::charts::mark_history_fetched(&conn, &dlyq, &from, "2020-01-02T00:00:00Z").unwrap();
     let q = crate::feeds::HistoryQuery::parse(&format!("symbol=DLYQ&exchange=TSX&currency=CAD&kind=Shares&from={from}&to={today}&tf=1d"));
     let inst = bagholder_market::history::chart_instrument(&q.read().0).keyed().unwrap();
     assert!(bagholder_market::history::daily_due(&conn, &inst, &from, &today, &today, now).unwrap(), "the stored copy is due a read");
 
     let crate::feeds::HistoryAnswer::Ok(h) = crate::feeds::history_payload(&app, &q) else { panic!("a known timeframe is answered") };
     let days: Vec<String> = match &h.bars {
-        bagholder_store::bars::ChartBars::Days(b) => b.iter().map(|b| b.date.clone()).collect(),
+        bagholder_market::stored::bars::ChartBars::Days(b) => b.iter().map(|b| b.date.clone()).collect(),
         _ => panic!("a daily chart answers days"),
     };
     assert_eq!(days, vec![day], "the stored bars are answered, not held back for the read");
@@ -279,7 +279,7 @@ fn test_the_update_check_asks_with_its_etag_and_an_unchanged_release_is_kept() {
     let mut kept: serde_json::Value = serde_json::to_value(&again).unwrap();
     kept["latest"] = json!(format!("v{}", app::APP_VERSION));
     kept["updateAvailable"] = json!(true);
-    bagholder_store::tables::set_meta(&conn, "update_check", &kept.to_string()).unwrap();
+    bagholder_market::stored::meta::set_meta(&conn, "update_check", &kept.to_string()).unwrap();
     assert!(!update::check_for_update(&app()).update_available, "the kept release is this build's own: not offered");
 }
 
@@ -291,14 +291,14 @@ fn test_a_record_kept_by_an_earlier_build_offers_nothing_this_build_runs() {
     let _fakes = UpdateFakes::new(None);
     let conn = app_ref().cache().unwrap();
     let kept = json!({"ok": true, "updateAvailable": true, "latest": format!("v{}", app::APP_VERSION), "assets": {"archive": "a", "sha": "s"}});
-    bagholder_store::tables::set_meta(&conn, "update_check", &kept.to_string()).unwrap();
+    bagholder_market::stored::meta::set_meta(&conn, "update_check", &kept.to_string()).unwrap();
     assert!(!update::update_status(&app()).unwrap().update_available);
     let st = crate::status::status(&app());
     assert_eq!((st.update_available, st.can_update), (false, false), "no Update button for the running version");
     // a newer one kept is still offered
     let mine = update::parse_version(app::APP_VERSION).unwrap();
     let newer = json!({"ok": true, "updateAvailable": true, "latest": format!("v{}.{}.{}", mine.0, mine.1, mine.2 + 1), "assets": {"archive": "a", "sha": "s"}});
-    bagholder_store::tables::set_meta(&conn, "update_check", &newer.to_string()).unwrap();
+    bagholder_market::stored::meta::set_meta(&conn, "update_check", &newer.to_string()).unwrap();
     assert!(update::update_status(&app()).unwrap().update_available);
 }
 
@@ -359,7 +359,7 @@ fn test_update_button_refuses_during_a_sync() {
     let _g = guard();
     let _fakes = UpdateFakes::new(None);
     let conn = app_ref().cache().unwrap();
-    bagholder_store::tables::set_meta(&conn, "update_check", &json!({"updateAvailable": true, "latest": "v9.9.9", "assets": {"archive": "z", "sha": "s"}}).to_string()).unwrap();
+    bagholder_market::stored::meta::set_meta(&conn, "update_check", &json!({"updateAvailable": true, "latest": "v9.9.9", "assets": {"archive": "z", "sha": "s"}}).to_string()).unwrap();
     {
         let mut st = app_ref().state.lock().unwrap();
         st.syncing = true;
@@ -368,7 +368,7 @@ fn test_update_button_refuses_during_a_sync() {
     let during = update::start_update(&app());
     app().state.lock().unwrap().syncing = false;
     assert_eq!(during.ok, false);
-    bagholder_store::tables::set_meta(&conn, "update_check", &json!({"updateAvailable": false}).to_string()).unwrap();
+    bagholder_market::stored::meta::set_meta(&conn, "update_check", &json!({"updateAvailable": false}).to_string()).unwrap();
     assert_eq!(update::start_update(&app()).ok, false, "nothing to install");
 }
 
@@ -377,7 +377,7 @@ fn test_update_button_refuses_during_a_sync() {
 // ---------------------------------------------------------------------------
 
 use bagholder_market::news::{self, Ask, Clock, Net, NetError, Readers, WireAnswer};
-use bagholder_store::feeds::{Feed, NewsItem};
+use bagholder_market::stored::feeds::{Feed, NewsItem};
 
 #[test]
 fn test_a_listing_is_read_under_its_own_venues_form_and_never_placed_by_its_ticker() {
@@ -414,7 +414,7 @@ fn test_a_searched_ticker_is_read_from_every_source_under_the_name_tmx_gives() {
     let now = bagholder_market::clock_now().1 as i64;
     // every source read a moment ago: only a forced read asks them again
     for k in news::EXTRA_SOURCES {
-        bagholder_store::tables::set_meta(&c, &format!("news_source_fetched:{}:SXHI@XTSE", k.as_str()), &Clock::at(now).stamp()).unwrap();
+        bagholder_market::stored::meta::set_meta(&c, &format!("news_source_fetched:{}:SXHI@XTSE", k.as_str()), &Clock::at(now).stamp()).unwrap();
     }
     let read = std::sync::Mutex::new((None::<(String, String)>, Vec::<String>::new()));
     let wire = |s: &str, e: &str, _: &Clock| {
@@ -711,7 +711,7 @@ fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failur
 /// there; every other line the app says goes to its log (`app::log`). Command-line
 /// tools (`src/bin`, and the server's own subcommands) print their output, which is
 /// what they are for.
-const TERMINAL: [(&str, usize, &str); 11] = [
+const TERMINAL: [(&str, usize, &str); 9] = [
     ("server/src/app.rs", 1, "`say`: where to open the app, and whether orders are live"),
     ("server/src/logfile.rs", 3, "the log itself cannot be written or was started twice: the terminal is all that is left"),
     ("server/src/main.rs", 6, "the browser could not be opened (open the address yourself), no port could be bound, `--version`; `mcp` with no data folder to read; a command started for work that has already ended (`BAGHOLDER_EXIT_WITH`), before any log is open; a first word that is no command this build runs"),
@@ -719,8 +719,6 @@ const TERMINAL: [(&str, usize, &str); 11] = [
     ("server/src/read_sources.rs", 8, "the `read-sources` and `health` subcommands' own output"),
     ("server/src/outside_debts_check.rs", 3, "a command the person runs once: its usage, its counts, and why it failed"),
     ("server/src/pull_broker.rs", 4, "the `pull` subcommand's own output"),
-    ("server/src/legacy_import.rs", 3, "the `import-book` subcommand's own output"),
-    ("server/src/compare.rs", 6, "the `compare` subcommand's own output"),
     ("server/src/demo.rs", 3, "the `demo` subcommand's own output"),
     ("server/src/capacity.rs", 3, "the `capacity` subcommand's own output: the table row by row as it is measured, then the verdict"),
 ];
@@ -839,13 +837,13 @@ fn test_the_capacity_budget_is_the_one_the_architecture_states() {
         format!("| An added trade, to its figures on the stream | {} s |", TO_FIGURES_MS / 1000),
         format!("| A small import, to its figures on the stream | {} s |", TO_FIGURES_MS / 1000),
         format!("`PI_SLOWDOWN` = {PI_SLOWDOWN}"),
-        "`BALANCES_EVERY` ÷ accounts at four times the owner's size".to_string(),
+        "`BALANCES_EVERY` ÷ accounts at four times the reference size".to_string(),
         "`QUOTES_EVERY` ÷ priced holdings at that size".to_string(),
     ] {
         assert!(arch.contains(&stated), "docs/architecture.md §16 does not state: {stated}");
     }
-    assert_eq!(GROWTH_LIMIT, 2.0, "§16: the work at four times the owner's size is under twice the work at it");
-    assert!(arch.contains("is under twice the work at the owner's size"));
+    assert_eq!(GROWTH_LIMIT, 2.0, "§16: the work at four times the reference size is under twice the work at it");
+    assert!(arch.contains("is under twice the work at the reference size"));
     for (op, _, _, issue) in OVER_BUDGET {
         assert!(Op::ALL.iter().any(|o| o.name() == *op), "OVER_BUDGET names no operation: {op}");
         assert!(regex::Regex::new(r"^#\d+$").unwrap().is_match(issue), "{op}'s entry names its issue as #N: {issue}");

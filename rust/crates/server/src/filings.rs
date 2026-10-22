@@ -17,8 +17,8 @@ use bagholder_market::disclosures::{self, SourceOutcome};
 use bagholder_market::{edgar, enrich, localmodel, news, sedar};
 use bagholder_model::securities::Security;
 use bagholder_core::ListingKey;
-use bagholder_store::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator};
-use bagholder_store::tables::{get_meta, set_meta};
+use bagholder_market::stored::feeds::{self as sf, FiledDocument, Filing, NewsItem, Regulator};
+use bagholder_market::stored::meta::{get_meta, set_meta};
 
 use crate::app::{log, now_iso, now_unix, parse_instant, spawn, App, ENRICH_VERSION};
 use crate::feeds::{base, conn, feed_failed, notice_settings, notices, sha1_hex12, today, went, DISCLOSURES, DISCLOSURES_READING, DISCLOSURES_STORED, RELEASES};
@@ -809,9 +809,9 @@ fn newest_of<T: Notable>(rows: &[T]) -> &T {
 }
 
 /// A notification's extra: the symbol, the moment and the link, in one struct.
-fn notice_extra<T: Notable>(key: &ListingKey, exchange: &str, rows: &[T]) -> bagholder_store::feeds::NotificationExtra {
+fn notice_extra<T: Notable>(key: &ListingKey, exchange: &str, rows: &[T]) -> bagholder_market::stored::feeds::NotificationExtra {
     let (at, link) = (notice_moment(rows), notice_link(rows));
-    bagholder_store::feeds::NotificationExtra {
+    bagholder_market::stored::feeds::NotificationExtra {
         symbol: key.symbol().to_string(),
         listing: key.to_string(),
         exchange: exchange.to_string(),
@@ -1958,7 +1958,7 @@ mod tests {
 
     /// What was told of a filer's documents is never told again: a document met
     /// before stands as told even where the market cache no longer holds it and
-    /// the stream's mark is older than it (an earlier store's mark carried in).
+    /// the stream's mark is older than it.
     #[test]
     fn a_document_told_once_is_never_told_again() {
         let (_home, app) = built_app();

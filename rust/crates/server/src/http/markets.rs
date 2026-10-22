@@ -318,8 +318,8 @@ pub struct Document {
 }
 
 impl Document {
-    fn named(self) -> Result<(bagholder_store::feeds::Regulator, String), ApiError> {
-        match (self.source.as_deref().and_then(bagholder_store::feeds::Regulator::parse), self.id) {
+    fn named(self) -> Result<(bagholder_market::stored::feeds::Regulator, String), ApiError> {
+        match (self.source.as_deref().and_then(bagholder_market::stored::feeds::Regulator::parse), self.id) {
             (Some(source), Some(id)) => Ok((source, id)),
             _ => Err(ApiError::BadRequest("source (SEDAR+ or SEC) and id required".into())),
         }

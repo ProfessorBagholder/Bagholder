@@ -1,5 +1,7 @@
 # Plan: nothing of the earlier app is kept, and every holding still adds up
 
+**Superseded by brief 75** (`briefs/75-the-earlier-app-gone.md` on `architecture-briefs`): the earlier app's records go by one migration on every book, not by an upkeep step, and every account is read the same way. Kept as the record of what was planned.
+
 Amended with brief 74's four changes (8cf981ac), each marked "(brief 74, n)".
 
 ## For the owner to decide

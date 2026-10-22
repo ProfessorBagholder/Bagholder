@@ -12,7 +12,6 @@ pub mod clear;
 pub mod debts;
 pub mod facts;
 pub mod identity;
-pub mod import;
 pub mod links;
 pub mod mapping;
 pub mod names;
@@ -20,6 +19,7 @@ pub mod notices;
 pub mod fills;
 pub mod orders;
 pub mod person;
+pub mod pooled;
 pub mod records;
 pub mod schema;
 pub mod settings;
@@ -98,7 +98,15 @@ impl Book {
     /// version's schema (snapshotting it first when it has to be migrated). `at`
     /// is now; `app_version` is this build's.
     pub fn open(path: &Path, app_version: &str, at: jiff::Timestamp) -> Result<(Book, Migrated)> {
-        let (conn, done) = bagholder_sqlite::migrate::open(&schema::SCHEMA, path, app_version, at)?;
+        Book::open_mapped(path, app_version, at, &[])
+    }
+
+    /// `open`, with the mappings a migration's code step reads records with
+    /// (migration 37's split of the accounts the import pooled, `pooled`): a
+    /// book that needs a mapping not among them is left as it was, and refused.
+    pub fn open_mapped(path: &Path, app_version: &str, at: jiff::Timestamp, mappings: &[&dyn mapping::Mapping]) -> Result<(Book, Migrated)> {
+        let split = |c: &rusqlite::Connection| pooled::step(c, mappings, at);
+        let (conn, done) = bagholder_sqlite::migrate::open_with(&schema::SCHEMA, path, app_version, at, &[(37, &split)])?;
         // every reference between the book's tables is held by SQLite itself
         conn.pragma_update(None, "foreign_keys", "ON")?;
         // a REPLACE fires the delete triggers of the row it replaces: the change log
@@ -118,6 +126,11 @@ impl Book {
     /// The book in the data folder `home`.
     pub fn open_in(home: &Path, app_version: &str, at: jiff::Timestamp) -> Result<(Book, Migrated)> {
         Book::open(&home.join(BOOK_FILE), app_version, at)
+    }
+
+    /// `open_mapped`, the book in the data folder `home`.
+    pub fn open_in_mapped(home: &Path, app_version: &str, at: jiff::Timestamp, mappings: &[&dyn mapping::Mapping]) -> Result<(Book, Migrated)> {
+        Book::open_mapped(&home.join(BOOK_FILE), app_version, at, mappings)
     }
 
     pub(crate) fn conn(&self) -> &Connection {

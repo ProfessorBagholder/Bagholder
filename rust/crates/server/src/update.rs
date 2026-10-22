@@ -261,7 +261,7 @@ pub fn check_for_update(app: &Arc<App>) -> UpdateRecord {
             }
         }
     }
-    let kept = app.cache().and_then(|c| bagholder_store::tables::set_meta(&c, CHECK_KEY, &bagholder_store::tables::json_text(&serde_json::to_value(&record).unwrap())));
+    let kept = app.cache().and_then(|c| bagholder_market::stored::meta::set_meta(&c, CHECK_KEY, &bagholder_market::stored::meta::json_text(&serde_json::to_value(&record).unwrap())));
     // the header shows what the check found as soon as it is kept
     app.events.signal();
     match kept {
@@ -277,7 +277,7 @@ pub const CHECK_KEY: &str = "update_check";
 /// The last check's record, default when none has been kept; one that cannot be
 /// read is the error.
 pub fn update_status(app: &Arc<App>) -> Result<UpdateRecord, String> {
-    let raw = app.cache().and_then(|c| bagholder_store::tables::get_meta(&c, CHECK_KEY, "")).map_err(|e| format!("The update check could not be read: {e}"))?;
+    let raw = app.cache().and_then(|c| bagholder_market::stored::meta::get_meta(&c, CHECK_KEY, "")).map_err(|e| format!("The update check could not be read: {e}"))?;
     if raw.is_empty() { return Ok(UpdateRecord::default()); }
     let mut rec: UpdateRecord = serde_json::from_str(&raw).map_err(|e| format!("The update check could not be read: {e}"))?;
     // a record kept by an earlier build offers what this build already runs: a copy
@@ -575,7 +575,7 @@ fn keep_previous(home: &Path, dir: &Path, names: &[String]) -> Result<(), String
 /// the new files put in place, the marker the supervisor watches left.
 fn install_files(app: &Arc<App>, staging: &Path, names: &[String], tag: &str) -> Result<(), String> {
     let home = &app.home;
-    bagholder_store::guard_home(home)?;
+    bagholder_sqlite::guard_home(home)?;
     let dir = app_dir(app);
     keep_previous(home, &dir, names)?;
     for name in names {
@@ -607,7 +607,7 @@ pub(crate) struct Pending {
 }
 
 /// The stores a migration may change, by their files in the data folder.
-const STORE_FILES: [&str; 3] = [bagholder_book::BOOK_FILE, crate::figures::CACHE_FILE, crate::figures::OLD_FILE];
+const STORE_FILES: [&str; 2] = [bagholder_book::BOOK_FILE, crate::figures::CACHE_FILE];
 
 /// The stores put back as the update found them, from the snapshots its migrations
 /// took (`docs/plans/stage-money.md`, part D): a store the update migrated goes back
@@ -712,7 +712,7 @@ fn restore_previous(home: &Path, dir: &Path, pending: &Pending) -> Result<bool, 
 }
 
 fn rollback_in(home: &Path, dir: &Path) -> Result<bool, String> {
-    bagholder_store::guard_home(home)?;
+    bagholder_sqlite::guard_home(home)?;
     let previous = home.join("previous");
     if !previous.exists() {
         return Ok(false);
@@ -827,7 +827,7 @@ fn pull(app: &Arc<App>, tag: &str) -> Result<(), String> {
 /// Bring this copy to `tag`, then restart. Never
 /// fails; a failure lands in the state's update error and nothing is changed.
 pub fn perform_update(app: &Arc<App>, tag: &str, rec: &UpdateRecord) {
-    if let Err(e) = bagholder_store::guard_home(&app.home) {
+    if let Err(e) = bagholder_sqlite::guard_home(&app.home) {
         log(&format!("bagholder update: {}", e));
         return;
     }

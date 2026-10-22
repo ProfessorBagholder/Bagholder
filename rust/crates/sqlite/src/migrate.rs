@@ -14,7 +14,10 @@
 //!   whole file is copied to `snapshots/` beside it, and the two newest snapshots
 //!   of the store are kept;
 //! - each pending migration runs in its own transaction with its version bump, so
-//!   one that fails leaves the file at the version before it, and says which failed.
+//!   one that fails leaves the file at the version before it, and says which failed;
+//! - a migration may carry a code step its caller supplies (`Step`), run after its
+//!   SQL and before the references are checked, in the same transaction: work the
+//!   SQL cannot do alone, done once, exactly when the migration runs.
 //!
 //! A migration once released is never edited: each store commits the schema each
 //! version produces, and its tests compare (`schema_text`).
@@ -30,6 +33,10 @@ pub struct Migration {
     pub name: &'static str,
     pub sql: &'static str,
 }
+
+/// A migration's code step: given the connection inside the migration's
+/// transaction, after its SQL; an error fails the migration.
+pub type Step<'a> = &'a dyn Fn(&Connection) -> rusqlite::Result<()>;
 
 /// A store: which file it is, and its migrations in order.
 pub struct Schema {
@@ -119,6 +126,11 @@ pub struct Migrated {
 /// latest version. `at` is now, and `app_version` this build's version: both are
 /// recorded against each migration applied, and `at` names the snapshot.
 pub fn open(schema: &Schema, path: &Path, app_version: &str, at: jiff::Timestamp) -> Result<(Connection, Migrated), MigrateError> {
+    open_with(schema, path, app_version, at, &[])
+}
+
+/// `open`, each of `steps` run with the migration its number names.
+pub fn open_with(schema: &Schema, path: &Path, app_version: &str, at: jiff::Timestamp, steps: &[(u32, Step)]) -> Result<(Connection, Migrated), MigrateError> {
     check_numbering(schema)?;
     // the file is looked at before anything is done to it: one that is not this
     // store, or is newer, is refused exactly as it was found
@@ -127,7 +139,7 @@ pub fn open(schema: &Schema, path: &Path, app_version: &str, at: jiff::Timestamp
         identify(schema, &look, path)?;
     }
     let conn = crate::open_db(path)?;
-    let done = migrate(schema, &conn, path, app_version, at)?;
+    let done = migrate(schema, &conn, path, app_version, at, steps)?;
     Ok((conn, done))
 }
 
@@ -167,7 +179,7 @@ fn identify(schema: &Schema, conn: &Connection, path: &Path) -> Result<(), Migra
     Ok(())
 }
 
-fn migrate(schema: &Schema, conn: &Connection, path: &Path, app_version: &str, at: jiff::Timestamp) -> Result<Migrated, MigrateError> {
+fn migrate(schema: &Schema, conn: &Connection, path: &Path, app_version: &str, at: jiff::Timestamp, steps: &[(u32, Step)]) -> Result<Migrated, MigrateError> {
     identify(schema, conn, path)?;
     let from = version(conn)?;
     let known = schema.latest();
@@ -190,7 +202,7 @@ fn migrate(schema: &Schema, conn: &Connection, path: &Path, app_version: &str, a
     // reference checked before each one commits, and the setting put back after.
     let enforced: bool = conn.query_row("PRAGMA foreign_keys", [], |r| r.get(0))?;
     conn.pragma_update(None, "foreign_keys", "OFF")?;
-    let ran = run_pending(schema, conn, from, &applied_at, app_version, &mut done);
+    let ran = run_pending(schema, conn, from, &applied_at, app_version, steps, &mut done);
     conn.pragma_update(None, "foreign_keys", if enforced { "ON" } else { "OFF" })?;
     ran?;
     Ok(done)
@@ -212,7 +224,7 @@ fn references_hold(conn: &Connection) -> rusqlite::Result<()> {
     }
 }
 
-fn run_pending(schema: &Schema, conn: &Connection, from: u32, applied_at: &str, app_version: &str, done: &mut Migrated) -> Result<(), MigrateError> {
+fn run_pending(schema: &Schema, conn: &Connection, from: u32, applied_at: &str, app_version: &str, steps: &[(u32, Step)], done: &mut Migrated) -> Result<(), MigrateError> {
     for m in &schema.migrations[from as usize..] {
         crate::atomically(conn, || {
             if m.number == 1 {
@@ -228,6 +240,9 @@ fn run_pending(schema: &Schema, conn: &Connection, from: u32, applied_at: &str, 
                 ))?;
             }
             conn.execute_batch(m.sql)?;
+            for (_, step) in steps.iter().filter(|(n, _)| *n == m.number) {
+                step(conn)?;
+            }
             references_hold(conn)?;
             conn.execute(
                 "INSERT INTO schema_migrations(number, name, applied_at, app_version) VALUES (?, ?, ?, ?)",
@@ -371,6 +386,71 @@ mod tests {
         ]);
         // nothing to protect in a new file, so no snapshot folder either
         assert!(!snapshot_dir(&path).exists());
+    }
+
+    /// A code step sees its migration's SQL done, its writes count with it, and
+    /// a reference it leaves broken fails the migration like the SQL's would.
+    #[test]
+    fn a_code_step_runs_in_its_migration_s_transaction_after_the_sql_and_before_the_reference_check() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.db");
+        let step = |c: &Connection| -> rusqlite::Result<()> {
+            let tag: Option<String> = c.query_row("SELECT tag FROM notes WHERE id = 1", [], |r| r.get(0))?;
+            c.execute("UPDATE notes SET tag = ?1 WHERE id = 1", [format!("seen {}", tag.is_none())])?;
+            Ok(())
+        };
+        {
+            let (conn, _) = open(&schema(&ONE), &path, "1.0.0", at("2026-01-01T00:00:00Z")).unwrap();
+            conn.execute("INSERT INTO notes(body) VALUES ('kept')", []).unwrap();
+        }
+        let (conn, done) = open_with(&schema(&TWO), &path, "2.0.0", at("2026-02-01T00:00:00Z"), &[(2, &step)]).unwrap();
+        assert_eq!(done.to, 2);
+        let tag: String = conn.query_row("SELECT tag FROM notes WHERE id = 1", [], |r| r.get(0)).unwrap();
+        assert_eq!(tag, "seen true", "after migration 2's column was added");
+        // a step that leaves a reference broken fails its migration
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("p.db");
+        {
+            let (conn, _) = open(&schema(&PARENTS), &path, "1.0.0", at("2026-01-01T00:00:00Z")).unwrap();
+            conn.execute_batch("INSERT INTO parents VALUES ('p1', 'a'); INSERT INTO children(parent) VALUES ('p1');").unwrap();
+        }
+        let dangle = |c: &Connection| -> rusqlite::Result<()> { c.execute("DELETE FROM parents", []).map(|_| ()) };
+        let err = open_with(&schema(&REBUILT), &path, "2.0.0", at("2026-02-01T00:00:00Z"), &[(2, &dangle)]).unwrap_err();
+        assert!(matches!(err, MigrateError::Failed { number: 2, .. }), "{err}");
+    }
+
+    #[test]
+    fn a_code_step_that_fails_leaves_the_file_at_the_version_before() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.db");
+        {
+            let (conn, _) = open(&schema(&ONE), &path, "1.0.0", at("2026-01-01T00:00:00Z")).unwrap();
+            conn.execute("INSERT INTO notes(body) VALUES ('kept')", []).unwrap();
+        }
+        let fails = |c: &Connection| -> rusqlite::Result<()> {
+            c.execute("UPDATE notes SET body = 'changed'", [])?;
+            Err(rusqlite::Error::InvalidQuery)
+        };
+        let err = open_with(&schema(&TWO), &path, "2.0.0", at("2026-02-01T00:00:00Z"), &[(2, &fails)]).unwrap_err();
+        assert!(matches!(err, MigrateError::Failed { number: 2, .. }), "{err}");
+        let conn = crate::open_db(&path).unwrap();
+        assert_eq!(version(&conn).unwrap(), 1);
+        let (body, columns): (String, i64) = conn.query_row("SELECT body, (SELECT COUNT(*) FROM pragma_table_info('notes')) FROM notes", [], |r| Ok((r.get(0)?, r.get(1)?))).unwrap();
+        assert_eq!((body.as_str(), columns), ("kept", 2), "neither the step's write nor the SQL's column");
+    }
+
+    #[test]
+    fn a_step_for_a_migration_already_applied_never_runs() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.db");
+        open(&schema(&TWO), &path, "1.0.0", at("2026-01-01T00:00:00Z")).unwrap();
+        let ran = std::cell::Cell::new(false);
+        let step = |_: &Connection| -> rusqlite::Result<()> {
+            ran.set(true);
+            Ok(())
+        };
+        open_with(&schema(&TWO), &path, "2.0.0", at("2026-02-01T00:00:00Z"), &[(2, &step)]).unwrap();
+        assert!(!ran.get());
     }
 
     #[test]

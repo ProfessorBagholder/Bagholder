@@ -20,7 +20,7 @@ use bagholder_net::browser::Session;
 use crate::disclosures::{self as d, Enrichment, Fetched, SourceError};
 use bagholder_sources::html::unescape;
 use bagholder_model::textrules::{parse_int, trim_space};
-use bagholder_store::feeds::{FiledDocument, Regulator};
+use crate::stored::feeds::{FiledDocument, Regulator};
 
 pub const SOURCE: &str = "SEDAR+";
 pub const BASE: &str = "https://www.sedarplus.ca";

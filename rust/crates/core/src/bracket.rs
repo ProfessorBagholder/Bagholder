@@ -242,8 +242,8 @@ pub enum BracketEvent {
     OffBroker { role: ExitRole },
     /// A statement of the account's units read at `read_at` lists the position, or not.
     PositionRead { held: bool, read_at: Timestamp },
-    /// Carried over from the earlier app's store once, where it stood then, with the
-    /// row as it was (JSON text).
+    /// A bracket the app found already placed, where it stood then, with the row it
+    /// was found as (JSON text).
     Imported { phase: Phase, quantity: Dec, stop: Option<StopLeg>, target: Option<Dec>, exit: Option<(ExitRole, String)>, attempts: u32, why: Option<String>, outcome: Option<String>, seen_held: bool, row: String },
 }
 
@@ -343,7 +343,7 @@ impl Bracket {
                 stop: *stop,
                 target: *target,
                 exit: exit.clone(),
-                // the exit stands where the earlier app placed it: what the broker states is followed
+                // the exit stands where it was found placed: what the broker states is followed
                 exit_at: exit.as_ref().map(|(role, _)| (if *role == ExitRole::Target { *target } else { stop.map(|s| s.level) }, *quantity)),
                 refused: (*attempts > 0).then(|| Refusal { role: None, class: RefusalClass::Unknown, key: StateKey::default(), tries: *attempts, at: first.0 }),
                 entry_filled: *quantity,

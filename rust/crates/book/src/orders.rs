@@ -100,25 +100,12 @@ impl Book {
         self.insert_order(o, &OrderEvent::Written { dry }, asker, at, at)
     }
 
-    /// Carry the earlier app's brackets and orders over in one transaction: all of
-    /// them, or none. Each is (what it is, its `Imported` first event, when it was written).
-    /// Each is (what it is, its `Imported` first event, when it was written, when it last
-    /// changed), the last being when the event is kept as recorded.
-    pub fn import_orders(&self, brackets: &[(BracketPlace, BracketEvent, jiff::Timestamp, jiff::Timestamp)], orders: &[(OrderRequest, OrderEvent, jiff::Timestamp, jiff::Timestamp)]) -> Result<()> {
-        self.atomically(|| {
-            for (place, first, created, changed) in brackets {
-                self.import_bracket(place, first, *created, *changed)?;
-            }
-            for (o, first, created, changed) in orders {
-                self.import_order(o, first, *created, *changed)?;
-            }
-            Ok(())
-        })
-    }
-
-    /// Carry an order over from the earlier app's store, as `first` (an `Imported`
-    /// event) says it stood, written when it was.
-    pub fn import_order(&self, o: &OrderRequest, first: &OrderEvent, created_at: jiff::Timestamp, at: jiff::Timestamp) -> Result<()> {
+    /// An order as the book holds one the app found already placed: its log
+    /// starting with `first` (an `Imported` event), written when it was. Nothing
+    /// writes one now; a test writes one to read it as a book holding one does.
+    #[cfg(feature = "oracles")]
+    #[doc(hidden)]
+    pub fn carried_order(&self, o: &OrderRequest, first: &OrderEvent, created_at: jiff::Timestamp, at: jiff::Timestamp) -> Result<()> {
         let OrderEvent::Imported { .. } = first else {
             return Err(BookError::Refused("an order carried over starts by being imported".into()));
         };
@@ -315,9 +302,12 @@ impl Book {
         self.insert_bracket(place, created, asker, at, at)
     }
 
-    /// Carry a bracket over from the earlier app's store, as `first` (an `Imported`
-    /// event) says it stood, created when it was.
-    pub fn import_bracket(&self, place: &BracketPlace, first: &BracketEvent, created_at: jiff::Timestamp, at: jiff::Timestamp) -> Result<()> {
+    /// A bracket as the book holds one the app found already placed: its log
+    /// starting with `first` (an `Imported` event), created when it was. Nothing
+    /// writes one now; a test writes one to read it as a book holding one does.
+    #[cfg(feature = "oracles")]
+    #[doc(hidden)]
+    pub fn carried_bracket(&self, place: &BracketPlace, first: &BracketEvent, created_at: jiff::Timestamp, at: jiff::Timestamp) -> Result<()> {
         let BracketEvent::Imported { .. } = first else {
             return Err(BookError::Refused("a bracket carried over starts by being imported".into()));
         };

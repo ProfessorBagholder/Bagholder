@@ -8,7 +8,7 @@
 //! `market-data-keyed-by-listing`, Approach, 2).
 
 use bagholder_core::ListingKey;
-use bagholder_store::feeds::Interlisted;
+use crate::stored::feeds::Interlisted;
 
 use crate::http::FetchError;
 

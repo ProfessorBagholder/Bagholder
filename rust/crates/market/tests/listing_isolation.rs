@@ -13,8 +13,8 @@ use bagholder_core::ListingKey;
 use bagholder_market::exposure::{self, hooks, Ctx, ShareClass};
 use bagholder_market::news::{self, Ask, Clock, NetError, Readers, WireAnswer};
 use bagholder_market::shorts::{self, CaPositionRow, CaVolumeRow};
-use bagholder_store::bars::{DayBar, Ohlcv};
-use bagholder_store::feeds::{Feed, NewsItem, NewsKind};
+use bagholder_market::stored::bars::{DayBar, Ohlcv};
+use bagholder_market::stored::feeds::{Feed, NewsItem, NewsKind};
 use rusqlite::Connection;
 
 /// A small generator, seeded, so a failure is the same failure when run again.
@@ -101,10 +101,10 @@ fn a_listings_bars_are_its_own() {
         for (first, second) in both(&a, &b) {
             let c = store();
             let bars = |_: &Side, close: f64| vec![DayBar { date: "2026-09-15".into(), px: Ohlcv { open: None, high: None, low: None, close, volume: None } }];
-            bagholder_store::market::upsert_price_history(&c, &first.key(), &bars(&first, 1.0), &mark(&first)).unwrap();
-            bagholder_store::market::upsert_price_history(&c, &second.key(), &bars(&second, 2.0), &mark(&second)).unwrap();
+            bagholder_market::stored::charts::upsert_price_history(&c, &first.key(), &bars(&first, 1.0), &mark(&first)).unwrap();
+            bagholder_market::stored::charts::upsert_price_history(&c, &second.key(), &bars(&second, 2.0), &mark(&second)).unwrap();
             for (s, close) in [(&first, 1.0), (&second, 2.0)] {
-                let got = bagholder_store::market::price_history(&c, &s.key(), "2026-09-01", "2026-09-30").unwrap();
+                let got = bagholder_market::stored::charts::price_history(&c, &s.key(), "2026-09-01", "2026-09-30").unwrap();
                 assert_eq!(got.iter().map(|b| b.px.close).collect::<Vec<_>>(), vec![close], "{s:?} beside {first:?} / {second:?}");
             }
         }
@@ -116,16 +116,16 @@ fn a_listings_bars_are_its_own() {
 #[test]
 fn a_listings_intraday_bars_bar_source_and_misses_are_its_own() {
     use bagholder_market::history;
-    use bagholder_store::bars::TimeBar;
+    use bagholder_market::stored::bars::TimeBar;
     let mut r = Rng(11);
     for (a, b) in pairs(&mut r, 20) {
         for (first, second) in both(&a, &b) {
             let c = store();
             let bars = |close: f64| vec![TimeBar { time: 1_789_000_000, px: Ohlcv { open: None, high: None, low: None, close, volume: None } }];
-            bagholder_store::market::upsert_price_bars(&c, &first.key(), "1h", &bars(1.0), "test").unwrap();
-            bagholder_store::market::upsert_price_bars(&c, &second.key(), "1h", &bars(2.0), "test").unwrap();
+            bagholder_market::stored::charts::upsert_price_bars(&c, &first.key(), "1h", &bars(1.0), "test").unwrap();
+            bagholder_market::stored::charts::upsert_price_bars(&c, &second.key(), "1h", &bars(2.0), "test").unwrap();
             for (s, close) in [(&first, 1.0), (&second, 2.0)] {
-                let got = bagholder_store::market::price_bars(&c, &s.key(), "1h", 0, i64::MAX).unwrap();
+                let got = bagholder_market::stored::charts::price_bars(&c, &s.key(), "1h", 0, i64::MAX).unwrap();
                 assert_eq!(got.iter().map(|b| b.px.close).collect::<Vec<_>>(), vec![close], "{s:?} beside {first:?} / {second:?}");
             }
             // a timeframe no source had for the first is no miss of the second's
@@ -169,7 +169,7 @@ fn a_listings_news_is_its_own() {
                 news::read_listing(&c, &Readers { wire: &wire, extra: &extra }, &s.symbol, &s.venue, "", "", true, &clock, None).unwrap();
             }
             for s in [&first, &second] {
-                let ids: Vec<String> = bagholder_store::feeds::news_for(&c, &s.key()).unwrap().into_iter().map(|n| n.id).collect();
+                let ids: Vec<String> = bagholder_market::stored::feeds::news_for(&c, &s.key()).unwrap().into_iter().map(|n| n.id).collect();
                 assert_eq!(ids, vec![format!("tmx:{}", mark(s))], "{s:?} beside {first:?} / {second:?}");
             }
         }
@@ -186,13 +186,13 @@ fn a_listings_breakdown_is_its_own() {
             hooks::FALLBACK.with(|h| *h.borrow_mut() = Some(Box::new(|_, _, _| Ok(None))));
             // each listing is classified as its own sector, named for it
             hooks::CLASSIFY.with(|h| *h.borrow_mut() = Some(Box::new(|sym, ex, _| ShareClass { sector: ListingKey::on(sym, ex).unwrap().to_string(), industry: String::new(), country: String::new(), source: "stand-in".into() })));
-            let pool = std::sync::Arc::new(bagholder_store::pool::Pool::new(&std::env::temp_dir().join("bh-isolation-none.db")));
+            let pool = std::sync::Arc::new(bagholder_sqlite::pool::Pool::new(&std::env::temp_dir().join("bh-isolation-none.db")));
             let ctx = Ctx { conn: &c, pool, today: "2026-09-16".into() };
             for s in [&first, &second] {
                 exposure::share_exposure(&ctx, &s.symbol, &s.venue, "").unwrap();
             }
             for s in [&first, &second] {
-                let rec = bagholder_store::feeds::exposure_record(&c, &bagholder_model::venues::share_key(&s.key())).unwrap().expect("its record");
+                let rec = bagholder_market::stored::feeds::exposure_record(&c, &bagholder_model::venues::share_key(&s.key())).unwrap().expect("its record");
                 assert_eq!(rec.record.sectors.first_name(), Some(mark(s).as_str()), "{s:?} beside {first:?} / {second:?}");
             }
             hooks::clear();
@@ -238,12 +238,12 @@ fn a_listing_with_no_venue_known_is_read_of_no_source() {
     hooks::clear();
     hooks::CLASSIFY.with(|h| *h.borrow_mut() = Some(Box::new(|sym, ex, _| panic!("{sym} on {ex:?} was classified"))));
     hooks::ADAPTER.with(|h| *h.borrow_mut() = Some(Box::new(|_, sym, _, ex| panic!("{sym} on {ex:?} was looked through"))));
-    let pool = std::sync::Arc::new(bagholder_store::pool::Pool::new(&std::env::temp_dir().join("bh-isolation-none.db")));
+    let pool = std::sync::Arc::new(bagholder_sqlite::pool::Pool::new(&std::env::temp_dir().join("bh-isolation-none.db")));
     let ctx = Ctx { conn: &c, pool, today: "2026-09-16".into() };
     for _ in 0..50 {
         let sym = r.symbol();
         for venue in ["", "LSE", "XLON", "London Stock Exchange"] {
-            assert_eq!(exposure::share_exposure(&ctx, &sym, venue, "CAD").unwrap(), bagholder_store::feeds::ExposureRecord::default());
+            assert_eq!(exposure::share_exposure(&ctx, &sym, venue, "CAD").unwrap(), bagholder_market::stored::feeds::ExposureRecord::default());
             assert_eq!(exposure::fund_exposure(&ctx, &sym, "Some ETF", venue, 0, &mut Vec::new()).unwrap(), None);
             assert_eq!(shorts::market_of(&sym, venue), None);
             assert!(bagholder_market::quotes::yahoo_forms(&bagholder_model::input::Listing::new(sym.as_str(), venue, "CAD", "")).is_empty());

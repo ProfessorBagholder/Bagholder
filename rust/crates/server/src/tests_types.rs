@@ -8,14 +8,12 @@
 use std::path::PathBuf;
 use ts_rs::TS;
 
-use bagholder_store::bars::{ChartBars, DayBar, TimeBar};
-use bagholder_store::feeds::{
+use bagholder_market::stored::bars::{ChartBars, DayBar, TimeBar};
+use bagholder_market::stored::feeds::{
     FiledDocument, Filing, Gauge, GaugePart, GaugePoint, GaugeReading, Regulator, ShortMarket, StoredGauge, VolumeSpan,
 };
 
-use bagholder_store::activities::ActivityRow;
-use bagholder_store::tables::LegacyNote;
-use bagholder_store::feeds::{Notification, NotificationExtra};
+use bagholder_market::stored::feeds::{Notification, NotificationExtra};
 
 use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
 use crate::http::orders::{Adjust, Modify, Named, QuoteOf, RefreshAndOrders};
@@ -64,7 +62,7 @@ fn chart_declarations() -> String {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
     let decls: Vec<String> = decls![DayBar, TimeBar, ChartBars, ChartHistory, crate::feeds::HistoryAnswer, crate::feeds::HistoryQuery, crate::docs::HistoryDoc];
-    let mut out = String::from("// Generated from rust/crates/store/src/bars.rs and the server's chart history. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_chart_types`.\n\nimport type { OkOr } from './common'\n\n");
+    let mut out = String::from("// Generated from rust/crates/market/src/stored/bars.rs and the server's chart history. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_chart_types`.\n\nimport type { OkOr } from './common'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -96,7 +94,7 @@ fn filings_declarations() -> String {
         Regulator, FiledDocument, Filing, SourceStatus, FilingsDoc, FilingsPayload, FeedFiling, FilingsFeed, Enriched,
         crate::feeds::FilingsAnswer, crate::feeds::EnrichAnswer, crate::http::markets::Filings, crate::http::markets::Scope, crate::http::markets::Document,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's filings documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_filing_types`.\n\nimport type { OkOr } from './common'\nimport type { Listing } from './markets'\n\n");
+    let mut out = String::from("// Generated from rust/crates/market/src/stored/feeds.rs and the server's filings documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_filing_types`.\n\nimport type { OkOr } from './common'\nimport type { Listing } from './markets'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -132,7 +130,7 @@ fn markets_declarations() -> String {
         crate::http::markets::Search, crate::http::markets::SymbolSearchAnswer, crate::http::markets::Resolve, crate::http::markets::ResolvedListing, crate::http::markets::ResolveAnswer, crate::http::markets::WatchlistBody, crate::http::markets::WatchlistRemove, crate::http::markets::TilesSet,
         crate::http::markets::TileRef,
     ];
-    let mut out = String::from("// Generated from rust/crates/store/src/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { Dec } from '../dec'\nimport type { OkOr } from './common'\nimport type { Fill } from './figures'\nimport type { SymbolMatch } from './wire'\n\n");
+    let mut out = String::from("// Generated from rust/crates/market/src/stored/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { Dec } from '../dec'\nimport type { OkOr } from './common'\nimport type { Fill } from './figures'\nimport type { SymbolMatch } from './wire'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -151,40 +149,6 @@ fn test_the_pages_market_types_are_the_servers() {
     }
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(have == want, "web/src/lib/generated/markets.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
-}
-
-/// The book's types -- an activity row, and the import/watch/append answers --
-/// generated to `web/src/lib/generated/book.ts`.
-fn book_declarations() -> String {
-    let config = ts_rs::Config::new().with_large_int("number");
-    macro_rules! decls {
-        ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
-    }
-    let decls: Vec<String> = decls![
-        ActivityRow, LegacyNote,
-        bagholder_store::broker::Account, bagholder_model::securities::Security, bagholder_store::book::BookBalance, bagholder_store::book::BookNav, bagholder_store::book::Book,
-    ];
-    let mut out = String::from(
-        "// Generated from rust/crates/store/src/activities.rs, book.rs,\n// broker.rs and the server's book-append answer. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_book_types`.\n\nimport type { TradeGroup } from './model_api'\n\n",
-    );
-    for d in decls {
-        out.push_str("export ");
-        out.push_str(d.trim());
-        out.push_str("\n\n");
-    }
-    out.trim_end().to_string() + "\n"
-}
-
-#[test]
-fn test_the_pages_book_types_are_the_servers() {
-    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/book.ts");
-    let want = book_declarations();
-    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
-        std::fs::write(&path, &want).unwrap();
-        return;
-    }
-    let have = std::fs::read_to_string(&path).unwrap_or_default();
-    assert!(have == want, "web/src/lib/generated/book.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
 }
 
 /// The header's status, generated to `web/src/lib/generated/status.ts` -- a
@@ -231,7 +195,7 @@ fn notifications_declarations() -> String {
         crate::notify::PushKeys, crate::notify::PushSubscription, crate::notify::PushEndpoint, crate::notify::PushAnswer,
     ];
     let mut out = String::from(
-        "// Generated from rust/crates/store/src/feeds.rs and the server's notify module. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_notifications_types`.\n\nimport type { NotifyStatus } from './status'\n\n",
+        "// Generated from rust/crates/market/src/stored/feeds.rs and the server's notify module. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_notifications_types`.\n\nimport type { NotifyStatus } from './status'\n\n",
     );
     for d in decls {
         out.push_str("export ");
@@ -329,7 +293,7 @@ fn model_api_declarations() -> String {
         crate::csv_import::WatchRequest, crate::csv_import::WatchStatus, crate::csv_import::WatchedFile, crate::csv_import::FileOutcome,
     ];
     let mut out = String::from(
-        "// Generated from the server's http::model module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_model_api_types`.\n\nimport type { Leg, Fill, MarketDates, Position, PositionsSummary, Portfolio, Markets, Filters, Options, Kpi, EquityBlock, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, Grades, QueueRow, Trade, Cashflow, Unmatched, Account } from './wire'\nimport type { LegacyNote } from './book'\nimport type { Status } from './status'\n\n",
+        "// Generated from the server's http::model module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_model_api_types`.\n\nimport type { Leg, Fill, MarketDates, Position, PositionsSummary, Portfolio, Markets, Filters, Options, Kpi, EquityBlock, YearRow, BenchmarkRef, MonthlyBar, BySymbolRow, Grades, QueueRow, Trade, Cashflow, Unmatched, Account } from './wire'\nimport type { Status } from './status'\n\n",
     );
     for d in decls {
         out.push_str("export ");
@@ -360,10 +324,8 @@ fn generated_file_of(name: &str) -> &'static str {
         "OkOr" => "common",
         "StartLoginAnswer" | "CancelLoginAnswer" | "LoginInput" | "Capture" | "RefreshAnswer" | "SyncAnswer" => "session",
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" | "ListingOf" | "OrderListingAnswer" => "orders",
-        "LegacyNote" => "book",
         "StatusAnswer" => "status",
         "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "DebtAnswerRequest" | "DebtAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "ImportTold" | "WatchRequest" | "WatchStatus" => "model_api",
-        "Book" => "book",
         "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "Resolve" | "ResolvedListing" | "ResolveAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",

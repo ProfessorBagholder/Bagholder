@@ -8,7 +8,7 @@ use std::path::PathBuf;
 use crate::tests_source::production;
 
 /// The earlier crates, by the names code uses them under.
-const EARLIER: [&str; 4] = ["bagholder_model", "bagholder_store", "bagholder_ws", "bagholder_market"];
+const EARLIER: [&str; 3] = ["bagholder_model", "bagholder_ws", "bagholder_market"];
 
 /// The figure path: what builds and sends the figures document, keeps the engine
 /// current, and writes the book.
@@ -41,7 +41,7 @@ fn nothing_on_the_figure_path_uses_the_earlier_crates() {
 #[test]
 fn the_check_finds_an_earlier_crate_named_in_code_and_not_in_a_comment_or_a_test() {
     assert_eq!(violations("use bagholder_model::base::Base;\nfn f() {}"), vec!["bagholder_model"]);
-    assert_eq!(violations("fn f() { bagholder_store::tables::accounts(c); bagholder_ws::x(); }"), vec!["bagholder_store", "bagholder_ws"]);
+    assert_eq!(violations("fn f() { bagholder_market::stored::meta::get_meta(c); bagholder_ws::x(); }"), vec!["bagholder_ws", "bagholder_market"]);
     assert!(violations("// once read bagholder_model's view\nfn f() {}").is_empty());
     assert!(violations("fn f() {}\n#[cfg(test)]\nmod tests { use bagholder_market::x; }").is_empty());
 }
@@ -111,88 +111,13 @@ fn no_list_the_order_code_acts_on_is_cut_at_a_count() {
 }
 
 #[test]
-fn the_order_path_reads_nothing_leniently_and_nothing_from_the_earlier_store() {
+fn the_order_path_reads_nothing_leniently() {
     for (f, text) in server_sources().into_iter().filter(|(f, _)| f.starts_with("orders/") || f == "http/orders.rs") {
         let code = &production(&text);
-        for word in ["lenient", "page_num", "bagholder_store"] {
+        for word in ["lenient", "page_num"] {
             assert!(!code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(word)), "{f} uses {word}");
         }
     }
-}
-
-/// What reads or writes the earlier store's quotes, in a file's code outside its tests.
-fn earlier_quotes(text: &str) -> Vec<&'static str> {
-    let code = &production(&text);
-    const NAMES: [&str; 11] = [
-        "upsert_quote", "refresh_quotes", "refresh_distributions", "refresh_all", "refresh_periodic", "quote_loop",
-        "quote_symbols_needing_refresh", "peek_quote", "store::market::quotes", "fetch_yahoo_quote", "fetch_cboe_ca_quote",
-    ];
-    NAMES.iter().copied().filter(|n| code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(n))).collect()
-}
-
-/// Every quote the app reads goes into the market cache through the sources' quote
-/// readers (`docs/plans/stage-5-interface-and-running.md`, A2): nothing in the server
-/// writes or reads the earlier store's `quotes` table.
-#[test]
-fn nothing_reads_or_writes_the_earlier_store_s_quotes() {
-    for (f, text) in server_sources() {
-        assert_eq!(earlier_quotes(&text), Vec::<&str>::new(), "{f} reaches the earlier store's quotes");
-    }
-    assert_eq!(earlier_quotes("fn f() { bagholder_store::market::upsert_quote(c, s, &q, \"tmx\", n) }"), vec!["upsert_quote"]);
-    assert_eq!(earlier_quotes("fn f() { spawn(quote_loop); bagholder_market::quotes::refresh_quotes(c) }"), vec!["refresh_quotes", "quote_loop"]);
-    assert!(earlier_quotes("// once upsert_quote\nfn f() {}\n#[cfg(test)]\nmod t { fn g() { peek_quote(c) } }").is_empty());
-}
-
-/// What reaches the earlier store (`bagholder.db`) in a file's code, outside its
-/// tests: its file or its connections, its schema and repairs, the tables and
-/// keys that stayed in it (the rest moved to the book and the market cache,
-/// `docs/plans/stage-6-cutover.md`, 6a), and the functions that read those.
-fn earlier_store(text: &str) -> Vec<&'static str> {
-    let code = &production(&text);
-    const NAMES: [&str; 22] = [
-        "OLD_FILE", "bagholder.db", "bagholder_store::pool", "bagholder_store::connect", "bagholder_store::open_db", "bagholder_store::schema",
-        "bagholder_store::relabel", "gens::install", "bagholder_store::activities", "bagholder_store::rows", "bagholder_store::csvimport",
-        "list_watchlist", "tables::fx_rates", "benchmark_days", "benchmark_prices", "FROM fx_rates", "FROM activities", "FROM securities",
-        "synced_at", "notify_settings", "notify_seen:", ".open()",
-    ];
-    NAMES.iter().copied().filter(|n| code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(n))).collect()
-}
-
-/// Nothing reads or writes the earlier store after the carry: only the carry and
-/// the one-time imports it runs open it (`carry.rs`, `legacy_import.rs`,
-/// `legacy_orders.rs`), and Clear data, which empties a cleared kind from it
-/// through the carry's own `carry::clear_old_store`, and the tools that read a copy of one the person names
-/// (`compare.rs`, `compare-figures`; `demo_facts.rs`, the demo's). The figure
-/// path names its file only to import it into a new book. The market readers
-/// convert and count days from the book's rates and the market cache's tracker
-/// closes, not the earlier store's tables. An update that is rolled back names
-/// its file to put it back as the update found it (`update.rs`).
-#[test]
-fn nothing_reads_the_earlier_store_but_the_carry() {
-    const CARRY: [&str; 5] = ["carry.rs", "legacy_import.rs", "legacy_orders.rs", "compare.rs", "demo_facts.rs"];
-    for (f, text) in server_sources() {
-        let found = earlier_store(&text);
-        match f.as_str() {
-            f if CARRY.contains(&f) => {}
-            "figures.rs" => assert_eq!(found, vec!["OLD_FILE", "bagholder.db"], "the figure path names the earlier store only to import it"),
-            // an update rolled back puts the stores back as it found them, the earlier
-            // one among them: the carry brings it to its own schema at a start
-            "update.rs" => assert_eq!(found, vec!["OLD_FILE"], "the update names the earlier store only to put it back"),
-            _ => assert_eq!(found, Vec::<&str>::new(), "{f} reaches the earlier store"),
-        }
-    }
-    let market = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../market/src");
-    for f in ["history.rs", "shorts.rs"] {
-        let text = std::fs::read_to_string(market.join(f)).unwrap();
-        let code = &production(&text);
-        for dropped in ["read_fx", "tables::fx_rates", "benchmark_days", "benchmark_prices"] {
-            // the earlier quote readers keep their own rates, in `quotes.rs`
-            assert!(!code.lines().any(|l| !l.trim_start().starts_with("//") && l.contains(dropped)), "market/{f} reads {dropped}");
-        }
-    }
-    assert_eq!(earlier_store("fn f() { let c = bagholder_store::connect(&home)?; }"), vec!["bagholder_store::connect"]);
-    assert_eq!(earlier_store("fn f() { get_meta(&c, \"synced_at\", \"\") }"), vec!["synced_at"]);
-    assert!(earlier_store("// bagholder.db once\nfn f() {}\n#[cfg(test)]\nmod t { fn g() { app.open() } }").is_empty());
 }
 
 /// The whole readers: every quote, close and broker statement of the book at once.
@@ -201,12 +126,9 @@ const WHOLE_READERS: [&str; 3] = ["market", "market_from_cache", "brokers"];
 /// The only places that may read the market and every account's statements whole
 /// (`docs/plans/stage-3-the-brokers-statements.md`, brief 22, 11): the engine built
 /// at a start (`figures::build`, whose `market` reads the cache and the statements),
-/// the sources' own build (`read_sources::engine`) and the comparison with the
-/// earlier app (`compare.rs`). A change handler reads only what its change named;
-/// a call anywhere else fails here.
-const WHOLE_READS: [(&str, &str); 6] = [
-    ("compare.rs", "market_from_cache"),
-    ("compare.rs", "brokers"),
+/// and the sources' own build (`read_sources::engine`). A change handler reads
+/// only what its change named; a call anywhere else fails here.
+const WHOLE_READS: [(&str, &str); 4] = [
     ("figures.rs", "market_from_cache"),
     ("figures.rs", "brokers"),
     ("figures.rs", "market"),
@@ -352,3 +274,4 @@ fn every_wealthsimple_address_comes_from_the_one_place_a_stand_in_redirects() {
     assert_eq!(seen, vec![None, Some("graphql_url".into()), Some("send".into())]);
     assert!(wealthsimple_hosts("/// help.wealthsimple.com\nfn f() {}").is_empty());
 }
+

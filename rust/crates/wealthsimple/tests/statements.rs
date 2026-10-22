@@ -382,8 +382,8 @@ impl World {
         let dir = tempfile::tempdir().unwrap();
         let (book, _) = Book::open_in(dir.path(), "test", at(NOW)).unwrap();
         let conn = book.add_connection(&ws(), "Wealthsimple", at(NOW)).unwrap();
-        let lira = book.add_account(conn, &[AccountRef::new(ws(), "lira-1")], &bagholder_book::import::wealthsimple_account_type("SELF_DIRECTED_LIRA"), AccountStatus::Open, None, at(NOW)).unwrap();
-        let cash = book.add_account(conn, &[AccountRef::new(ws(), "cash-1")], &bagholder_book::import::wealthsimple_account_type("CASH"), AccountStatus::Open, None, at(NOW)).unwrap();
+        let lira = book.add_account(conn, &[AccountRef::new(ws(), "lira-1")], &bagholder_wealthsimple::account_types::account_type("SELF_DIRECTED_LIRA"), AccountStatus::Open, None, at(NOW)).unwrap();
+        let cash = book.add_account(conn, &[AccountRef::new(ws(), "cash-1")], &bagholder_wealthsimple::account_types::account_type("CASH"), AccountStatus::Open, None, at(NOW)).unwrap();
         World { _dir: dir, book, conn, lira, cash, broker: Statements { months: BTreeMap::new(), refuse: BTreeSet::new(), asked: vec![] }, n: 0, lira_keys: vec!["lira-1".into()], closed: BTreeSet::new() }
     }
 

@@ -3,10 +3,6 @@
 //! emptied from every store that holds it, one transaction per store. Every table
 //! of the book and the market cache belongs to exactly one kind, in the lists here
 //! and in `bagholder_book::clear::TABLES`; a test fails on a table none places.
-//! The earlier store's tables are placed in `carry::OLD_TABLES`: what it held was
-//! carried into these two at the first start of this build, and a kind cleared
-//! is emptied from it too (`carry::clear_old_store`), its carry flags kept so
-//! nothing comes back at the next start.
 
 use std::sync::Arc;
 
@@ -81,16 +77,14 @@ pub const CACHE_TABLES: &[(&str, Place)] = &[
     ("read_failures", Place::Of(Kind::Market)),
     // the tickers the filings were kept under before migration 6, for carrying the
     // book's told marks once
-    ("filings_carried", Place::Of(Kind::Market)),
     ("meta", Place::Meta),
     ("gen", Place::Kept),
     ("schema_migrations", Place::Kept),
 ];
 
 /// The market cache's `meta` keys the app keeps whatever is cleared: the last
-/// update check, and the mark that the earlier store was carried (so what it held
-/// is never carried again over what was cleared).
-pub const META_KEPT: &[&str] = &[crate::update::CHECK_KEY, crate::carry::CARRIED];
+/// update check.
+pub const META_KEPT: &[&str] = &[crate::update::CHECK_KEY];
 
 /// A cache `meta` key's kind, or `None` for one the app keeps. Every other key is
 /// what a source answered (a symbol's form at an exchange, a miss remembered for
@@ -167,9 +161,7 @@ pub fn clear(app: &Arc<App>, f: &Figures, kinds: &[Kind], now: bagholder_core::j
     // what a page kept of the book as it was is not shown again
     book.renew_id(now).map_err(|e| Refused::Failed(e.to_string()))?;
     clear_cache(&f.cache().map_err(Refused::Failed)?, kinds).map_err(Refused::Failed)?;
-    // and what the earlier store still holds of them: a cleared kind leaves no copy on this machine
-    crate::carry::clear_old_store(&app.home, kinds).map_err(Refused::Failed)?;
-    // and the copies a migration or a carry kept of the files as they were, which hold
+    // and the copies a migration kept of the files as they were, which hold
     // every kind: restoring one would bring back what was just cleared
     // (`snapshots/` beside the stores, `bagholder_sqlite::migrate::snapshot_dir`)
     match std::fs::remove_dir_all(app.home.join("snapshots")) {
@@ -206,8 +198,8 @@ mod tests {
         "2025-11-19T21:30:00Z".parse().unwrap()
     }
 
-    /// An app of its own on a home of its own: the earlier store, the book holding a
-    /// pulled month, and the figures built.
+    /// An app of its own on a home of its own: the book holding a pulled month, and
+    /// the figures built.
     fn app() -> (tempfile::TempDir, Arc<App>) {
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::home();
@@ -250,18 +242,6 @@ mod tests {
         CACHE_TABLES.iter().find(|(n, _)| *n == t).unwrap_or_else(|| panic!("the market cache's table {t} is in no kind")).1
     }
 
-    /// The earlier store in `app`'s data folder, read only.
-    fn old_store(app: &App) -> rusqlite::Connection {
-        rusqlite::Connection::open_with_flags(app.home.join(crate::figures::OLD_FILE), rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).unwrap()
-    }
-
-    /// What the book and the market cache hold, table by table: a start after a
-    /// clear must carry nothing back into them.
-    fn held(f: &Figures) -> (BTreeMap<String, i64>, BTreeMap<String, i64>, Vec<String>) {
-        let cache = f.cache().unwrap();
-        (counts(&f.book().unwrap().conn_for_tests()), counts(cache.connection()), cache_keys(cache.connection()))
-    }
-
     fn cache_keys(conn: &rusqlite::Connection) -> Vec<String> {
         conn.prepare("SELECT key FROM meta").unwrap().query_map([], |r| r.get(0)).unwrap().collect::<rusqlite::Result<_>>().unwrap()
     }
@@ -277,11 +257,6 @@ mod tests {
         };
         assert_eq!(f.book().unwrap().tables().unwrap(), listed(TABLES.iter().map(|(t, _)| *t).collect()), "the book's tables and bagholder_book::clear::TABLES");
         assert_eq!(tables(f.cache().unwrap().connection()), listed(CACHE_TABLES.iter().map(|(t, _)| *t).collect()), "the market cache's tables and CACHE_TABLES");
-        // the earlier store's, as its own schema makes them
-        let other = tempfile::tempdir().unwrap();
-        let old = bagholder_store::connect(other.path()).unwrap();
-        bagholder_store::schema::init_schema(&old).unwrap();
-        assert_eq!(tables(&old), listed(crate::carry::OLD_TABLES.iter().map(|(t, _)| *t).chain(["meta", "gen"]).collect()), "the earlier store's tables and carry::OLD_TABLES");
     }
 
     fn px_of(s: &str) -> bagholder_core::Dec {
@@ -377,31 +352,23 @@ mod tests {
         let spx = bagholder_sources::contract::Benchmark::Sp500;
         cache.store_benchmark_closes(spx, &[(day, px)], &src, t).unwrap();
         cache.store_benchmark_events(spx, &[(day, bagholder_sources::cache::TrackerEvent::Dividend(px))], &src, t).unwrap();
-        // the earlier store as a first start leaves it: its figures and orders carried
-        // and dropped, the rest carried and still held, a key of every kind
-        let old = bagholder_store::connect(&app.home).unwrap();
-        bagholder_store::relabel::ensure(&old).unwrap();
-        bagholder_store::schema::drop_figure_tables(&old, "2025-11-19T21:00:00Z").unwrap();
-        bagholder_store::schema::drop_order_tables(&old, "2025-11-19T21:00:00Z").unwrap();
-        fill(&old);
-        old.execute("DELETE FROM watchlist", []).unwrap();
-        bagholder_store::feeds::add_watch(&old, "SHOP", "TSX", "Shopify Inc.", "CAD", "", "2025-11-18T14:00:00Z").unwrap();
-        for (key, value) in [
-            ("synced_at", "2025-11-18T00:00:00Z"), ("journal_v2", "{}"), (bagholder_store::csvimport::WATCH_FILES_META, "{}"),
-            ("market_tiles", "[{\"symbol\": \"VIX\", \"exchange\": \"Index\"}]"), ("notify_seen:x", "m|a"), ("bars_source:OLD", "tmx|OLD"), ("update_check", "{}"),
-        ] {
-            old.execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, ?)", [key, value]).unwrap();
-        }
-        drop(old);
-        crate::carry::from_old_store(app, f, t).unwrap();
+        // a listing followed
+        let shop = bagholder_book::watched::ListingDraft {
+            found: None,
+            kind: bagholder_core::instrument::InstrumentKind::Security,
+            currency: bagholder_core::Currency::CAD,
+            refs: vec![bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::Listing, "SHOP@XTSE")],
+            name: bagholder_book::watched::ListingName { symbol: "SHOP".into(), venue_mic: Some("XTSE".into()), venue_name: None, name: Some("Shopify Inc.".into()) },
+        };
+        book.watch(&shop, t).unwrap();
         fill(cache.connection());
-        for key in ["bars_source:ABC", "tmx_form:ABC", crate::update::CHECK_KEY, crate::carry::CARRIED] {
+        for key in ["bars_source:ABC", "tmx_form:ABC", crate::update::CHECK_KEY] {
             cache.connection().execute("INSERT OR REPLACE INTO meta(key, value) VALUES (?, 'x')", [key]).unwrap();
         }
         // the notices: a notification, a stream's memory, the settings and a mark
         let notices = crate::notify::book(app).unwrap();
-        bagholder_store::feeds::add_notification(notices.notices(), "fills", "order:x", "Order filled", "", None, false, "2025-11-19T21:30:00Z").unwrap().unwrap();
-        bagholder_store::feeds::mark_told(notices.notices(), "news:ZZQQ@TSX", &["a release".to_string()], "2025-11-19T21:30:00Z").unwrap();
+        bagholder_market::stored::feeds::add_notification(notices.notices(), "fills", "order:x", "Order filled", "", None, false, "2025-11-19T21:30:00Z").unwrap().unwrap();
+        bagholder_market::stored::feeds::mark_told(notices.notices(), "news:ZZQQ@TSX", &["a release".to_string()], "2025-11-19T21:30:00Z").unwrap();
         crate::notify::set_settings(&notices, &serde_json::from_value(serde_json::json!({"fills": true})).unwrap()).unwrap();
         crate::notify::keep_mark(&notices, &Some((format!("{}x", crate::notify::WATERMARK), "m".into()))).unwrap();
         std::fs::write(app.ws_home().session_path(), "{}").unwrap();
@@ -413,7 +380,7 @@ mod tests {
         filled(&app);
         let dir = app.home.join("snapshots");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("bagholder-before-the-book-1.db"), "every kind").unwrap();
+        std::fs::write(dir.join("book-before-migration-1.db"), "every kind").unwrap();
         clear(&app, app.figures.get().unwrap(), &[Kind::Journal], now()).unwrap();
         assert!(!dir.exists(), "a snapshot holds every kind, the cleared one among them");
         // with none kept, a clear is still a clear
@@ -471,20 +438,6 @@ mod tests {
         assert!(b.setting(crate::notify::SETTINGS_KEY).unwrap().is_none() && b.setting(&format!("{}x", crate::notify::WATERMARK)).unwrap().is_none(), "the notification settings and marks are gone");
         assert!(!app.ws_home().session_path().exists(), "the login is gone");
         assert_eq!(f.read(|e| e.inputs().ledger.transactions.len()), Some(0), "the figures were built again from nothing");
-        // the earlier store holds nothing that was cleared, and keeps what stops the carry
-        let old = old_store(&app);
-        for (t, n) in counts(&old) {
-            if !["meta", "gen"].contains(&t.as_str()) {
-                assert_eq!(n, 0, "the earlier store's {t} after Clear all");
-            }
-        }
-        let keys = cache_keys(&old);
-        assert!(keys.iter().all(|k| crate::carry::OLD_META_KEPT.contains(&k.as_str())), "the earlier store keeps only its own keys: {keys:?}");
-        assert!(keys.iter().any(|k| k == bagholder_store::schema::FIGURES_MOVED_META), "and the flag that its figures were carried");
-        // a start after it carries nothing back
-        let before = held(f);
-        crate::carry::from_old_store(&app, f, now()).unwrap();
-        assert_eq!(held(f), before, "nothing carried back at the next start");
     }
 
     #[test]
@@ -503,8 +456,6 @@ mod tests {
             let book_before = counts(&f.book().unwrap().conn_for_tests());
             let src_before = sources(f);
             let cache_before = counts(f.cache().unwrap().connection());
-            let old_before = counts(&old_store(&app));
-            let old_keys_before = cache_keys(&old_store(&app));
             let settings_before = f.book().unwrap().setting(crate::notify::SETTINGS_KEY).unwrap();
             clear(&app, f, &[kind], now()).unwrap();
             let book_after = counts(&f.book().unwrap().conn_for_tests());
@@ -554,24 +505,6 @@ mod tests {
                 }
             }
             assert_eq!(app.ws_home().session_path().exists(), kind != Kind::Login, "{kind:?}: the login");
-            // the earlier store: the kind's rows and keys gone, every other kind's kept
-            let old = old_store(&app);
-            for (t, n) in counts(&old) {
-                match crate::carry::OLD_TABLES.iter().find(|(x, _)| *x == t) {
-                    Some((_, k)) => {
-                        assert!(old_before[&t] > 0, "the earlier store's {t} is empty before the clear, so the test proves nothing of it");
-                        assert_eq!(n, if *k == kind { 0 } else { old_before[&t] }, "{kind:?}: the earlier store's {t}");
-                    }
-                    None => assert!(["meta", "gen"].contains(&t.as_str()), "the earlier store's {t} is in no kind"),
-                }
-            }
-            let old_keys = cache_keys(&old);
-            let want: Vec<String> = old_keys_before.iter().filter(|k| crate::carry::old_meta_kind(k) != Some(kind)).cloned().collect();
-            assert_eq!(old_keys, want, "{kind:?}: the earlier store's keys");
-            // a start after it carries nothing back
-            let before = held(f);
-            crate::carry::from_old_store(&app, f, now()).unwrap();
-            assert_eq!(held(f), before, "{kind:?}: nothing carried back at the next start");
         }
     }
 
