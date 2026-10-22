@@ -1,5 +1,5 @@
-//! Replies recorded from the owner's own account are committed only after every
-//! value that identifies the owner is replaced by a stand-in
+//! Replies recorded from a real account are committed only after every value
+//! that identifies its holder is replaced by a stand-in
 //! (`docs/plans/stage-3b-wealthsimple.md`, "Anonymised, not scrubbed of
 //! figures"). Figures and tickers stay (owner, 2026-09-23).
 //!

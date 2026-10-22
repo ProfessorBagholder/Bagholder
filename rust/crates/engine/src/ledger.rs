@@ -814,7 +814,7 @@ impl<'a, 'm> Matcher<'a, 'm> {
     /// book holds: they arrived with no row, and arrive now, at no cost. Within
     /// the rows' rounding they are what the rounding left out; beyond it, a
     /// row stating units in staking brings the last reward its rows left out
-    /// (the owner's Polkadot, 4 November 2024: unstaked a day's reward more than
+    /// (a recorded Polkadot account, 4 November 2024: unstaked a day's reward more than
     /// every reward row states). Anything else stays beyond what the book held.
     fn arrived_unstated(&mut self, t: &Transaction, instrument: InstrumentId, stated: Dec, staking: bool) {
         let account = t.account;

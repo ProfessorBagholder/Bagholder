@@ -95,8 +95,8 @@ pub const RENEW_IN_THE_APP: &str = "Open Bagholder once so it renews its sign-in
 
 impl<'n> Client<'n> {
     /// A client on `net`, Wealthsimple's host paced on its one limiter: a
-    /// request at most every 150 ms, the pace the owner's own capture of their
-    /// whole history kept without a refusal (2026-09-24).
+    /// request at most every 150 ms, the pace a capture of a whole history kept
+    /// without a refusal (2026-09-24).
     pub fn new(net: &'n Net, file: SessionFile) -> Client<'n> {
         let host = bagholder_net::host_of(&crate::hosts::graphql_url());
         let pace = net.limiter().pace(&host);

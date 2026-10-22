@@ -76,7 +76,7 @@ pub fn kind(code: &str) -> Option<Kind> {
         "WD" => Kind::Withdrawal,
         "TRFIN" => Kind::TransferIn,
         "TRFOUT" => Kind::TransferOut,
-        // each below as the owner's statements showed it (2023-09 to 2026-08), with a row's words
+        // each below as recorded statements showed it (2023-09 to 2026-08), with a row's words
         // `Transfer out to ✉️ Bills` / `Transfer in`: between the person's own accounts
         "TRFOUTTF" => Kind::TransferOut,
         "TRFINTF" => Kind::TransferIn,

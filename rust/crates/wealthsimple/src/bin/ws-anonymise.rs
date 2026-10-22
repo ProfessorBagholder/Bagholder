@@ -1,8 +1,8 @@
-//! `ws-anonymise <capture.json> <out-dir>`: a capture made in the owner's own
-//! browser (a list of `{operationName, variables, reply}`) written out as one
+//! `ws-anonymise <capture.json> <out-dir>`: a capture made in the account
+//! holder's own browser (a list of `{operationName, variables, reply}`) written out as one
 //! file per reply, `<operation>-<n>.json`, every identifying value replaced
 //! (`bagholder_wealthsimple::anonymise`). Nothing else from the capture is kept:
-//! not the variables, which name the owner's accounts.
+//! not the variables, which name its accounts.
 
 use bagholder_core::json::{self, Value};
 use bagholder_wealthsimple::anonymise::{leaks, Anonymiser};
@@ -10,7 +10,7 @@ use bagholder_wealthsimple::anonymise::{leaks, Anonymiser};
 fn main() {
     let mut args: Vec<String> = std::env::args().collect();
     // `--as-sent`: the replies split into files as they are, for a pull on a
-    // copy of the owner's own book; such a folder stays on the owner's machine
+    // copy of the account holder's own book; such a folder stays on their machine
     let as_sent = args.iter().any(|a| a == "--as-sent");
     args.retain(|a| a != "--as-sent");
     let [_, input, out] = args.as_slice() else {

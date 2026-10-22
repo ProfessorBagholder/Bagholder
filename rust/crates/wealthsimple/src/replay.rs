@@ -1,7 +1,7 @@
 //! Wealthsimple answered from recorded replies: a directory of the files
 //! `ws-anonymise` writes (`<operation>-<n>.json`, `positions@<account>@<day>.json`),
 //! each one reply as Wealthsimple sent it. The adapter's tests read their fixtures
-//! through it, and a pull can run on a whole capture of the owner's history
+//! through it, and a pull can run on a whole captured history
 //! (`bagholder pull-broker --replay <dir>`) without signing in, exactly as it runs
 //! on the network: the same reading, the same records.
 

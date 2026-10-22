@@ -6,7 +6,7 @@
 //! from the replies kept beside it in the record (`crate::record`), never worked
 //! out. A row whose status is not executed moves nothing and raises nothing.
 //!
-//! What the rows were found to state (the owner's history, 2026-09-24):
+//! What the rows were found to state (a recorded history, captured 2026-09-24):
 //! - `amountSign` is not the cash's direction on a trade: a buy and a sale are
 //!   both `positive`, and a multi-leg row's sign is the opposite of its legs'
 //!   net cash. A trade's cash takes its direction from what the row is (a buy
@@ -26,7 +26,7 @@
 //! - a transfer in from another institution states the value asked for, not what
 //!   arrived: the cash arrives days later, less the other institution's fee or
 //!   more by its interest, and its detail leaves the value that arrived empty
-//!   (every one in the owner's history, 2026-09-24). What arrived is what the
+//!   (every one in the history captured 2026-09-24). What arrived is what the
 //!   account's positions show rising from the day before the row to the day the
 //!   detail says it completed, net of the book's own moves.
 //! - a withdrawal from a registered account states its gross amount; the tax
@@ -304,7 +304,7 @@ fn map_record(ctx: &MapContext, v: &Value) -> Result<Mapped, Failed> {
 /// Wealthsimple documents (`docs/plans/broker-check-reserved-cash.md`; its help
 /// centre, read 2026-10-01): a limit buy working in full holds the amount its row
 /// states (quantity × limit × multiplier: a $0.70 limit on one contract of 100
-/// states $70.00, the hold seen on the owner's account); any other buy holds an
+/// states $70.00, the hold seen in a recorded reply); any other buy holds an
 /// amount it does not state (a market buy "to cover the full balance of your
 /// trade in the event of a sudden price movement", article 360058451433; an IPO
 /// bid's top of range plus a buffer, 50825154775451; a partly filled order's
@@ -312,7 +312,7 @@ fn map_record(ctx: &MapContext, v: &Value) -> Result<Mapped, Failed> {
 /// contracts less the premium (43198629134235), which the engine applies to the
 /// contracts it opens; money leaving the account is reserved in an amount not
 /// stated (360058451453). A sell holds nothing: the units Wealthsimple states
-/// are not net of a working sell (the owner's account, 2026-10-03), nor its cash.
+/// are not net of a working sell (a recorded reply, 2026-10-03), nor its cash.
 fn hold(root: &Node, row: &Row) -> Result<Option<HoldDraft>, Failed> {
     if crate::adapter::settled(row.status) != Some(false) {
         return Ok(None);

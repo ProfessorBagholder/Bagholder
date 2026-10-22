@@ -192,7 +192,7 @@ pub fn tick(p: Dec) -> Dec {
 }
 
 /// Why Wealthsimple would not take `p` as a price: more decimal places than an order
-/// carries (its answer on the owner's record, 2026-09-10: "Limit price has too many
+/// carries (its answer in the recorded replies, 2026-09-10: "Limit price has too many
 /// decimal places. Max allowed: 2"). The price is never rounded for the person.
 pub fn off_tick(name: &str, p: Dec) -> Option<String> {
     (tick(p) != p).then(|| format!("{name} {p} has more decimal places than Wealthsimple takes: two from $1, four below it."))
