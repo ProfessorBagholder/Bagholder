@@ -341,13 +341,18 @@ fn the_markets_record_is_read_beside_a_companys_only_while_the_companys_lists_no
 fn a_companys_record_listing_nothing_to_pay_has_the_exchanges_record_read_beside_it() {
     // Harvest's page for RDDY as of 2026-09-23 lists the distribution paid
     // 2026-09-04 and none after; TMX lists the one Harvest declared on
-    // 2026-09-23, going ex 2026-09-29 and paid 2026-10-06
+    // 2026-09-23, going ex 2026-09-29 and paid 2026-10-06. Harvest's press page
+    // is the one from before that day's release (whose figures would otherwise
+    // answer first): its newest, August's, adds nothing the page lacks
     let dir = tempfile::tempdir().unwrap();
     let at = t("2026-09-26T16:00:00Z");
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
     common::instrument_in_book(&dir.path().join("book.db"), id(1), "security", "CAD");
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
-    let recorded = Arc::new(common::Recorded::new().with("https://harvestportfolios.com/etf/rddy/", 200, "harvest", "page-rddy.html").with_market_record("RDDY"));
+    let recorded = Arc::new(common::Recorded::new().with("https://harvestportfolios.com/etf/rddy/", 200, "harvest", "page-rddy.html")
+            .with("https://harvestportfolios.com/high-income-shares/press/", 200, "harvest", "press-income-shares-2026-09-22.html")
+            .with("https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-august-2026-distributions/", 200, "harvest", "release-income-shares-2026-08.html")
+            .with_market_record("RDDY"));
     let net = common::net(&recorded, "2026-09-26T16:00:00Z");
     let zone = eastern();
     let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };

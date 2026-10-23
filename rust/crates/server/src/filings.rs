@@ -645,7 +645,7 @@ pub fn release_notice<T: Notable>(app: &Arc<App>, key: &ListingKey, rows: &[T]) 
     let title = if rows.len() == 1 { "Press release · ".to_string() } else { format!("{} press releases · ", rows.len()) } + sym;
     // A release announcing distributions carries the figures beneath the headline, since the
     // headline alone ("Announces August 2026 Distributions") says nothing a holder can act on.
-    let mut detail = if is_distribution_release(&head) { distribution_detail(app, key) } else { String::new() };
+    let mut detail = if is_distribution_release(&head) { distribution_detail(app, key, &first.moment()) } else { String::new() };
     if detail.is_empty() {
         // what the source said beneath its own headline, where it said anything
         detail = first.summary().trim().to_string();
@@ -675,13 +675,13 @@ pub fn stamp_day(iso: &str) -> String {
 }
 
 /// What a distribution release means for this listing, from the issuer's own
-/// declared record: the amount just announced, when it goes ex and when it is
-/// paid, and the one it replaces.
+/// declared record (and the exchange's beside it): the amount just announced,
+/// when it goes ex and when it is paid, and the one before it.
 ///
 /// A release headline says only that distributions were announced; the figure
 /// is what the holder wants, and reading it from the record rather than the
 /// release's prose keeps it the same figure the Cashflow tab pays from.
-pub fn distribution_detail(app: &Arc<App>, key: &ListingKey) -> String {
+pub fn distribution_detail(app: &Arc<App>, key: &ListingKey, released: &str) -> String {
     let Some(f) = app.figures.get() else { return String::new() };
     // the release is the announcement; the record it comes from carries the figures, and it
     // is read now rather than when it is next due, so the notice is not a day behind it.
@@ -689,7 +689,7 @@ pub fn distribution_detail(app: &Arc<App>, key: &ListingKey) -> String {
     // one has them.
     let detail = read_record_for_notice(app, f, key)
         .map_err(|e| format!("{}'s declared distributions could not be read again: {e}", key.named()))
-        .and_then(|read| f.book().map_err(|e| format!("The book could not be read for {}'s distributions: {e}", key.named())).and_then(|book| distribution_detail_in(&book, &read)));
+        .and_then(|read| f.book().map_err(|e| format!("The book could not be read for {}'s distributions: {e}", key.named())).and_then(|book| distribution_detail_in(&book, &read, released)));
     went(app, "distributions", detail).unwrap_or_default()
 }
 
@@ -737,10 +737,15 @@ fn frequency_word(per_year: u32) -> String {
     }
 }
 
-/// The payer's own declared record, as the book keeps it: the newest declaration
-/// of the instruments given (the one listing a symbol names), its frequency where
-/// one is stated, and the amount it replaces when that differs.
-pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[bagholder_core::InstrumentId]) -> Result<String, String> {
+/// The payer's declared record, as the book keeps it: the newest declaration of
+/// the instruments given (the one listing a symbol names), from the company's
+/// record or the exchange's beside it, its frequency where one is stated, and
+/// the amount before it.
+///
+/// A declaration going ex before the release `released` (its moment) is not
+/// what the release announces: the records have not listed that one yet, so the
+/// line says it is the last one, never passes it off as the new one.
+pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[bagholder_core::InstrumentId], released: &str) -> Result<String, String> {
     let [id] = instruments else { return Ok(String::new()) };
     let (declared, frequencies) = match (book.declared(), book.frequencies()) {
         (Ok(d), Ok(f)) => (d, f),
@@ -748,9 +753,16 @@ pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[baghol
     };
     let Some(read) = declared.get(id) else { return Ok(String::new()) };
     let mut items: Vec<&bagholder_book::facts::DeclaredRow> = read.items.iter().collect();
+    // the exchange's record lists a declaration the company's has not yet
+    for m in read.market.iter().flat_map(|m| m.items.iter()) {
+        if items.iter().all(|r| r.ex_date != m.ex_date) {
+            items.push(m);
+        }
+    }
     items.sort_by(|a, b| b.ex_date.cmp(&a.ex_date));
     let Some(latest) = items.first() else { return Ok(String::new()) };
-    let mut out = format!("{} a share", per_unit(&latest.amount));
+    let announced = bagholder_model::dates::head10(released).parse::<bagholder_core::jiff::civil::Date>().map_or(true, |day| latest.ex_date >= day);
+    let mut out = format!("{}{} a share", if announced { "" } else { "Last: " }, per_unit(&latest.amount));
     if let Some(f) = frequencies.get(id) {
         out += &format!(", {}", frequency_word(f.per_year));
     }
@@ -758,10 +770,8 @@ pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[baghol
     if let Some(p) = latest.pay_date {
         out += &format!(", paid {}", stamp_day(&p.to_string()));
     }
-    if let Some(was) = items.get(1) {
-        if was.amount != latest.amount {
-            out += &format!(" · was {}", per_unit(&was.amount));
-        }
+    if let (true, Some(was)) = (announced, items.get(1)) {
+        out += &format!(" · was {}", per_unit(&was.amount));
     }
     Ok(out)
 }

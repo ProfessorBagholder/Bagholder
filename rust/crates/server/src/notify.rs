@@ -1298,12 +1298,12 @@ mod tests {
 
     #[test]
     fn test_a_distribution_release_carries_the_figures_and_a_way_to_read_it() {
-        // A headline that says only "Announces August 2026 Distributions" tells a holder nothing they
-        // can act on: the notice carries the amount, when it goes ex and is paid, and the one it
-        // replaces, from the issuer's own declared record, and it opens the release itself.
+        // A headline that says only "Announces September 2026 Distributions" tells a holder nothing
+        // they can act on: the notice carries the amount it announces, when it goes ex and is paid,
+        // and the one before it, from the issuer's own declared record, and it opens the release.
         let (_g, app, c) = setup();
         set_settings(&c, &serde_json::from_value(json!({"releasesAll": true})).unwrap()).unwrap();
-        declared_in_book(&app, "RDDY", &[("2026-08-31", "2026-09-04", "0.15"), ("2026-07-31", "2026-08-06", "0.20")], Some(12));
+        declared_in_book(&app, "RDDY", &[("2026-09-29", "2026-10-06", "0.15"), ("2026-08-31", "2026-09-04", "0.20")], Some(12));
         let first = bagholder_market::stored::feeds::NewsItem {
             id: "tmx:7".into(), headline: "Harvest High Income Shares ETFs Announces August 2026 Distributions".into(),
             source: "Business Wire".into(), url: "https://money.tmx.com/en/quote/RDDY/news/7".into(),
@@ -1322,11 +1322,27 @@ mod tests {
         let lines: Vec<&str> = body.split('\n').collect();
         assert_eq!(f(&rows[0], "title"), "Press release · RDDY");
         assert_eq!(lines[0], "Harvest ETFs Announces September 2026 Distributions");
-        assert_eq!(lines[1], "$0.15 a share, monthly · ex Aug 31, paid Sep 4 · was $0.20");
+        assert_eq!(lines[1], "$0.15 a share, monthly · ex Sep 29, paid Oct 6 · was $0.20");
         assert_eq!(f(&rows[0]["extra"], "url"), "https://money.tmx.com/en/quote/RDDY/news/7");
         assert_eq!(f(&rows[0]["extra"], "symbol"), "RDDY");
         assert!(app.feeds.record_reads.load(std::sync::atomic::Ordering::SeqCst) > 0,
                 "the record is read again so the notice is not a day behind the release");
+    }
+
+    #[test]
+    fn test_a_distribution_the_records_have_not_listed_yet_is_never_shown_as_the_one_announced() {
+        // 2026-10-23: Harvest announced October's distributions at 5:30, and its page still ended
+        // at September's (ex 2026-09-29, paid 2026-10-06): that one is the last, said so, never
+        // the announcement; and an unchanged amount still shows the one before it
+        let (_g, app, _c) = setup();
+        declared_in_book(&app, "RDDY", &[("2026-09-29", "2026-10-06", "0.15"), ("2026-08-31", "2026-09-04", "0.15")], Some(12));
+        let key = bagholder_core::ListingKey::on("RDDY", "TSX").unwrap();
+        let release = |at: &str| news_item("tmx:9", "Harvest High Income Shares ETFs Announces October 2026 Distributions", "", "", at);
+        let (_, body) = crate::feeds::release_notice(&app, &key, &[release("2026-10-23T09:30:00Z")]);
+        assert_eq!(body.split('\n').nth(1), Some("Last: $0.15 a share, monthly · ex Sep 29, paid Oct 6"));
+        // the September release, out before that distribution went ex, announced it
+        let (_, body) = crate::feeds::release_notice(&app, &key, &[release("2026-09-23T09:30:00Z")]);
+        assert_eq!(body.split('\n').nth(1), Some("$0.15 a share, monthly · ex Sep 29, paid Oct 6 · was $0.15"));
     }
 
     #[test]

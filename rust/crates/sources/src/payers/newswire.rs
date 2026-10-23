@@ -8,7 +8,7 @@
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::Timestamp;
 
-use crate::html::{html_tables, unescape};
+use crate::html::{html_tables, text};
 use crate::reply::Mismatch;
 
 pub const HOST: &str = "www.newswire.ca";
@@ -32,23 +32,6 @@ fn listed_day(s: &str) -> Option<Date> {
     let day: i8 = it.next()?.strip_suffix(',')?.parse().ok()?;
     let year: i16 = it.next()?.trim_end_matches(',').parse().ok()?;
     Date::new(year, month, day).ok()
-}
-
-fn text(html: &str) -> String {
-    let mut out = String::new();
-    let mut inside = false;
-    for c in html.chars() {
-        match c {
-            '<' => inside = true,
-            '>' => {
-                inside = false;
-                out.push(' ');
-            }
-            c if !inside => out.push(c),
-            _ => {}
-        }
-    }
-    unescape(&out).split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// The releases an organization's page lists, newest first.
