@@ -75,10 +75,11 @@ pub fn merge(conn: &Connection) -> rusqlite::Result<Merged> {
     }
     for members in sets.values() {
         // the oldest account keeps its row and id
-        let mut by_age: Vec<(String, String, String)> = Vec::new();
+        // two made in one read share a moment: the one the book added first
+        let mut by_age: Vec<((String, i64), String, String)> = Vec::new();
         for id in members {
-            let (created, status): (String, String) = conn.query_row("SELECT created_at, status FROM accounts WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?)))?;
-            by_age.push((created, id.clone(), status));
+            let (created, rowid, status): (String, i64, String) = conn.query_row("SELECT created_at, rowid, status FROM accounts WHERE id = ?1", [id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?;
+            by_age.push(((created, rowid), id.clone(), status));
         }
         by_age.sort();
         let keep = by_age[0].1.clone();
