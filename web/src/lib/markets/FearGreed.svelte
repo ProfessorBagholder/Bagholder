@@ -118,7 +118,7 @@
   {#if !g}
     <div class="muted" style="font-size:12px">{held.loading ? 'Reading…' : 'The index did not answer.'}</div>
   {:else}
-    <div style="display:grid;grid-template-columns:280px minmax(0,1fr){parts.length ? ' minmax(0,1.15fr)' : ''};gap:26px;align-items:start">
+    <div class="fg-cols" style="display:grid;grid-template-columns:280px minmax(0,1fr){parts.length ? ' minmax(0,1.15fr)' : ''};gap:26px;align-items:start">
       <!-- dial -->
       <div style="width:{W}px;max-width:100%">
         <svg viewBox="0 0 {W} {H}" style="width:100%;height:auto;display:block" aria-hidden="true">

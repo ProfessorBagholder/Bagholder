@@ -206,7 +206,7 @@
 
 <div style="padding:20px;display:flex;flex-direction:column;gap:14px">
   <!-- KPI row -->
-  <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
+  <div class="tiles">
     <div class="card elev-sm kpi"><div class="lbl">Realized P&amp;L</div><div class="v {cls(k.realized)}" use:roll={money(k.realized)}></div><div class="s">{k.count}{k.count === 1 ? ' trade' : ' trades'}</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Win rate</div><div class="v" use:roll={k.winRate == null ? '—' : pctPlain(k.winRate)}></div><div class="s">{k.wins} W · {k.losses} L · {k.breakeven} BE</div></div>
     <div class="card elev-sm kpi"><div class="lbl">Profit factor</div><div class="v" use:roll={pf}></div><div class="s">W {money0(k.grossWin)} · L {money0(k.grossLoss)}</div></div>
@@ -216,7 +216,7 @@
   </div>
 
   <!-- equity + annualized returns -->
-  <div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">
+  <div class="split" style="--cols:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr)">
     <!-- equity curve -->
     <div class="card elev-sm" style="padding:16px 18px 12px">
       <div style="display:flex;align-items:baseline;gap:14px;margin-bottom:8px">
@@ -254,7 +254,7 @@
     </div>
 
     <!-- annualized returns -->
-    <div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0;contain:size">
+    <div class="card elev-sm size-to-row" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">
       <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:2px">
         <h5>Annualized returns</h5>
         <div style="display:flex;gap:4px">
@@ -290,7 +290,7 @@
   </div>
 
   <!-- monthly + grade -->
-  <div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px">
+  <div class="split" style="--cols:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr)">
     <!-- monthly P&L -->
     <div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column">
       <div style="display:flex;align-items:baseline;gap:12px"><h5>Monthly P&amp;L</h5></div>
@@ -342,11 +342,11 @@
   </div>
 
   <!-- by symbol + review queue -->
-  <div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);gap:14px;height:342px">
+  <div class="split" style="--cols:calc((100% - 70px) / 6 * 4 + 42px) minmax(0,1fr);--row:342px">
     <!-- by symbol -->
     <div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">
       <div style="display:flex;align-items:baseline;gap:12px;margin-bottom:6px"><h5>By symbol</h5></div>
-      <div class="scroll" style="flex:1;min-height:0">
+      <div class="scroll-xy" style="flex:1;min-height:0">
         <table class="table"><thead><tr>
           {#each bySymCols as c (c.key)}
             {@const on = sort.bySymbol.key === c.key}

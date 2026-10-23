@@ -118,7 +118,7 @@
       <div class="muted empty" style="font-size:12px">Nothing held or owed in the selection.</div>
     </div>
   {:else}
-    <div style="display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:14px">
+    <div class="tiles" style="--n:3">
       <div class="card elev-sm kpi"><div class="lbl">Net worth</div><div class="v" use:roll={money0(nw.netWorth)}></div><div class="s">Assets less liabilities</div></div>
       <div class="card elev-sm kpi"><div class="lbl">Assets</div><div class="v" use:roll={money0(nw.assetsTotal)}></div><div class="s">{nw.assets.length === 1 ? '1 asset' : nw.assets.length + ' assets'}</div></div>
       <div class="card elev-sm kpi"><div class="lbl">Liabilities</div><div class="v" use:roll={money0(nw.liabilitiesTotal)}></div><div class="s">{nw.liabilities.length === 1 ? '1 debt' : nw.liabilities.length + ' debts'}</div></div>
@@ -188,7 +188,7 @@
       {/if}
     </div>
     <!-- the two cards one height, each list scrolling inside its card, as the app's paired cards do -->
-    <div style="display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px;height:380px">
+    <div class="split" style="--cols:repeat(2,minmax(0,1fr));--row:380px">
       {#each [['Assets', 'Asset', 'Value', 'nwAssets', nw.assets], ['Liabilities', 'Debt', 'Balance', 'nwLiabilities', nw.liabilities]] as const as [heading, what, amount, table, rows] (heading)}
         <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0">
           <h5 style="margin-bottom:4px">{heading}</h5>

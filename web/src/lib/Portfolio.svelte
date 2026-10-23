@@ -108,18 +108,18 @@
 
 <div style="padding:20px;min-height:380px;display:flex;flex-direction:column;gap:14px">
   <!-- tiles -->
-  <div style="display:grid;grid-template-columns:repeat({pf.hasMargin ? 6 : 5},minmax(0,1fr));gap:14px">
+  <div class="tiles" style="--n:{pf.hasMargin ? 6 : 5}">
     {#each tiles as t (t.label)}
       <div class="card elev-sm kpi"><div class="lbl">{t.label}</div><div class="v {t.vcls}" use:roll={t.value}></div><div class="s">{t.sub}</div></div>
     {/each}
   </div>
 
-  <div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 2 + 14px) minmax(0,1fr);gap:14px;align-items:stretch">
+  <div class="split" style="--cols:calc((100% - 70px) / 6 * 2 + 14px) minmax(0,1fr);align-items:stretch">
     <!-- Allocation card (portfolioPieHtml → donutCardHtml) -->
     <div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">
       <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px"><h5>Allocation</h5></div>
       {#if allocItems.length}
-        <div style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">
+        <div class="pie" style="display:flex;gap:16px;align-items:center;justify-content:center;flex:1;min-height:0">
           <Donut items={allocItems} total={pf.allocationTotal} centreLabel={allocHasCash ? 'Holdings + cash' : 'Market value'} side="l" />
         </div>
       {:else}
@@ -167,7 +167,7 @@
     {#if !sec.length && !reg.length}
       <div class="muted empty" style="font-size:12px">No open positions in scope.</div>
     {:else}
-      <div style="display:grid;grid-template-columns:minmax(max-content,1fr) minmax(240px,340px) minmax(240px,340px) minmax(max-content,1fr);column-gap:40px;align-items:center">
+      <div class="pies" style="display:grid;grid-template-columns:minmax(max-content,1fr) minmax(240px,340px) minmax(240px,340px) minmax(max-content,1fr);column-gap:40px;align-items:center">
         <div style="display:contents">
           <Donut items={sec} total={null} centreLabel="Sectors" centreText={expCount(exposure.sectors)} side="l" size="100%" legendFirst />
         </div>

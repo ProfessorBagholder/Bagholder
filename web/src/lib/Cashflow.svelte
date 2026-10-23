@@ -124,7 +124,7 @@
 </script>
 
 <div style="padding:20px;display:flex;flex-direction:column;gap:14px;min-height:380px">
-  <div style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
+  <div class="tiles">
     {#each c.tiles as t (t.label)}
       {#if t.kind === 'margin'}
         <div class="card elev-sm kpi"><div class="lbl">Margin used</div><div class="tab v" use:roll={money0(t.marginUsed)}></div><div class="s">{t.interestPerMonth === null ? '' : money0(t.interestPerMonth) + '/mo margin interest'}</div></div>
@@ -199,8 +199,8 @@
 
   <div class="card elev-sm" style="padding:16px 18px">
     <h5 style="margin-bottom:4px">Cashflow Positions</h5>
-    <div class="scroll" style="max-height:344px">
-      <table class="table" style="font-size:12px;table-layout:fixed">
+    <div class="scroll-xy" style="max-height:344px">
+      <table class="table" style="font-size:12px;table-layout:fixed;min-width:900px">
         <thead><tr>
           {#each ycols as col (col.key)}
             {@const on = sort.yoc.key === col.key}
@@ -237,11 +237,11 @@
     </div>
   </div>
 
-  <div style="display:grid;grid-template-columns:calc((100% - 70px) / 6 * 3 + 28px) minmax(0,1fr);gap:14px;height:380px">
+  <div class="split" style="--cols:calc((100% - 70px) / 6 * 3 + 28px) minmax(0,1fr);--row:380px">
     <div class="card elev-sm" style="padding:16px 18px 12px;display:flex;flex-direction:column;min-height:0">
       <div style="display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:10px"><h5>Allocation</h5></div>
       {#if pie.items.length}
-        <div id="piePlot" style="display:flex;gap:28px;align-items:center;flex:1;min-height:0" onmouseleave={() => (pieH = -1)} role="presentation">
+        <div id="piePlot" class="pie" style="display:flex;gap:28px;align-items:center;flex:1;min-height:0" onmouseleave={() => (pieH = -1)} role="presentation">
           <div style="position:relative;flex:none;width:max(200px, min(322px, 100% - 198px));aspect-ratio:1/1">
             <svg viewBox="0 0 120 120" style="width:100%;height:100%;display:block">
               {#each pieArcs as arc (arc.i)}

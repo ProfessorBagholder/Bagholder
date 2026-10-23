@@ -150,7 +150,7 @@
 {/snippet}
 
 {#if s && volume && float}
-  <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:stretch">
+  <div class="split" style="--cols:minmax(0,1fr) minmax(0,1fr);align-items:stretch">
     {@render ringCard(volume)}
     {@render ringCard(float)}
   </div>

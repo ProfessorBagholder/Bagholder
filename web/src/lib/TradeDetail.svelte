@@ -341,9 +341,9 @@
 
   {#if !trade.listing}
     <!-- facts + executions | thesis/grade/tags -->
-    <div style="display:grid;grid-template-columns:minmax(0,1fr) minmax(0,1fr);gap:14px;align-items:stretch;height:372px">
+    <div class="split" style="--cols:minmax(0,1fr) minmax(0,1fr);--row:372px;align-items:stretch">
       <div class="card elev-sm" style="padding:16px 18px;display:flex;flex-direction:column;min-height:0">
-        <div class="rule-b" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:0 0 14px">
+        <div class="rule-b stats" style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:8px;padding:0 0 14px">
           {#if trade.holding}
             {@render fact('Qty', qty(trade.qty))}
             {@render fact('Avg', px(trade.avg ?? null))}

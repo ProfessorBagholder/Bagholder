@@ -176,7 +176,7 @@
 </script>
 
 <div id="mtRow" bind:this={row} style={tileAdd ? 'position:relative;z-index:30' : 'position:relative'}>
-  <div id="mtGrid" bind:this={grid} style="display:grid;grid-template-columns:repeat(6,minmax(0,1fr));gap:14px">
+  <div id="mtGrid" bind:this={grid} class="tiles">
     {#each shown as t (t.symbol)}
       <div class="mt-cell" data-sym={t.symbol}>
         <div class="card elev-sm kpi mt-tile" class:mt-drag={dragSym === t.symbol} data-sym={t.symbol} data-ex={t.exchange} onpointerdown={(e) => onPointerDown(e, t.symbol)}>

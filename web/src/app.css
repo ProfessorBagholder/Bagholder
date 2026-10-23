@@ -449,3 +449,45 @@ html{scrollbar-gutter:stable}
 .scroll.scrolling::-webkit-scrollbar-thumb,.scroll-xy.scrolling::-webkit-scrollbar-thumb{background:rgba(var(--ink-rgb),.22);border-color:var(--surface)}
 .scroll,.scroll-xy{scrollbar-color:transparent transparent;scrollbar-width:thin}
 .scroll.scrolling,.scroll-xy.scrolling{scrollbar-color:rgba(var(--ink-rgb),.22) transparent}
+
+/* Page layout at any width. Above 960px every row reads as it always has: the
+   tile rows in their columns, the side-by-side cards at their set split and
+   height. Narrower, the tiles wrap to three a row (two on a phone), the
+   side-by-side cards stack (each at most its row's height, a donut card at
+   whatever it needs), headers wrap their controls, and a table wider than its
+   card scrolls sideways inside it. */
+.tiles{display:grid;grid-template-columns:repeat(var(--n,6),minmax(0,1fr));gap:14px}
+.split{display:grid;grid-template-columns:var(--cols);gap:14px;height:var(--row,auto)}
+.size-to-row{contain:size}   /* as tall as the card beside it, not its own list */
+@media (max-width:960px){
+  body{padding:12px}
+  #app{min-height:calc(100vh - 24px)}
+  .tiles{grid-template-columns:repeat(3,minmax(0,1fr))}
+  .split{grid-template-columns:minmax(0,1fr);height:auto}
+  .split > *{max-height:var(--row,none)}
+  .split > :has(.pie){max-height:none}
+  .size-to-row{contain:none}
+  .card > div:first-child{flex-wrap:wrap;row-gap:8px}
+  .tabbar{overflow-x:auto;scrollbar-width:none}
+  .tabbar::-webkit-scrollbar{display:none}
+  .fg-cols{grid-template-columns:minmax(0,1fr) !important}
+  .pies{grid-template-columns:repeat(2,minmax(0,1fr)) !important;row-gap:20px}
+  .stats{grid-template-columns:repeat(3,minmax(0,1fr)) !important}
+  .si-wide{overflow-x:auto;margin:0 -16px}
+  .si-wide > *{min-width:820px;margin:0 !important}
+  .mseg{max-width:100%;overflow-x:auto;scrollbar-width:none}
+}
+@media (max-width:560px){
+  body{padding:0}
+  #app{border-radius:0;box-shadow:none;min-height:100vh}
+  .tiles,.stats{grid-template-columns:repeat(2,minmax(0,1fr)) !important}
+  .pie{flex-direction:column}
+  .pies{grid-template-columns:minmax(0,1fr) !important;justify-items:center}
+  .pies > * > *{justify-self:center !important;width:min(100%,200px) !important}
+  .pies > :first-child > :first-child{order:1}   /* each ring over its own legend */
+  .pies > :first-child > :last-child{order:0}
+  .pies > :last-child > *{order:2}
+  #hdr{gap:12px !important;padding:10px 16px !important}
+  #hdr .ver{display:none}
+  .tabbar{padding:0 16px !important}
+}
