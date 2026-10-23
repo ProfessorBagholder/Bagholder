@@ -42,8 +42,9 @@ For the next Architect session, or this one after a compact. Read this whole fil
 1. Read the brief or plan, then the diff. For every required change, find its code and the test that holds it.
 2. Plant the reverse of the key changes and confirm the test fails. Use `<scratchpad>/plant548.sh`-style scripts, one build folder per clone (`CARGO_TARGET_DIR=$PWD/target RUSTC_WRAPPER=`; a shared folder reuses a test binary across worktrees with the wrong `CARGO_MANIFEST_DIR` baked in, brief 51's addendum), and `flock -o /tmp/bagholder-build.lock nice -n 10 cargo test --locked …` (`-o` closes the lock before the command runs; without it the sccache server cargo starts inherits the lock and every later build waits forever, 2026-10-21), one build at a time.
 3. Check outside facts against a primary source.
-4. Full suites only on CI: the one run that starts on the PR's push is the merge evidence. Never dispatch a run or push a throwaway branch to prove one test, and never rerun a CI job to retry a test; rerun the failing test locally. A job is rerun only for a failure outside the code that its log names (a runner not acquired, a registry timeout), quoted in the PR (brief 51's addenda).
-5. This server's CPU (Pentium G4400, no AVX) is slower than a Pi 5 for model work. Its iGPU isn't usable by this account, so don't benchmark models here; use the kit on the Mac.
+4. A recorded page holds the part the reader reads (a release's article, a press page's list), its first line saying what was cut, never the whole page, unless the reader's correctness rests on the page around it, which the test then says. Recorded pages are most of the repository's growth (brief 75 §12), and the owner has said so. Set on #602, 2026-10-23.
+5. Full suites only on CI: the one run that starts on the PR's push is the merge evidence. Never dispatch a run or push a throwaway branch to prove one test, and never rerun a CI job to retry a test; rerun the failing test locally. A job is rerun only for a failure outside the code that its log names (a runner not acquired, a registry timeout), quoted in the PR (brief 51's addenda).
+6. This server's CPU (Pentium G4400, no AVX) is slower than a Pi 5 for model work. Its iGPU isn't usable by this account, so don't benchmark models here; use the kit on the Mac.
 
 ## 4. The machines
 
