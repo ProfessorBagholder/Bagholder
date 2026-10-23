@@ -8,8 +8,9 @@ test('a release that can be installed is a button, and pressing it asks for the 
   await openWithStatus(page, request, { updateAvailable: true, canUpdate: true, latestVersion: 'v9.9.9' })
   let asked = 0
   await page.route('**/api/update', (route) => { asked++; return route.fulfill({ json: { ok: true } }) })
-  // counted once the request is made, never on the click's own timing (#530)
-  const made = page.waitForRequest('**/api/update')
+  // counted once the request is answered, after the route above has counted it:
+  // neither the click's own timing (#530) nor the request's (the route runs after it)
+  const made = page.waitForResponse('**/api/update')
   await page.getByRole('button', { name: 'Update to v9.9.9' }).click()
   await made
   expect(asked).toBe(1)
