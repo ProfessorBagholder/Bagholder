@@ -4,6 +4,8 @@ Every decision the owner has made about the app and the work, newest first, one 
 
 ## 2026-10-22
 
+- **A monthly average is over the period's months, paying or not.** A past year's "/mo avg" is its sum over 12, this year's is over its months so far (this month among them), and Last 12 months' is over 12; it was over the months that paid, so 2024's $2,990 read $427/mo where twelve months of that is $5,124. Approved by the owner ("go", 2026-10-22). Held by: `server/src/demo.rs` `a_year_s_monthly_average_is_over_its_months_paying_or_not`, and the model's cases.
+
 - **Nothing visible is built from a brief without the owner asking for it.** A brief proposes a change to what the person sees only as the owner's decision, and only what the owner asks for is built. The header line "Matches Wealthsimple as of …", built from brief 75 §5, was reverted (#595). The owner: "that's not in alignment with any UI/UX practice, I did not request it, and it will look stupid and ugly." Held by: review only.
 
 ## 2026-10-21

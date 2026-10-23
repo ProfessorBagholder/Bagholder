@@ -88,19 +88,19 @@
       {
         "count": 1,
         "label": "2026 YTD",
-        "perMonth": 15.0,
+        "perMonth": 1.666667,
         "total": 15.0
       },
       {
         "count": 1,
         "label": "All time",
-        "perMonth": 15.0,
+        "perMonth": 7.5,
         "total": 15.0
       },
       {
         "count": 1,
         "label": "Last 12 months",
-        "perMonth": 15.0,
+        "perMonth": 1.25,
         "total": 15.0
       },
       {

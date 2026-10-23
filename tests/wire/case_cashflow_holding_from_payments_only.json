@@ -754,25 +754,25 @@
         {
           "label": "2025",
           "total": 60.0,
-          "perMonth": 60.0,
+          "perMonth": 5.0,
           "count": 1
         },
         {
           "label": "2026 YTD",
           "total": 124.0,
-          "perMonth": 62.0,
+          "perMonth": 13.777777777777779,
           "count": 2
         },
         {
           "label": "All time",
           "total": 184.0,
-          "perMonth": 61.333333333333336,
+          "perMonth": 18.4,
           "count": 3
         },
         {
           "label": "Last 12 months",
           "total": 184.0,
-          "perMonth": 61.333333333333336,
+          "perMonth": 15.333333333333334,
           "count": 3
         },
         {
@@ -1669,25 +1669,25 @@
         {
           "label": "2025",
           "total": 60.0,
-          "perMonth": 60.0,
+          "perMonth": 5.0,
           "count": 1
         },
         {
           "label": "2026 YTD",
           "total": 124.0,
-          "perMonth": 62.0,
+          "perMonth": 13.777777777777779,
           "count": 2
         },
         {
           "label": "All time",
           "total": 184.0,
-          "perMonth": 61.333333333333336,
+          "perMonth": 18.4,
           "count": 3
         },
         {
           "label": "Last 12 months",
           "total": 184.0,
-          "perMonth": 61.333333333333336,
+          "perMonth": 15.333333333333334,
           "count": 3
         },
         {

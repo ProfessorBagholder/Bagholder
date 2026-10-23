@@ -444,7 +444,7 @@ pub struct Account {
 #[diff(key = label)]
 #[serde(tag = "kind", rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum CashflowTile {
-    /// What was paid over the span, and that over the months that paid.
+    /// What was paid over the span, and that over the span's months.
     Paid { label: String, total: Partial, per_month: Fig<Option<Dec>> },
     /// Margin drawn and what it costs a month.
     Margin { label: String, margin_used: Fig<Dec>, interest_per_month: Fig<Option<Dec>> },

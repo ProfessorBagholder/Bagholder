@@ -480,7 +480,7 @@ impl Portfolio {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum CashTile {
-    Paid { label: PaidLabel, total: Partial, count: usize, per_paying_month: Fig<Option<Money>> },
+    Paid { label: PaidLabel, total: Partial, count: usize, per_month: Fig<Option<Money>> },
     Margin { margin_used: Fig<Money>, interest_per_month: Fig<Option<Money>> },
     Yield { yield_on_cost: Fig<Option<Ratio>>, projected_per_month: Fig<Money>, earned: Fig<Money>, book: Fig<Money>, left_out: usize },
 }
@@ -1536,19 +1536,20 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
         }
     }
 
-    let paying_months = |keep: &dyn Fn(&CashMonth) -> bool| months.iter().filter(|m| keep(m) && m.count > 0).count();
-    let paid_tile = |label: PaidLabel, ix: Vec<usize>, months_paid: usize| {
+    // a monthly average is over the period's months, paying or not: a past
+    // year's twelve, this year's so far (this month among them)
+    let paid_tile = |label: PaidLabel, ix: Vec<usize>, period_months: usize| {
         let total = partial(&mut ix.iter().copied());
-        CashTile::Paid { per_paying_month: avg_money(&total.total, months_paid), total, count: ix.len(), label }
+        CashTile::Paid { per_month: avg_money(&total.total, period_months), total, count: ix.len(), label }
     };
     let this_year = today.year();
     let mut tiles = Vec::new();
     for y in [this_year - 2, this_year - 1, this_year] {
         let ix: Vec<usize> = dividends.iter().copied().filter(|i| rows[*i].day.year() == y).collect();
         let label = if y == this_year { PaidLabel::YearToDate(y) } else { PaidLabel::Year(y) };
-        tiles.push(paid_tile(label, ix, paying_months(&|m| m.year == y)));
+        tiles.push(paid_tile(label, ix, if y == this_year { today.month() as usize } else { 12 }));
     }
-    tiles.push(paid_tile(PaidLabel::AllTime, dividends.clone(), paying_months(&|_| true)));
+    tiles.push(paid_tile(PaidLabel::AllTime, dividends.clone(), months.len()));
     if portfolio.has_margin {
         // a month of today's borrowing at each account's rate; nothing where
         // nothing is borrowed, or for a past day
@@ -1561,8 +1562,7 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
     } else {
         let since = today.checked_sub(365.days()).unwrap_or(Date::MIN);
         let ix: Vec<usize> = dividends.iter().copied().filter(|i| rows[*i].day > since && rows[*i].day <= today).collect();
-        let n = ix.iter().map(|i| (rows[*i].day.year(), rows[*i].day.month())).collect::<BTreeSet<_>>().len();
-        tiles.push(paid_tile(PaidLabel::LastTwelveMonths, ix, n));
+        tiles.push(paid_tile(PaidLabel::LastTwelveMonths, ix, 12));
     }
 
     // the income holdings: each open long position in a dividend-paying

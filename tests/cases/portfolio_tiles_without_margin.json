@@ -121,13 +121,13 @@
       {
         "count": 1,
         "label": "2024",
-        "perMonth": 10.0,
+        "perMonth": 0.833333,
         "total": 10.0
       },
       {
         "count": 2,
         "label": "2025",
-        "perMonth": 12.5,
+        "perMonth": 2.083333,
         "total": 25.0
       },
       {
@@ -139,13 +139,13 @@
       {
         "count": 3,
         "label": "All time",
-        "perMonth": 11.666667,
+        "perMonth": 2.333333,
         "total": 35.0
       },
       {
         "count": 2,
         "label": "Last 12 months",
-        "perMonth": 12.5,
+        "perMonth": 2.083333,
         "total": 25.0
       },
       {

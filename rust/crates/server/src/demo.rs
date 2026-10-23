@@ -612,6 +612,36 @@ mod tests {
     }
 
     #[test]
+    fn a_year_s_monthly_average_is_over_its_months_paying_or_not() {
+        let home = tempfile::tempdir().unwrap();
+        write(home.path()).unwrap();
+        let at: bagholder_core::jiff::Timestamp = SYNCED.parse().unwrap();
+        let f = crate::figures::Figures::open(home.path(), at).unwrap();
+        f.state_zone("America/Toronto", at).unwrap();
+        let filters = bagholder_engine::scope::Filters::default();
+        let tiles = f.read(|e| crate::wire::build::cashflow_doc(e, &filters, &e.portfolio(&filters)).tiles).unwrap();
+        let stated = |f: &crate::wire::Fig<crate::wire::Dec>| match f {
+            crate::wire::Fig::Stated(d) => d.0.to_string().parse::<f64>().unwrap(),
+            _ => panic!("the made-up book's distributions are all stated"),
+        };
+        let mut years = 0;
+        for t in &tiles {
+            let crate::wire::figures::CashflowTile::Paid { label, total, per_month } = t else { continue };
+            // the book is made up to September: this year's nine months so far
+            let months = match label.as_str() {
+                "2026 YTD" => 9.0,
+                "All time" => continue,
+                _ => 12.0,
+            };
+            let crate::wire::Fig::Stated(Some(m)) = per_month else { panic!("{label}: a stated monthly average") };
+            let m: f64 = m.0.to_string().parse().unwrap();
+            assert!((m - stated(&total.total) / months).abs() < 0.01, "{label}: {m} a month is its total over {months} months");
+            years += 1;
+        }
+        assert_eq!(years, 3, "two past years and this one");
+    }
+
+    #[test]
     fn the_equity_path_is_the_same_on_every_run() {
         let nav = nav_series();
         // the path the earlier demo drew, seeded the same, to the cent: 701 business days

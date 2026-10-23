@@ -760,7 +760,7 @@
         {
           "label": "2026 YTD",
           "total": 1200.0,
-          "perMonth": 600.0,
+          "perMonth": 133.33333333333334,
           "count": 2
         },
         {
@@ -772,7 +772,7 @@
         {
           "label": "Last 12 months",
           "total": 1200.0,
-          "perMonth": 600.0,
+          "perMonth": 100.0,
           "count": 2
         },
         {
@@ -1612,7 +1612,7 @@
         {
           "label": "2026 YTD",
           "total": 1200.0,
-          "perMonth": 600.0,
+          "perMonth": 133.33333333333334,
           "count": 2
         },
         {
@@ -1624,7 +1624,7 @@
         {
           "label": "Last 12 months",
           "total": 1200.0,
-          "perMonth": 600.0,
+          "perMonth": 100.0,
           "count": 2
         },
         {

@@ -833,13 +833,13 @@
         {
           "label": "2024",
           "total": 10.0,
-          "perMonth": 10.0,
+          "perMonth": 0.8333333333333334,
           "count": 1
         },
         {
           "label": "2025",
           "total": 25.0,
-          "perMonth": 12.5,
+          "perMonth": 2.0833333333333335,
           "count": 2
         },
         {
@@ -851,13 +851,13 @@
         {
           "label": "All time",
           "total": 35.0,
-          "perMonth": 11.666666666666666,
+          "perMonth": 2.3333333333333335,
           "count": 3
         },
         {
           "label": "Last 12 months",
           "total": 25.0,
-          "perMonth": 12.5,
+          "perMonth": 2.0833333333333335,
           "count": 2
         },
         {
@@ -1864,13 +1864,13 @@
         {
           "label": "2024",
           "total": 10.0,
-          "perMonth": 10.0,
+          "perMonth": 0.8333333333333334,
           "count": 1
         },
         {
           "label": "2025",
           "total": 25.0,
-          "perMonth": 12.5,
+          "perMonth": 2.0833333333333335,
           "count": 2
         },
         {
@@ -1882,13 +1882,13 @@
         {
           "label": "All time",
           "total": 35.0,
-          "perMonth": 11.666666666666666,
+          "perMonth": 2.3333333333333335,
           "count": 3
         },
         {
           "label": "Last 12 months",
           "total": 25.0,
-          "perMonth": 12.5,
+          "perMonth": 2.0833333333333335,
           "count": 2
         },
         {

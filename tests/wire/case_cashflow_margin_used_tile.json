@@ -763,13 +763,13 @@
         {
           "label": "2026 YTD",
           "total": 5.0,
-          "perMonth": 5.0,
+          "perMonth": 0.5555555555555556,
           "count": 1
         },
         {
           "label": "All time",
           "total": 5.0,
-          "perMonth": 5.0,
+          "perMonth": 2.5,
           "count": 1
         },
         {
@@ -1658,13 +1658,13 @@
         {
           "label": "2026 YTD",
           "total": 5.0,
-          "perMonth": 5.0,
+          "perMonth": 0.5555555555555556,
           "count": 1
         },
         {
           "label": "All time",
           "total": 5.0,
-          "perMonth": 5.0,
+          "perMonth": 2.5,
           "count": 1
         },
         {

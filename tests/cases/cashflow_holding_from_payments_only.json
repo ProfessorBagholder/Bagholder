@@ -97,25 +97,25 @@
       {
         "count": 1,
         "label": "2025",
-        "perMonth": 60.0,
+        "perMonth": 5.0,
         "total": 60.0
       },
       {
         "count": 2,
         "label": "2026 YTD",
-        "perMonth": 62.0,
+        "perMonth": 13.777778,
         "total": 124.0
       },
       {
         "count": 3,
         "label": "All time",
-        "perMonth": 61.333333,
+        "perMonth": 18.4,
         "total": 184.0
       },
       {
         "count": 3,
         "label": "Last 12 months",
-        "perMonth": 61.333333,
+        "perMonth": 15.333333,
         "total": 184.0
       },
       {
