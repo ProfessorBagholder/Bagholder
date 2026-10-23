@@ -13,7 +13,8 @@
 //! October 30, 2026, with an ex-dividend date of October 30, 2026"). A release
 //! stating no ex-date goes ex on its record date: Canadian and US trades have
 //! settled the next business day since May 2024, which puts the two on one day
-//! (CSA Staff Notice 24-319, Canada from 2024-05-27; SEC Release 34-96930, the
+//! (the CSA's amendments to National Instrument 24-101, adopted 2023-12-14,
+//! Canada from 2024-05-27; SEC Release 34-96930, the
 //! US from 2024-05-28).
 
 use bagholder_core::jiff::civil::Date;
