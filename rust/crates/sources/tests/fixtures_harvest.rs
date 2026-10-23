@@ -111,11 +111,10 @@ const SHARES_SEP: &str = "https://harvestportfolios.com/harvest-high-income-shar
 const SHARES_OCT: &str = "https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-october-2026-distributions/";
 const ETFS_OCT: &str = "https://harvestportfolios.com/harvest-etfs-announces-october-2026-distributions/";
 
-/// The High Income Shares' press page as it stood on 2026-09-24 (the recorded
-/// page, its October releases taken out: they came a month later) and the
-/// September release it then linked first.
+/// The High Income Shares' press page as it stood on 2026-09-24 (October's
+/// release came a month later) and the September release it then linked first.
 fn shares_in_september(r: common::Recorded) -> common::Recorded {
-    r.with(PRESS_SHARES, 200, HV, "press-income-shares-2026-09-24.html").with(SHARES_SEP, 200, HV, "release-income-shares-2026-09.html")
+    r.with_text(PRESS_SHARES, 200, common::harvest_press_before(&["october-2026"])).with(SHARES_SEP, 200, HV, "release-income-shares-2026-09.html")
 }
 
 fn hhis() -> PayerNeed {
@@ -215,6 +214,6 @@ fn a_release_without_its_days_is_a_mismatch_writing_nothing() {
 fn the_newest_release_is_the_latest_month_a_press_page_links() {
     let page = common::read(HV, "press-income-shares.html");
     assert_eq!(harvest::newest_release(&page, "harvest-high-income-shares-etfs-announces-").as_deref(), Some(SHARES_OCT));
-    let before = common::read(HV, "press-income-shares-2026-09-24.html");
+    let before = common::harvest_press_before(&["october-2026"]);
     assert_eq!(harvest::newest_release(&before, "harvest-high-income-shares-etfs-announces-").as_deref(), Some(SHARES_SEP));
 }

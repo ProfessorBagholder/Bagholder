@@ -229,7 +229,28 @@ pub fn announced(html: &str, ticker: &str, currency: Currency) -> Outcome<Option
     Outcome::Answered(Some(Distribution { ex_date: ex, record_date: Some(record), pay_date: Some(pay), cash, reinvested: None, currency }))
 }
 
-pub struct Harvest;
+/// Harvest's reader. The press page and the release it links are the same for
+/// every fund of a family, so one sweep fetches each once: the reader holds the
+/// pages it read for as long as it lives, which is one sweep (`run::read` makes
+/// one set of readers a sweep); nothing outlives it.
+#[derive(Default)]
+pub struct Harvest {
+    pages: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
+
+impl Harvest {
+    /// A shared page's text: the one this reader already read, else read now.
+    fn shared(&self, net: &Net, url: &str) -> Outcome<String> {
+        if let Some(t) = self.pages.lock().expect("pages").get(url) {
+            return Outcome::Answered(t.clone());
+        }
+        let read = read_text(net, url);
+        if let Outcome::Answered(t) = &read {
+            self.pages.lock().expect("pages").insert(url.to_string(), t.clone());
+        }
+        read
+    }
+}
 
 impl Payer for Harvest {
     fn source(&self) -> SourceName {
@@ -266,14 +287,14 @@ impl Payer for Harvest {
         // the month's announcement, where the page has not listed it yet
         let income_shares = html_tables(html).iter().any(|t| t.first().is_some_and(|h| h.iter().map(|c| c.trim()).eq(INCOME_SHARES.iter().copied())));
         let (press, prefix) = press_of(income_shares);
-        let listing = match read_text(net, &format!("https://{HOST}/{press}")) {
+        let listing = match self.shared(net, &format!("https://{HOST}/{press}")) {
             Outcome::Answered(p) => p,
             other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
         };
         let Some(url) = newest_release(&listing, prefix) else {
             return Noted { outcome: Outcome::Mismatch(mismatch(press, format!("the press page links no release starting {prefix:?}"))), shape_change: None };
         };
-        let release = match read_text(net, &url) {
+        let release = match self.shared(net, &url) {
             Outcome::Answered(r) => r,
             other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
         };

@@ -124,7 +124,7 @@ pub fn all() -> Vec<Box<dyn Payer>> {
         Box::new(companies::Companies),
         Box::new(ninepoint::Ninepoint),
         Box::new(evolve::Evolve),
-        Box::new(harvest::Harvest),
+        Box::new(harvest::Harvest::default()),
         Box::new(vanguard_ca::VanguardCanada),
         Box::new(hamilton::Hamilton),
         Box::new(purpose::Purpose),
@@ -148,6 +148,12 @@ pub fn all() -> Vec<Box<dyn Payer>> {
 /// market's record for the listing's market.
 pub fn adapter_for(need: &PayerNeed) -> Option<Box<dyn Payer>> {
     all().into_iter().find(|p| p.serves(need))
+}
+
+/// The adapter for a payer among `readers`, the one set a sweep reads with, so
+/// what a reader fetched for one payer serves the next in the same sweep.
+pub fn adapter_in<'a>(readers: &'a [Box<dyn Payer>], need: &PayerNeed) -> Option<&'a dyn Payer> {
+    readers.iter().find(|p| p.serves(need)).map(|p| p.as_ref())
 }
 
 /// The market's record for a payer's listing, whatever its company.
