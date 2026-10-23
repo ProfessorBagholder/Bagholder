@@ -813,9 +813,9 @@ pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[baghol
     if let Some(f) = id.and_then(|id| frequencies.get(&id)) {
         out += &format!(", {}", frequency_word(f.per_year));
     }
-    out += &format!(" · ex {}", stamp_day(&ex.to_string()));
+    out += &format!(" · ex-div {}", stamp_day(&ex.to_string()));
     if let Some(p) = pay {
-        out += &format!(", paid {}", stamp_day(&p.to_string()));
+        out += &format!(" · pays {}", stamp_day(&p.to_string()));
     }
     if let Some(was) = was {
         out += &format!(" · was {}", per_unit(&was.amount));
