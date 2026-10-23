@@ -8,8 +8,9 @@ test('a release that can be installed is a button, and pressing it asks for the 
   await openWithStatus(page, request, { updateAvailable: true, canUpdate: true, latestVersion: 'v9.9.9' })
   let asked = 0
   await page.route('**/api/update', (route) => { asked++; return route.fulfill({ json: { ok: true } }) })
-  // counted once the request is made, never on the click's own timing (#530)
-  const made = page.waitForRequest('**/api/update')
+  // counted once the request is answered, after the route above has counted it:
+  // neither the click's own timing (#530) nor the request's (the route runs after it)
+  const made = page.waitForResponse('**/api/update')
   await page.getByRole('button', { name: 'Update to v9.9.9' }).click()
   await made
   expect(asked).toBe(1)
@@ -208,4 +209,18 @@ test('a sync error cut in the header is read whole in the page\'s own tip on hov
   // the copy confirmed by the button's own state, and the error still there to read
   await expect(page.getByRole('button', { name: 'Copy error' })).toHaveAttribute('data-copied', 'true')
   await expect(page.locator('#syncline .status-err')).toHaveText(error)
+  // the check is a moment's confirmation: the copy icon is back after two seconds
+  await expect(page.getByRole('button', { name: 'Copy error' })).toHaveAttribute('data-copied', 'false', { timeout: 4000 })
+})
+
+test('a sync\'s progress takes the line, and no error button stands beside it', async ({ page, request }) => {
+  // an error standing from before the sync: the line says what the sync is doing, so
+  // nothing beside it offers to copy an error it does not show
+  await openWithStatus(page, request, { connected: true, error: 'The account could not be read.', syncing: true, syncStep: 'Fetching activity (1 of 31)…' })
+  await expect(page.locator('#syncline')).toHaveText('Fetching activity (1 of 31)…')
+  await expect(page.getByRole('button', { name: 'Copy error' })).toHaveCount(0)
+  // the sync done, the error is the line's again, and copyable
+  await openWithStatus(page, request, { connected: true, error: 'The account could not be read.' })
+  await expect(page.locator('#syncline .status-err')).toHaveText('The account could not be read.')
+  await expect(page.getByRole('button', { name: 'Copy error' })).toHaveCount(1)
 })

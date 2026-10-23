@@ -1493,9 +1493,8 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
         let (Some(i), Some(ex)) = (r.instrument, crate::cashflow::entitled_ex(inputs, r)) else { return false };
         trades.iter().any(|t| t.account == r.account && t.instruments.contains(&i) && t.opened_on < ex && t.closed_on.is_none_or(|c| c >= ex) && journal_matches(f, &t.journal, t.direction))
     };
-    // a repayment of a debt held outside is the household's, whichever account the
-    // money left: what the income in scope is set against, under any account filter
-    let everything: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| (in_accounts(&r.account) || r.kind == Payment::Repayment) && in_instruments(r.instrument) && f.in_dates(today, r.day) && entitled(r)).map(|(i, _)| i).collect();
+    // every payment under the account filter, a repayment by the account the money left
+    let everything: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| in_accounts(&r.account) && in_instruments(r.instrument) && f.in_dates(today, r.day) && entitled(r)).map(|(i, _)| i).collect();
     let dividends: Vec<usize> = everything.iter().copied().filter(|i| rows[*i].kind == Payment::Dividend).collect();
     let other: Vec<usize> = everything.iter().copied().filter(|i| rows[*i].kind != Payment::Dividend).collect();
     let partial = |ix: &mut dyn Iterator<Item = usize>| -> Partial {

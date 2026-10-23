@@ -37,6 +37,7 @@ describe('the one way to the server', () => {
   it('waits on a clock only where that is accounted for', () => {
     const allowed: Record<string, number> = {
       '/src/lib/clock.svelte.ts': 1, // the minute, while something on screen says "… ago"
+      '/src/App.svelte': 1, // the copy button's check, a two-second confirmation
       '/src/lib/scrollbars.ts': 1, // a scrollbar lingers after its list stops: Safari has no scrollend
       '/src/lib/TradeDetail.svelte': 1, // the thesis is saved a moment after typing stops
       '/src/lib/FilterPopover.svelte': 2, // a lookup and a range wait for the typing to pause
