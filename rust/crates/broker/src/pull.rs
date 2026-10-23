@@ -25,6 +25,8 @@ use crate::{AccountStated, BookMoves, BrokerAdapter, Failure, Moved, MovedWhat, 
 pub struct Report {
     pub accounts_added: usize,
     pub accounts_linked: usize,
+    /// Accounts merged into another the broker links them to.
+    pub accounts_merged: usize,
     pub rows_read: usize,
     pub records_new: usize,
     pub records_revised: usize,
@@ -125,17 +127,25 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         };
         ids.insert(a.key.clone(), id);
     }
-    // each account's status is the broker's
+    // the links the broker states; ids it links that sit on two accounts are made one
+    let links: Vec<(AccountId, AccountId)> = stated.iter().filter_map(|a| Some((*ids.get(&a.key)?, *a.linked_to.as_ref().and_then(|k| ids.get(k))?))).collect();
+    report.accounts_linked += links.len();
+    report.accounts_merged += book.store_account_links(connection, &links, &read)?.removed;
+    // each broker id's account, after any merge
     for a in &stated {
-        book.set_account_status(ids[&a.key], if a.open { AccountStatus::Open } else { AccountStatus::Closed })?;
-    }
-    report.stated_for = ids.values().copied().collect();
-    for a in &stated {
-        if let (Some(to), Some(from)) = (a.linked_to.as_ref().and_then(|k| ids.get(k)), ids.get(&a.key)) {
-            book.link_accounts(*from, *to, &read)?;
-            report.accounts_linked += 1;
+        if let Some(id) = book.account_by_ref(&AccountRef::new(broker.clone(), a.key.clone()))? {
+            ids.insert(a.key.clone(), id);
         }
     }
+    // each account's status is the broker's: open where any of its ids is
+    let mut open: BTreeMap<AccountId, bool> = BTreeMap::new();
+    for a in &stated {
+        *open.entry(ids[&a.key]).or_default() |= a.open;
+    }
+    for (id, is_open) in &open {
+        book.set_account_status(*id, if *is_open { AccountStatus::Open } else { AccountStatus::Closed })?;
+    }
+    report.stated_for = ids.values().copied().collect();
     let backing: Vec<(AccountId, AccountId)> = stated.iter().filter_map(|a| Some((*ids.get(&a.key)?, *a.backs.as_ref().and_then(|k| ids.get(k))?))).collect();
     book.store_margin_backing(connection, &backing, &read)?;
 

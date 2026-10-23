@@ -4,7 +4,7 @@
 
 use bagholder_sqlite::migrate::{Migration, Schema};
 
-pub static MIGRATIONS: [Migration; 38] = [
+pub static MIGRATIONS: [Migration; 39] = [
     Migration { number: 1, name: "the book", sql: include_str!("../migrations/001-the-book.sql") },
     Migration { number: 2, name: "the facts", sql: include_str!("../migrations/002-the-facts.sql") },
     Migration { number: 3, name: "the facts as stated", sql: include_str!("../migrations/003-the-facts-as-stated.sql") },
@@ -43,6 +43,7 @@ pub static MIGRATIONS: [Migration; 38] = [
     Migration { number: 36, name: "outside balances by day", sql: include_str!("../migrations/036-outside-balances-by-day.sql") },
     Migration { number: 37, name: "the earlier app gone", sql: include_str!("../migrations/037-the-earlier-app-gone.sql") },
     Migration { number: 38, name: "margin rates", sql: include_str!("../migrations/038-margin-rates.sql") },
+    Migration { number: 39, name: "linked accounts one", sql: include_str!("../migrations/039-linked-accounts-one.sql") },
 ];
 
 pub static SCHEMA: Schema = Schema {

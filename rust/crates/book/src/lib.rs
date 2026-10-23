@@ -12,6 +12,7 @@ pub mod clear;
 pub mod debts;
 pub mod facts;
 pub mod identity;
+pub mod linked;
 pub mod links;
 pub mod mapping;
 pub mod names;
@@ -106,7 +107,7 @@ impl Book {
     /// book that needs a mapping not among them is left as it was, and refused.
     pub fn open_mapped(path: &Path, app_version: &str, at: jiff::Timestamp, mappings: &[&dyn mapping::Mapping]) -> Result<(Book, Migrated)> {
         let split = |c: &rusqlite::Connection| pooled::step(c, mappings, at);
-        let (conn, done) = bagholder_sqlite::migrate::open_with(&schema::SCHEMA, path, app_version, at, &[(37, &split)])?;
+        let (conn, done) = bagholder_sqlite::migrate::open_with(&schema::SCHEMA, path, app_version, at, &[(37, &split), (39, &linked::step)])?;
         // every reference between the book's tables is held by SQLite itself
         conn.pragma_update(None, "foreign_keys", "ON")?;
         // a REPLACE fires the delete triggers of the row it replaces: the change log
