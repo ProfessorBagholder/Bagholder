@@ -13,6 +13,17 @@
 //!
 //! The page states its currency in the fund's facts (`Currency CAD`); where it
 //! does not, the fund pays in the currency its units trade in.
+//!
+//! The page lists a month's distribution only days after Harvest announces it
+//! (on 2026-10-23 the October release was out and every fund page still ended
+//! at September's). The announcement itself is on Harvest's press pages, one
+//! for the ETFs and one for the High Income Shares, each linking its month's
+//! release (`…-announces-october-2026-distributions/`): one sentence states the
+//! days for every fund in it ("paid on or about November 6, 2026 to
+//! unitholders of record on October 30, 2026, with an ex-dividend date of
+//! October 30, 2026"), then each fund's ticker and amount (`RDDY $0.1500 per
+//! unit`). The newest release is read beside the page, and what it announces
+//! for the fund is its newest distribution where the page has not listed it.
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::Timestamp;
@@ -76,6 +87,17 @@ fn schedule_word(tables: &[Vec<Vec<String>>]) -> Option<String> {
     None
 }
 
+/// A page's text, or why it could not be had.
+fn read_text(net: &Net, url: &str) -> Outcome<String> {
+    match ask::send(net, &Ask::get(url, &HEADERS), &[]) {
+        Outcome::Answered(r) => match ask::text(&r.body) {
+            Ok(h) => Outcome::Answered(h.to_string()),
+            Err(m) => Outcome::Mismatch(m),
+        },
+        other => other.failed().expect("not answered"),
+    }
+}
+
 pub fn parse_page(html: &str, trades_in: Currency) -> Outcome<Record> {
     let tables = html_tables(html);
     let is = |t: &Vec<Vec<String>>, header: &[&str]| t.first().is_some_and(|h| h.iter().map(|c| c.trim()).eq(header.iter().copied()));
@@ -120,7 +142,57 @@ pub fn parse_page(html: &str, trades_in: Currency) -> Outcome<Record> {
     Outcome::Answered(Record { form: bagholder_core::distribution::Form::Stated, rows, per_year, by_record: vec![] })
 }
 
-pub struct Harvest;
+/// The press page a fund's releases are on, and the start of its monthly
+/// releases' addresses: the High Income Shares' for a page of that layout.
+fn press_of(income_shares: bool) -> (&'static str, &'static str) {
+    if income_shares {
+        ("high-income-shares/press/", "harvest-high-income-shares-etfs-announces-")
+    } else {
+        ("press-releases/", "harvest-etfs-announces-")
+    }
+}
+
+const MONTHS: [&str; 12] = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
+
+/// The newest monthly release a press page links whose address starts with
+/// `prefix` (`…/harvest-etfs-announces-october-2026-distributions/`).
+pub fn newest_release(html: &str, prefix: &str) -> Option<String> {
+    let mut best: Option<((i16, usize), String)> = None;
+    for part in html.split("href=\"").skip(1) {
+        let Some(url) = part.split('"').next() else { continue };
+        let Some(slug) = url.strip_prefix(&format!("https://{HOST}/")).map(|s| s.trim_end_matches('/')) else { continue };
+        let Some(rest) = slug.strip_prefix(prefix).and_then(|r| r.strip_suffix("-distributions")) else { continue };
+        let Some((month, year)) = rest.split_once('-') else { continue };
+        let (Some(m), Ok(y)) = (MONTHS.iter().position(|n| *n == month), year.parse::<i16>()) else { continue };
+        if best.as_ref().is_none_or(|(at, _)| (y, m) > *at) {
+            best = Some(((y, m), url.to_string()));
+        }
+    }
+    best.map(|(_, url)| url)
+}
+
+/// Harvest's reader. The press page and the release it links are the same for
+/// every fund of a family, so one sweep fetches each once: the reader holds the
+/// pages it read for as long as it lives, which is one sweep (`run::read` makes
+/// one set of readers a sweep); nothing outlives it.
+#[derive(Default)]
+pub struct Harvest {
+    pages: std::sync::Mutex<std::collections::HashMap<String, String>>,
+}
+
+impl Harvest {
+    /// A shared page's text: the one this reader already read, else read now.
+    fn shared(&self, net: &Net, url: &str) -> Outcome<String> {
+        if let Some(t) = self.pages.lock().expect("pages").get(url) {
+            return Outcome::Answered(t.clone());
+        }
+        let read = read_text(net, url);
+        if let Outcome::Answered(t) = &read {
+            self.pages.lock().expect("pages").insert(url.to_string(), t.clone());
+        }
+        read
+    }
+}
 
 impl Payer for Harvest {
     fn source(&self) -> SourceName {
@@ -146,10 +218,38 @@ impl Payer for Harvest {
             Outcome::Answered(r) => r,
             other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
         };
-        let outcome = match ask::text(&page.body) {
-            Ok(h) => parse_page(h, need.listing.currency),
-            Err(m) => Outcome::Mismatch(m),
+        let html = match ask::text(&page.body) {
+            Ok(h) => h,
+            Err(m) => return Noted { outcome: Outcome::Mismatch(m), shape_change: None },
         };
-        Noted { outcome, shape_change: None }
+        let mut record = match parse_page(html, need.listing.currency) {
+            Outcome::Answered(r) => r,
+            other => return Noted { outcome: other, shape_change: None },
+        };
+        // the month's announcement, where the page has not listed it yet
+        let income_shares = html_tables(html).iter().any(|t| t.first().is_some_and(|h| h.iter().map(|c| c.trim()).eq(INCOME_SHARES.iter().copied())));
+        let (press, prefix) = press_of(income_shares);
+        let listing = match self.shared(net, &format!("https://{HOST}/{press}")) {
+            Outcome::Answered(p) => p,
+            other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
+        };
+        let Some(url) = newest_release(&listing, prefix) else {
+            return Noted { outcome: Outcome::Mismatch(mismatch(press, format!("the press page links no release starting {prefix:?}"))), shape_change: None };
+        };
+        let release = match self.shared(net, &url) {
+            Outcome::Answered(r) => r,
+            other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
+        };
+        let currency = record.rows.first().map(|r| r.currency).unwrap_or(need.listing.currency);
+        match crate::payers::announced::announced(&release, &venue::root(&need.listing.symbol)) {
+            Ok(Some(a)) => {
+                if record.rows.iter().all(|r| r.ex_date < a.ex_date) {
+                    record.rows.insert(0, Distribution { ex_date: a.ex_date, record_date: a.record_date, pay_date: a.pay_date, cash: a.cash, reinvested: None, currency });
+                }
+            }
+            Ok(None) => {}
+            Err(why) => return Noted { outcome: Outcome::Mismatch(mismatch("release", why)), shape_change: None },
+        }
+        Noted { outcome: Outcome::Answered(record), shape_change: None }
     }
 }

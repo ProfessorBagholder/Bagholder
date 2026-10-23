@@ -645,7 +645,7 @@ pub fn release_notice<T: Notable>(app: &Arc<App>, key: &ListingKey, rows: &[T]) 
     let title = if rows.len() == 1 { "Press release · ".to_string() } else { format!("{} press releases · ", rows.len()) } + sym;
     // A release announcing distributions carries the figures beneath the headline, since the
     // headline alone ("Announces August 2026 Distributions") says nothing a holder can act on.
-    let mut detail = if is_distribution_release(&head) { distribution_detail(app, key) } else { String::new() };
+    let mut detail = if is_distribution_release(&head) { distribution_detail(app, key, first) } else { String::new() };
     if detail.is_empty() {
         // what the source said beneath its own headline, where it said anything
         detail = first.summary().trim().to_string();
@@ -674,23 +674,53 @@ pub fn stamp_day(iso: &str) -> String {
     if y == this_year { text } else { format!("{} {}", text, y) }
 }
 
-/// What a distribution release means for this listing, from the issuer's own
-/// declared record: the amount just announced, when it goes ex and when it is
-/// paid, and the one it replaces.
+/// What a distribution release announces for this listing, read from the
+/// release itself: the amount, when it goes ex and when it is paid, and the
+/// amount before it from the declared record.
 ///
-/// A release headline says only that distributions were announced; the figure
-/// is what the holder wants, and reading it from the record rather than the
-/// release's prose keeps it the same figure the Cashflow tab pays from.
-pub fn distribution_detail(app: &Arc<App>, key: &ListingKey) -> String {
+/// A headline says only that distributions were announced, and the fund's page
+/// and the exchange's record list the new one days after the release (Harvest,
+/// 2026-10-23: the release at 7:30, its pages and TMX's record still at
+/// September's that evening). So the figures are the fund company's own where
+/// its record, read again now, already lists a distribution going ex on or after
+/// the release's day (a company reader that reads its releases, as Harvest's
+/// does); else the release's text, as the feed that carried it keeps it; else
+/// the exchange's record where that lists it. Otherwise the headline alone, and
+/// a release that could not be read says why in the header, until a later one
+/// can.
+pub fn distribution_detail<T: Notable>(app: &Arc<App>, key: &ListingKey, release: &T) -> String {
     let Some(f) = app.figures.get() else { return String::new() };
-    // the release is the announcement; the record it comes from carries the figures, and it
-    // is read now rather than when it is next due, so the notice is not a day behind it.
-    // A notice that goes out without its figures says why in the header, until the next
-    // one has them.
+    // the record is read again for the amount before, so it is the one just paid
     let detail = read_record_for_notice(app, f, key)
         .map_err(|e| format!("{}'s declared distributions could not be read again: {e}", key.named()))
-        .and_then(|read| f.book().map_err(|e| format!("The book could not be read for {}'s distributions: {e}", key.named())).and_then(|book| distribution_detail_in(&book, &read)));
+        .and_then(|read| {
+            let book = f.book().map_err(|e| format!("The book could not be read for {}'s distributions: {e}", key.named()))?;
+            // the release's text is asked for only where the company's own record lacks it
+            let text = || release_text(app, release).map_err(|e| format!("{}'s distribution release could not be read: {e}", key.named()));
+            distribution_detail_in(&book, &read, text, key.symbol(), &release.moment())
+        });
     went(app, "distributions", detail).unwrap_or_default()
+}
+
+/// A release's whole text: TMX's copy for an item TMX listed, else the page its
+/// link opens.
+#[cfg(not(test))]
+fn release_text<T: Notable>(_app: &Arc<App>, release: &T) -> Result<String, String> {
+    if let Some(newsid) = release.id().strip_prefix("tmx:") {
+        return bagholder_market::news::tmx_story(&bagholder_market::news::LIVE, newsid).map_err(|e| e.text);
+    }
+    // a Google item's link stands for the publisher's page
+    let mut url = release.url();
+    if url.contains("news.google.com/") {
+        url = bagholder_market::news::read_article(&url).map_err(|e| e.text)?.url;
+    }
+    bagholder_market::http::get_text(&url, &[("User-Agent", "Mozilla/5.0")]).map_err(|e| bagholder_market::http::describe_failure(&e))
+}
+
+/// A test's release carries the text it was given.
+#[cfg(test)]
+fn release_text<T: Notable>(app: &Arc<App>, release: &T) -> Result<String, String> {
+    app.feeds.release_texts.lock().unwrap().get(&release.id()).cloned().ok_or_else(|| format!("no text is recorded for {}", release.id()))
 }
 
 /// The payers on the listing `key` names, their records read again.
@@ -737,31 +767,58 @@ fn frequency_word(per_year: u32) -> String {
     }
 }
 
-/// The payer's own declared record, as the book keeps it: the newest declaration
-/// of the instruments given (the one listing a symbol names), its frequency where
-/// one is stated, and the amount it replaces when that differs.
-pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[bagholder_core::InstrumentId]) -> Result<String, String> {
-    let [id] = instruments else { return Ok(String::new()) };
+/// The line under a distribution release's headline, for `ticker`: the
+/// distribution the release (its moment `released`) announces, from the fund
+/// company's declared record where that lists one going ex on or after the
+/// release's day, else from the release's text (`text`, asked for only then),
+/// else from the exchange's record beside the company's; its frequency from the
+/// record (the instruments given, the one listing a symbol names), and the
+/// amount before it, the company's where it states one. Empty where none has
+/// it, unless the release's text could not be had or read, which is the error.
+pub fn distribution_detail_in(book: &bagholder_book::Book, instruments: &[bagholder_core::InstrumentId], text: impl FnOnce() -> Result<String, String>, ticker: &str, released: &str) -> Result<String, String> {
     let (declared, frequencies) = match (book.declared(), book.frequencies()) {
         (Ok(d), Ok(f)) => (d, f),
         (Err(e), _) | (_, Err(e)) => return Err(format!("The declared distributions could not be read: {e}")),
     };
-    let Some(read) = declared.get(id) else { return Ok(String::new()) };
-    let mut items: Vec<&bagholder_book::facts::DeclaredRow> = read.items.iter().collect();
-    items.sort_by(|a, b| b.ex_date.cmp(&a.ex_date));
-    let Some(latest) = items.first() else { return Ok(String::new()) };
-    let mut out = format!("{} a share", per_unit(&latest.amount));
-    if let Some(f) = frequencies.get(id) {
+    let id = match instruments {
+        [id] => Some(*id),
+        _ => None,
+    };
+    let read = id.and_then(|id| declared.get(&id));
+    let newest_first = |rows: &mut Vec<&bagholder_book::facts::DeclaredRow>| rows.sort_by(|x, y| y.ex_date.cmp(&x.ex_date));
+    let mut company: Vec<&bagholder_book::facts::DeclaredRow> = read.iter().flat_map(|r| r.items.iter()).collect();
+    let mut market: Vec<&bagholder_book::facts::DeclaredRow> = read.iter().flat_map(|r| r.market.iter().flat_map(|m| m.items.iter())).collect();
+    newest_first(&mut company);
+    newest_first(&mut market);
+    let day = bagholder_model::dates::head10(released).parse::<bagholder_core::jiff::civil::Date>().ok();
+    let new = |r: &&&bagholder_book::facts::DeclaredRow| day.is_some_and(|d| r.ex_date >= d);
+    let (cash, ex, pay) = if let Some(r) = company.first().filter(new) {
+        (r.amount.amount, r.ex_date, r.pay_date)
+    } else {
+        let html = text();
+        match html.as_deref().map(|h| bagholder_sources::payers::announced::announced(h, ticker)) {
+            Ok(Ok(Some(a))) => (a.cash, a.ex_date, a.pay_date),
+            Ok(Err(why)) => return Err(format!("the release: {why}")),
+            _ => match market.first().filter(new) {
+                Some(r) => (r.amount.amount, r.ex_date, r.pay_date),
+                None => return html.map(|_| String::new()),
+            },
+        }
+    };
+    // the amount before it: the company's, else the exchange's
+    let was = company.iter().find(|r| r.ex_date < ex).or_else(|| market.iter().find(|r| r.ex_date < ex));
+    // the fund pays in the currency its record states; a .U listing in US dollars
+    let currency = company.first().or(market.first()).map(|r| r.amount.currency).unwrap_or(if ticker.ends_with(".U") { bagholder_core::Currency::USD } else { bagholder_core::Currency::CAD });
+    let mut out = format!("{} a share", per_unit(&bagholder_core::Money::new(cash, currency)));
+    if let Some(f) = id.and_then(|id| frequencies.get(&id)) {
         out += &format!(", {}", frequency_word(f.per_year));
     }
-    out += &format!(" · ex {}", stamp_day(&latest.ex_date.to_string()));
-    if let Some(p) = latest.pay_date {
-        out += &format!(", paid {}", stamp_day(&p.to_string()));
+    out += &format!(" · ex-div {}", stamp_day(&ex.to_string()));
+    if let Some(p) = pay {
+        out += &format!(" · pays {}", stamp_day(&p.to_string()));
     }
-    if let Some(was) = items.get(1) {
-        if was.amount != latest.amount {
-            out += &format!(" · was {}", per_unit(&was.amount));
-        }
+    if let Some(was) = was {
+        out += &format!(" · was {}", per_unit(&was.amount));
     }
     Ok(out)
 }

@@ -60,6 +60,10 @@ pub struct FeedsState {
     /// The failure a test tells the issuer's record to answer with.
     #[cfg(test)]
     pub(crate) record_fails: Mutex<Option<String>>,
+    /// The text a test's releases carry, by the release's id; a release not
+    /// listed cannot be read.
+    #[cfg(test)]
+    pub(crate) release_texts: Mutex<std::collections::HashMap<String, String>>,
     /// Listings the running short-interest sweep has still to read.
     shorts_left: AtomicI64,
 }

@@ -7,6 +7,25 @@ mod tables;
 
 pub use tables::html_tables;
 
+/// A fragment's text: its tags as spaces, its references resolved, its
+/// whitespace one space.
+pub fn text(html: &str) -> String {
+    let mut out = String::new();
+    let mut inside = false;
+    for c in html.chars() {
+        match c {
+            '<' => inside = true,
+            '>' => {
+                inside = false;
+                out.push(' ');
+            }
+            c if !inside => out.push(c),
+            _ => {}
+        }
+    }
+    unescape(&out).split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// HTML5 character references resolved by the WHATWG rules, semicolon optional,
 /// longest known prefix, since a headline carries whatever the wire put in it.
 ///

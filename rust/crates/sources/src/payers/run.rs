@@ -151,14 +151,16 @@ fn dated(ctx: &Ctx, record: &mut Record) -> Result<bool> {
 pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
     let declared: BTreeMap<InstrumentId, DeclaredReadRow> = ctx.book.declared()?;
     let frequencies: BTreeMap<InstrumentId, StatedFrequency> = ctx.book.frequencies()?;
+    // one set of readers for the sweep: a family's shared pages are fetched once
+    let readers = crate::payers::all();
     for need in payers {
         let id = need.listing.id;
-        let Some(adapter) = adapter_for(need) else {
+        let Some(adapter) = crate::payers::adapter_in(&readers, need) else {
             // no reader for its market either: the figures wait on it, named
             continue;
         };
         if due(declared.get(&id), frequencies.get(&id), ctx.now, ctx.bank) {
-            let outcome = read_with(ctx, need, adapter.as_ref(), Role::Payer)?;
+            let outcome = read_with(ctx, need, adapter, Role::Payer)?;
             // its company's publication does not carry it: no company reader serves
             // it, so it has the market's record. A company reader that failed to
             // answer is that source's failure, and is not passed over.
@@ -168,7 +170,7 @@ pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
                 }
             }
         }
-        read_beside(ctx, need, adapter.as_ref(), false)?;
+        read_beside(ctx, need, adapter, false)?;
     }
     Ok(())
 }

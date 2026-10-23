@@ -84,6 +84,12 @@ impl Recorded {
         self
     }
 
+    /// Answer `url` with `body`, a recorded reply the test derived.
+    pub fn with_text(mut self, url: &str, status: u16, body: String) -> Recorded {
+        self.answers.push((url.to_string(), String::new(), status, body.into_bytes(), vec![]));
+        self
+    }
+
     /// Answer every request whose URL begins with `prefix`.
     pub fn with_prefix(mut self, prefix: &str, status: u16, source: &str, name: &str) -> Recorded {
         self.answers.push((format!("{PREFIX}{prefix}"), String::new(), status, read(source, name).into_bytes(), headers(source, name)));
@@ -145,4 +151,24 @@ pub fn net(recorded: &std::sync::Arc<Recorded>, at: &str) -> bagholder_net::Net 
 pub fn instrument_in_book(book: &std::path::Path, id: bagholder_core::InstrumentId, kind: &str, currency: &str) {
     let conn = rusqlite::Connection::open(book).unwrap();
     conn.execute("INSERT INTO instruments(id, kind, currency, created_at) VALUES (?1, ?2, ?3, '2026-01-01T00:00:00Z')", rusqlite::params![id.to_string(), kind, currency]).unwrap();
+}
+
+/// Harvest's High Income Shares press page as it stood before the months
+/// `later` were announced: the recorded page, its links to those months'
+/// releases (`…-october-2026-distributions/`) taken out.
+pub fn harvest_press_before(later: &[&str]) -> String {
+    let page = read("harvest", "press-income-shares.html");
+    let mut out = String::with_capacity(page.len());
+    let mut rest = page.as_str();
+    while let Some(at) = rest.find("<a ") {
+        out.push_str(&rest[..at]);
+        let end = rest[at..].find("</a>").map_or(rest.len(), |e| at + e + "</a>".len());
+        let link = &rest[at..end];
+        if !later.iter().any(|m| link.contains(&format!("-{m}-distributions"))) {
+            out.push_str(link);
+        }
+        rest = &rest[end..];
+    }
+    out.push_str(rest);
+    out
 }

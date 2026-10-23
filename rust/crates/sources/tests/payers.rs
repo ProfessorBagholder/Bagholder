@@ -341,13 +341,18 @@ fn the_markets_record_is_read_beside_a_companys_only_while_the_companys_lists_no
 fn a_companys_record_listing_nothing_to_pay_has_the_exchanges_record_read_beside_it() {
     // Harvest's page for RDDY as of 2026-09-23 lists the distribution paid
     // 2026-09-04 and none after; TMX lists the one Harvest declared on
-    // 2026-09-23, going ex 2026-09-29 and paid 2026-10-06
+    // 2026-09-23, going ex 2026-09-29 and paid 2026-10-06. Harvest's press page
+    // is the one from before that day's release (whose figures would otherwise
+    // answer first): its newest, August's, adds nothing the page lacks
     let dir = tempfile::tempdir().unwrap();
     let at = t("2026-09-26T16:00:00Z");
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
     common::instrument_in_book(&dir.path().join("book.db"), id(1), "security", "CAD");
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
-    let recorded = Arc::new(common::Recorded::new().with("https://harvestportfolios.com/etf/rddy/", 200, "harvest", "page-rddy.html").with_market_record("RDDY"));
+    let recorded = Arc::new(common::Recorded::new().with("https://harvestportfolios.com/etf/rddy/", 200, "harvest", "page-rddy.html")
+            .with_text("https://harvestportfolios.com/high-income-shares/press/", 200, common::harvest_press_before(&["october-2026", "september-2026"]))
+            .with("https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-august-2026-distributions/", 200, "harvest", "release-income-shares-2026-08.html")
+            .with_market_record("RDDY"));
     let net = common::net(&recorded, "2026-09-26T16:00:00Z");
     let zone = eastern();
     let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
@@ -400,4 +405,36 @@ fn the_exchanges_record_beside_passes_over_rows_of_no_cash_and_rests_apart_from_
     assert_eq!(beside.items.iter().filter(|r| r.ex_date == date(2025, 12, 30)).count(), 1);
     let tmx = cache.outcomes(&SourceName::named("tmx")).unwrap();
     assert!(tmx.iter().any(|o| o.kind == DataKind::Distributions && o.outcome == OutcomeKind::Answered), "{tmx:?}");
+}
+
+#[test]
+fn a_family_s_press_page_and_release_are_read_once_a_sweep_for_all_its_funds() {
+    // PLTE and RDDY are both High Income Shares: one sweep reads each fund's page,
+    // and the press page and October's release once between them
+    let dir = tempfile::tempdir().unwrap();
+    let at = t("2026-10-23T16:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
+    common::instrument_in_book(&dir.path().join("book.db"), id(1), "security", "CAD");
+    common::instrument_in_book(&dir.path().join("book.db"), id(2), "security", "CAD");
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
+    let recorded = Arc::new(
+        common::Recorded::new()
+            .with("https://harvestportfolios.com/etf/plte/", 200, "harvest", "page-plte.html")
+            .with("https://harvestportfolios.com/etf/rddy/", 200, "harvest", "page-rddy.html")
+            .with("https://harvestportfolios.com/high-income-shares/press/", 200, "harvest", "press-income-shares.html")
+            .with("https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-october-2026-distributions/", 200, "harvest", "release-income-shares-2026-10.html"),
+    );
+    let net = common::net(&recorded, "2026-10-23T16:00:00Z");
+    let zone = eastern();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
+    let needs = [
+        payer(1, "PLTE", "XTSE", Currency::CAD, "Harvest Portfolios Group Inc. - Harvest Palantir Enhanced High Income Shares ETF"),
+        payer(2, "RDDY", "XTSE", Currency::CAD, "Harvest Portfolios Group Inc. - Harvest Reddit Enhanced High Income Shares ETF"),
+    ];
+    run::read(&ctx, &needs).unwrap();
+    let asked = recorded.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 4, "{asked:?}");
+    let newest = |i| book.declared().unwrap().remove(&id(i)).unwrap().items.iter().map(|r| (r.ex_date, r.amount.amount)).max().unwrap();
+    assert_eq!(newest(1), (date(2026, 10, 30), dec("0.5000")));
+    assert_eq!(newest(2), (date(2026, 10, 30), dec("0.1500")));
 }
