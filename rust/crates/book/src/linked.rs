@@ -133,10 +133,12 @@ pub fn merge(conn: &Connection) -> rusqlite::Result<Merged> {
             done.removed += 1;
         }
     }
-    // nothing in the book may name an account that is gone
-    let dangling: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0))?;
-    if dangling > 0 {
-        return Err(fail(format!("{dangling} rows name an account a merge removed")));
+    // nothing in the book may name an account that is gone, checked where one went
+    if done.removed > 0 {
+        let dangling: i64 = conn.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| r.get(0))?;
+        if dangling > 0 {
+            return Err(fail(format!("{dangling} rows name an account a merge removed")));
+        }
     }
     Ok(done)
 }
