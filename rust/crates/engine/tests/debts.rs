@@ -55,13 +55,14 @@ fn a_withdrawal_no_match_named_is_no_repayment() {
 /// left: it stays in its month's bar under an account filter, the paying
 /// account's or another's, and leaves under a holding's, which pays no debt.
 #[test]
-fn a_repayment_stays_under_any_account_filter_and_not_under_a_holdings() {
+fn a_repayment_is_under_the_account_it_left_and_not_under_a_holdings() {
+    // the owner, 2026-10-23: filtered to one account, Cashflow shows that account's
+    // payments, not another account's repayments
     let (mut b, e) = with_a_loan();
     let feb = |e: &bagholder_engine::Engine, f: &Filters| e.scope(f).cashflow.months.iter().find(|m| (m.year, m.month) == (2026, 2)).map(|m| m.repayments.total.clone().unwrap());
-    for acc in ["A", "B"] {
-        let only = Filters { accounts: BTreeSet::from([b.ids.account(acc)]), ..Filters::default() };
-        assert_eq!(feb(&e, &only), Some(Money::new(d("200"), Currency::CAD)), "filtered to account {acc}");
-    }
+    let mut only = |acc: &str| Filters { accounts: BTreeSet::from([b.ids.account(acc)]), ..Filters::default() };
+    assert_eq!(feb(&e, &only("A")), Some(Money::new(d("200"), Currency::CAD)), "the account the money left");
+    assert!(feb(&e, &only("B")).is_none_or(|m| m.amount.is_zero()), "another account");
     let holding = Filters { instruments: BTreeSet::from([b.ids.instrument("U")]), ..Filters::default() };
     assert!(feb(&e, &holding).is_none_or(|m| m.amount.is_zero()), "under a holding's filter");
 }

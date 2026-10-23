@@ -290,16 +290,26 @@
     })
   })
 
-  /** What the header's line says that can be copied: the notice showing, else the error standing. */
-  const said = $derived(showing()?.msg ?? (status?.error && !showingEmpty ? status.error : ''))
-  /** The text last copied: the copy button shows a check while the line still says it
-   * (a control's state, as Carbon's copy button confirms, never a message). */
+  /** The error the header's line shows: the one standing, where nothing ahead of it
+   * in the line (an update, a login, a sync's progress) takes the line. */
+  const errorShown = $derived(
+    !status?.updating && !status?.updateError && !(status?.protocol && status.protocol !== PROTOCOL) && !ui.connecting && ui.busy !== 'refresh' && !status?.syncing && !showingEmpty ? status?.error || '' : '',
+  )
+  /** What the header's line says that can be copied: the notice showing, else the error it shows. */
+  const said = $derived(showing()?.msg ?? errorShown)
+  /** The text just copied: the copy button shows a check for two seconds, then its
+   * copy icon again, as GitHub's and Primer's copy buttons do. */
   let copied = $state('')
   /** The header's line, whole, to the clipboard. */
   function copySaid(): void {
     const text = said
     navigator.clipboard.writeText(text).then(
-      () => (copied = text),
+      () => {
+        copied = text
+        setTimeout(() => {
+          if (copied === text) copied = ''
+        }, 2000)
+      },
       (e) => tell('What the header says could not be copied: ' + (e instanceof Error ? e.message : String(e)), 'err'),
     )
   }
@@ -458,7 +468,7 @@
         {:else if ui.connecting}<span class="spin"></span>Waiting for Wealthsimple login… <button class="pill" style="padding:1px 8px;font-size:11px;width:auto;margin-left:6px" onclick={cancelConnect}>Cancel</button>
         {:else if ui.busy === 'refresh'}<span class="spin"></span>Refreshing session…
         {:else if status?.syncing}<span class="spin"></span>{status.syncStep || 'Syncing…'}
-        {:else if status?.error && !showingEmpty}<span class="status-err">{status.error}</span>
+        {:else if errorShown}<span class="status-err">{errorShown}</span>
         {:else if status?.modelDownload}<span class="spin"></span>Downloading the language model… {Math.floor((status.modelDownload.received * 100) / Math.max(status.modelDownload.size, 1))}%
         {:else if !status?.protocol}<span class="spin"></span>
         {:else}{syncLine()}{/if}
