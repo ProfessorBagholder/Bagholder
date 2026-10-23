@@ -716,3 +716,59 @@ fn a_margin_rate_not_read_is_said_by_its_account_and_stores_nothing() {
         assert_eq!(book.stated(account).unwrap().margin_rates, None);
     }
 }
+
+/// Link the two accounts of `replies`' accounts list to each other, as
+/// Wealthsimple states an account given a new id beside its old one.
+fn link_resp(replies: &Path) {
+    let path = replies.join("edited-accounts-resp.json");
+    let mut accounts = bagholder_core::json::parse(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    let ids: Vec<String> = edges(&mut accounts).iter().map(|e| Node::root(e).obj("node").unwrap().text("id").unwrap().to_string()).collect();
+    for (e, other) in edges(&mut accounts).iter_mut().zip(ids.iter().rev()) {
+        if let Value::Object(e) = e {
+            if let Some(Value::Object(n)) = e.get_mut("node") {
+                n.insert("linkedAccount".into(), bagholder_core::json::parse(&format!("{{\"id\": \"{other}\"}}")).unwrap());
+            }
+        }
+    }
+    std::fs::write(&path, accounts.canonical()).unwrap();
+}
+
+/// One book account per set of ids Wealthsimple links as one (`linked`): two
+/// ids read apart are two accounts, and the pull in which Wealthsimple first
+/// states their link makes them one, every record and transaction in place,
+/// open while either id is.
+#[test]
+fn accounts_wealthsimple_links_are_one_account_from_the_pull_that_states_the_link() {
+    let replies = resp_replies();
+    let home = tempfile::tempdir().unwrap();
+    let pulls = ["2025-11-19T20:00:00Z", "2025-11-20T20:00:00Z", "2025-11-21T20:00:00Z"];
+    let (book, _) = Book::open_in(home.path(), "test", at(pulls[0])).unwrap();
+    let placed = |book: &Book| -> std::collections::BTreeSet<(String, String, String)> {
+        let c = book.conn_for_tests();
+        c.prepare("SELECT r.source_key, t.leg, t.kind FROM transactions t JOIN source_records r ON r.id = t.record_id")
+            .unwrap()
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    once_with(&book, replies.path(), pulls[0], resp_rows);
+    let (old, new) = (resp_account(&book, "anon-resp-1"), resp_account(&book, "anon-resp-2"));
+    assert_ne!(old, new, "two ids read apart are two accounts");
+    let before = placed(&book);
+    link_resp(replies.path());
+    let (report, _) = once_with(&book, replies.path(), pulls[1], resp_rows);
+    assert_eq!(report.accounts_merged, 1);
+    let one = resp_account(&book, "anon-resp-1");
+    assert_eq!(resp_account(&book, "anon-resp-2"), one, "both ids on one account");
+    assert_eq!(one, old, "the oldest account keeps its id");
+    assert_eq!(book.account(one).unwrap().status, AccountStatus::Open, "open while either id is");
+    let c = book.conn_for_tests();
+    let count = |sql: &str| -> i64 { c.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(count("SELECT COUNT(*) FROM accounts"), 1);
+    assert_eq!(count(&format!("SELECT COUNT(*) FROM transactions WHERE account_id <> '{one}'")), 0);
+    assert_eq!(placed(&book), before, "every record's legs, as before");
+    // the next pull keeps them one
+    once_with(&book, replies.path(), pulls[2], resp_rows);
+    assert_eq!(count("SELECT COUNT(*) FROM accounts"), 1);
+}

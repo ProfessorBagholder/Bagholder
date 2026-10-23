@@ -177,10 +177,22 @@ impl Book {
         Ok(out)
     }
 
-    /// That `account` is linked to `to`, as the broker states it.
-    pub fn link_accounts(&self, account: AccountId, to: AccountId, read: &ReadId) -> Result<()> {
-        self.conn().execute("INSERT OR IGNORE INTO account_links (account_id, linked_to, read_id) VALUES (?1, ?2, ?3)", params![account.to_string(), to.to_string(), read.0])?;
-        Ok(())
+    /// The links between a connection's accounts, as one read of the accounts
+    /// states them: what it no longer states is no longer so. Accounts it links
+    /// that sit apart in the book are then made one (`linked`).
+    pub fn store_account_links(&self, connection: ConnectionId, links: &[(AccountId, AccountId)], read: &ReadId) -> Result<crate::linked::Merged> {
+        self.atomically(|| {
+            self.conn().execute(
+                "DELETE FROM account_links WHERE account_id IN (SELECT id FROM accounts WHERE connection_id = ?1)",
+                params![connection.to_string()],
+            )?;
+            for (account, to) in links {
+                if account != to {
+                    self.conn().execute("INSERT OR IGNORE INTO account_links (account_id, linked_to, read_id) VALUES (?1, ?2, ?3)", params![account.to_string(), to.to_string(), read.0])?;
+                }
+            }
+            Ok(crate::linked::merge(self.conn())?)
+        })
     }
 
     /// The accounts of a connection that back a margin account, as one read of the

@@ -522,3 +522,93 @@ fn migration_37_leaves_only_the_broker_s_and_the_person_s_records_and_a_migrated
         drop(book);
     }
 }
+
+/// Each broker record's legs with the broker ids of the account each is on,
+/// sorted, as a connection holds them.
+fn legs_by_ids(c: &rusqlite::Connection) -> std::collections::BTreeSet<(String, String, String)> {
+    c.prepare(
+        "SELECT r.source_key, t.leg, (SELECT GROUP_CONCAT(value, ',') FROM (SELECT value FROM account_refs WHERE account_id = t.account_id ORDER BY value))
+         FROM transactions t JOIN source_records r ON r.id = t.record_id",
+    )
+    .unwrap()
+    .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+    .unwrap()
+    .map(Result::unwrap)
+    .collect()
+}
+
+/// Migration 39: a book migration 37 split, whose ids the broker states as
+/// linked (as an account given a new id is), is one account per linked set
+/// again, each record's legs on the account of the same ids as before the
+/// split, every trade's anchor and every note unchanged, open where any id is;
+/// the set's history goes, for the next sync to read whole. A book whose
+/// accounts the broker links to none is left exactly as it was.
+#[test]
+fn migration_39_makes_each_set_the_broker_links_one_account_again() {
+    for linked in [true, false] {
+        let what = format!("linked {linked}");
+        let s = seeded(true, false);
+        let path = as_v36(&s);
+        let pooled = legs_by_ids(&bagholder_sqlite::open_db(&path).unwrap());
+        // at version 38: split by migration 37, then the broker's links read
+        let v38: &'static Schema = Box::leak(Box::new(Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..38] }));
+        let mapping = Spelled::v(1);
+        let split = |c: &rusqlite::Connection| bagholder_book::pooled::step(c, &[&mapping], t0());
+        let (c, _) = migrate::open_with(v38, &path, "test", t0(), &[(37, &split)]).unwrap();
+        let account = |key: &str| -> String { c.query_row("SELECT account_id FROM account_refs WHERE value = ?1", [key], |r| r.get(0)).unwrap() };
+        if linked {
+            let read: String = c.query_row("SELECT id FROM broker_reads LIMIT 1", [], |r| r.get(0)).unwrap_or_else(|_| {
+                c.execute("INSERT INTO broker_reads (id, connection_id, part, at) SELECT 'read-1', connection_id, 'accounts', 'x' FROM accounts LIMIT 1", []).unwrap();
+                "read-1".into()
+            });
+            for (a, b) in [("ws-1", "ws-2"), ("ws-2", "ws-1"), ("ws-3", "ws-4"), ("ws-4", "ws-5")] {
+                c.execute("INSERT INTO account_links (account_id, linked_to, read_id) VALUES (?1, ?2, ?3)", rusqlite::params![account(a), account(b), read]).unwrap();
+            }
+            c.execute("INSERT INTO activity_reads (account_id, read_at, complete) VALUES (?1, 'x', 1)", [account("ws-2")]).unwrap();
+        }
+        c.execute("UPDATE accounts SET status = 'open' WHERE id = ?1", [account("ws-5")]).unwrap();
+        let (persons, anchors, legs_split, accounts_split) = (
+            persons_rows(&c),
+            c.prepare("SELECT id, COALESCE(anchor_record, '') || '/' || COALESCE(anchor_leg, '') FROM trades ORDER BY id").unwrap().query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))).unwrap().map(Result::unwrap).collect::<Vec<_>>(),
+            legs_by_ids(&c),
+            c.query_row("SELECT COUNT(*) FROM accounts", [], |r| r.get::<_, i64>(0)).unwrap(),
+        );
+        assert_eq!(accounts_split, 5, "{what}: split to one account per id");
+        drop(c);
+        let (book, done) = Book::open(&path, "test", at("2026-10-24T12:00:01Z")).unwrap();
+        assert_eq!((done.from, done.to), (38, MIGRATIONS.len() as u32), "{what}");
+        let c = book.conn_for_tests();
+        let count = |sql: &str| -> i64 { c.query_row(sql, [], |r| r.get(0)).unwrap() };
+        assert_eq!(persons_rows(c), persons, "{what}: the person's rows, field for field");
+        let after: Vec<(String, String)> = c.prepare("SELECT id, COALESCE(anchor_record, '') || '/' || COALESCE(anchor_leg, '') FROM trades ORDER BY id").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+        assert_eq!(after, anchors, "{what}: every trade's anchor");
+        if linked {
+            assert_eq!(count("SELECT COUNT(*) FROM accounts"), 2, "{what}");
+            assert_eq!(legs_by_ids(c), pooled, "{what}: each leg on the account of the same ids as before the split");
+            let status = |key: &str| -> String { c.query_row("SELECT a.status FROM accounts a JOIN account_refs r ON r.account_id = a.id WHERE r.value = ?1", [key], |r| r.get(0)).unwrap() };
+            assert_eq!(status("ws-3"), "open", "{what}: open where any of its ids is");
+            assert_eq!(count("SELECT COUNT(*) FROM account_links") + count("SELECT COUNT(*) FROM activity_reads"), 0, "{what}: the set's history, for the next sync");
+        } else {
+            assert_eq!(count("SELECT COUNT(*) FROM accounts"), 5, "{what}");
+            assert_eq!(legs_by_ids(c), legs_split, "{what}: left as it was");
+        }
+    }
+}
+
+/// A merge that cannot place everything on the kept account changes nothing:
+/// a row naming the account it would remove stops it, and the book is as it was.
+#[test]
+fn a_merge_that_cannot_place_a_row_fails_whole() {
+    let f = Fixture::new();
+    let t = |key: &str| -> AccountRef { AccountRef::new(Broker::named("wealthsimple"), key) };
+    let ty = AccountType::Known { kind: bagholder_core::account::AccountKind::Cash, registration: bagholder_core::account::Registration::Tfsa, managed: false, joint: false };
+    let a = f.book.add_account(f.connection, &[t("ws-1")], &ty, AccountStatus::Closed, Some("Old"), t0()).unwrap();
+    let b = f.book.add_account(f.connection, &[t("ws-2")], &ty, AccountStatus::Open, Some("New"), at("2026-01-02T00:00:00Z")).unwrap();
+    let c = f.book.conn_for_tests();
+    c.execute_batch(&format!("CREATE TABLE elsewhere (account_id TEXT REFERENCES accounts(id)); INSERT INTO elsewhere VALUES ('{a}'), ('{b}');")).unwrap();
+    let read = f.book.broker_read(f.connection, "accounts", t0()).unwrap();
+    assert!(f.book.store_account_links(f.connection, &[(a, b), (b, a)], &read).is_err());
+    let count = |sql: &str| -> i64 { c.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!((count("SELECT COUNT(*) FROM accounts"), count("SELECT COUNT(*) FROM account_links")), (2, 0), "nothing changed");
+    assert_eq!((f.book.account_by_ref(&t("ws-1")).unwrap(), f.book.account_by_ref(&t("ws-2")).unwrap()), (Some(a), Some(b)));
+}
