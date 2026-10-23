@@ -193,6 +193,7 @@ fn test_a_distribution_notice_whose_record_cannot_be_read_says_why_until_one_can
     crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[item("tmx:1")]);
     assert!(error(&app).contains("QNC · TSX-V's declared distributions could not be read again: TMX Money could not be reached"), "{}", error(&app));
     *app.feeds.record_fails.lock().unwrap() = None;
+    app.feeds.release_texts.lock().unwrap().insert("tmx:2".into(), "<p>Quantum eMotion announces a distribution.</p>".into());
     crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[item("tmx:2")]);
     assert_eq!(error(&app), "");
 }

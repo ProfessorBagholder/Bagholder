@@ -193,21 +193,21 @@ fn an_etf_s_release_is_read_from_the_etfs_press_page() {
 }
 
 #[test]
-fn a_fund_the_month_s_table_does_not_name_keeps_its_page_alone() {
-    // HPYB pays twice a month: the release lists it in its own table after the month's
-    let r = common::Recorded::new().with("https://harvestportfolios.com/etf/hpyb/", 200, HV, "page-hpyb.html").with(PRESS_ETFS, 200, HV, "press-etfs.html").with(ETFS_OCT, 200, HV, "release-etfs-2026-10.html").with_market_record_unknown();
-    let page = answered(harvest::parse_page(&common::read(HV, "page-hpyb.html"), Currency::CAD));
+fn a_fund_paid_twice_a_month_takes_the_first_distribution_its_own_row_states() {
+    // HPYB pays twice a month: the release lists it in its own table, each of
+    // the month's two distributions with its days in the row
+    let r = common::Recorded::new().with("https://harvestportfolios.com/etf/hpyb/", 200, HV, "page-hpyb.html").with(PRESS_ETFS, 200, HV, "press-etfs.html").with(ETFS_OCT, 200, HV, "release-etfs-2026-10.html");
     let ran = run_payer(r, &listed("HPYB", "Harvest Portfolios Group Inc. - Harvest Premium Yield Canadian Bank ETF"), HV);
     let (_, items) = ran.declared().unwrap();
-    assert_eq!(items.iter().map(|r| r.ex_date).max(), page.rows.iter().map(|r| r.ex_date).max());
+    let newest = items.iter().max_by_key(|r| r.ex_date).unwrap();
+    assert_eq!((newest.ex_date, newest.pay_date, newest.amount.amount), (date(2026, 10, 30), Some(date(2026, 11, 6)), dec("0.0700")));
 }
 
 #[test]
 fn a_release_without_its_days_is_a_mismatch_writing_nothing() {
-    let html = common::read(HV, "release-income-shares-2026-10.html").replace("ex-dividend date of", "ex date");
-    let Outcome::Mismatch(m) = harvest::announced(&html, "PLTE", Currency::CAD) else { panic!() };
-    assert_eq!(m.path, "release");
-    assert!(m.why.contains("are not days"), "{m:?}");
+    let html = common::read(HV, "release-income-shares-2026-10.html").replace("ex-dividend date of", "ex date").replace("of record on", "of record");
+    let why = payers::announced::announced(&html, "PLTE").unwrap_err();
+    assert!(why.contains("no ex-date or record date"), "{why}");
 }
 
 #[test]

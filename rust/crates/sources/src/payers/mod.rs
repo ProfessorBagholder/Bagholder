@@ -20,6 +20,7 @@
 //! distribution, or a date far past the fund's life are a meaning failure, and
 //! nothing is written.
 
+pub mod announced;
 pub mod bmo;
 pub mod companies;
 pub mod evolve;

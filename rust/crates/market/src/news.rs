@@ -30,6 +30,21 @@ use crate::stored::feeds::{self as sf, Feed, NewsItem, NewsKind};
 /// TMX's quote page has two news tabs on one query: "Press Releases", the
 /// companies' own wire items, and "In The Media", publishers' stories about
 /// the company (companyInNews). Both are read.
+/// One story TMX keeps, whole: a release's text as its wire sent it.
+const TMX_STORY_QUERY: &str = "query getNewsStoryById($newsid: String!) { story: getNewsStoryById(newsid: $newsid) { story } }";
+
+/// The whole text TMX keeps of the release `newsid` (the number in a TMX item's
+/// id), as HTML: where a release's figures are, the day it is announced.
+pub fn tmx_story(net: &Net, newsid: &str) -> Result<String, NetError> {
+    paced(net, "app-money.tmx.com", 0.6);
+    let payload = json!({"operationName": "getNewsStoryById", "variables": {"newsid": newsid}, "query": TMX_STORY_QUERY});
+    let data = (net.post)(crate::tmx::TMX_URL, &payload, &tmx_headers())?;
+    match data.pointer("/data/story/story").and_then(|v| v.as_str()) {
+        Some(html) if !html.is_empty() => Ok(html.to_string()),
+        _ => Err(NetError { code: None, text: format!("TMX keeps no text for the release {newsid}") }),
+    }
+}
+
 const TMX_NEWS_QUERY: &str = "query getNewsForSymbol($symbol: String!, $page: Int!, $limit: Int!, $locale: String!, $companyInNews: Boolean) { news: getNewsForSymbol(symbol: $symbol, page: $page, limit: $limit, locale: $locale, companyInNews: $companyInNews) { headline datetime source newsid summary topic } }";
 
 pub const TMX_NEWS_URL: &str = "https://money.tmx.com/en/quote/{}/news/{}";

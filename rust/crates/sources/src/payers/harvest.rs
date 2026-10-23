@@ -31,7 +31,7 @@ use bagholder_core::{Currency, SourceName};
 use bagholder_net::{Ask, Net};
 
 use crate::ask;
-use crate::html::{html_tables, text};
+use crate::html::html_tables;
 use crate::needs::PayerNeed;
 use crate::outcome::{Noted, Outcome};
 use crate::payers::{money_text, Distribution, Payer, Record};
@@ -171,64 +171,6 @@ pub fn newest_release(html: &str, prefix: &str) -> Option<String> {
     best.map(|(_, url)| url)
 }
 
-/// `html` without its `<tag …>…</tag>` elements.
-fn without(html: &str, tag: &str) -> String {
-    let (open, close) = (format!("<{tag}"), format!("</{tag}>"));
-    let mut out = String::with_capacity(html.len());
-    let mut rest = html;
-    while let Some(at) = rest.find(&open) {
-        out.push_str(&rest[..at]);
-        rest = match rest[at..].find(&close) {
-            Some(end) => &rest[at + end + close.len()..],
-            None => "",
-        };
-    }
-    out.push_str(rest);
-    out
-}
-
-/// `November 6, 2026` as a day.
-fn long_day(s: &str) -> Option<Date> {
-    let mut it = s.split_whitespace();
-    let word = it.next()?;
-    let m = MONTHS.iter().position(|n| n.eq_ignore_ascii_case(word))? as i8 + 1;
-    let d: i8 = it.next()?.trim_end_matches(',').parse().ok()?;
-    let y: i16 = it.next()?.trim_end_matches(['.', ',']).parse().ok()?;
-    Date::new(y, m, d).ok()
-}
-
-/// The words after `after` up to `until`, in `t`.
-fn between<'a>(t: &'a str, after: &str, until: &str) -> Option<&'a str> {
-    let from = t.find(after)? + after.len();
-    let len = t[from..].find(until)?;
-    Some(t[from..from + len].trim())
-}
-
-/// What a monthly release announces for `ticker`: its amount in the month's
-/// table, on the days the release states for the month. None where the
-/// release does not name the fund.
-pub fn announced(html: &str, ticker: &str, currency: Currency) -> Outcome<Option<Distribution>> {
-    // the page's scripts carry the release's first sentence again, in its metadata
-    let t = text(&without(&without(html, "script"), "style"));
-    // the month's distributions: from the release's first sentence to the
-    // twice-monthly or estimated ones it may announce after them
-    let Some(start) = t.find("announces the following") else {
-        return Outcome::Mismatch(mismatch("release", "the release announces no distributions".into()));
-    };
-    let month = &t[start..];
-    let month = &month[..["Harvest also announces", "Note:"].iter().filter_map(|w| month.find(w)).min().unwrap_or(month.len())];
-    let days = (between(month, "paid on or about ", " to "), between(month, "of record on ", ", with"), between(month, "ex-dividend date of ", "."));
-    let (Some(pay), Some(record), Some(ex)) = (days.0.and_then(long_day), days.1.and_then(long_day), days.2.and_then(long_day)) else {
-        return Outcome::Mismatch(mismatch("release", format!("the release's days {days:?} are not days")));
-    };
-    let words: Vec<&str> = month.split_whitespace().collect();
-    let Some(at) = words.windows(2).position(|w| w[0] == ticker && w[1].starts_with('$')) else { return Outcome::Answered(None) };
-    let Some(cash) = money_text(words[at + 1]) else {
-        return Outcome::Mismatch(mismatch("release", format!("{:?} is not an amount", words[at + 1])));
-    };
-    Outcome::Answered(Some(Distribution { ex_date: ex, record_date: Some(record), pay_date: Some(pay), cash, reinvested: None, currency }))
-}
-
 /// Harvest's reader. The press page and the release it links are the same for
 /// every fund of a family, so one sweep fetches each once: the reader holds the
 /// pages it read for as long as it lives, which is one sweep (`run::read` makes
@@ -299,14 +241,14 @@ impl Payer for Harvest {
             other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
         };
         let currency = record.rows.first().map(|r| r.currency).unwrap_or(need.listing.currency);
-        match announced(&release, &venue::root(&need.listing.symbol), currency) {
-            Outcome::Answered(Some(d)) => {
-                if record.rows.iter().all(|r| r.ex_date < d.ex_date) {
-                    record.rows.insert(0, d);
+        match crate::payers::announced::announced(&release, &venue::root(&need.listing.symbol)) {
+            Ok(Some(a)) => {
+                if record.rows.iter().all(|r| r.ex_date < a.ex_date) {
+                    record.rows.insert(0, Distribution { ex_date: a.ex_date, record_date: a.record_date, pay_date: a.pay_date, cash: a.cash, reinvested: None, currency });
                 }
             }
-            Outcome::Answered(None) => {}
-            other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
+            Ok(None) => {}
+            Err(why) => return Noted { outcome: Outcome::Mismatch(mismatch("release", why)), shape_change: None },
         }
         Noted { outcome: Outcome::Answered(record), shape_change: None }
     }
