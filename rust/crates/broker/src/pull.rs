@@ -361,16 +361,6 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     store_net_values(book, connection, &stated, &keys_of, now)?;
     step(Step::Balances);
     store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
-    // a closed account holds nothing: so stated, its cash now and its units as
-    // of today, which the check holds the book to as it does an open account's
-    let closed_accounts: Vec<AccountId> = stated.iter().filter(|a| !a.open).map(|a| ids[&a.key]).collect();
-    store_closed(book, connection, &closed_accounts, now)?;
-    for id in &closed_accounts {
-        if !book.stated(*id)?.units.is_some_and(|(_, lines)| lines.is_empty()) {
-            let read = book.broker_read(connection, "units", now)?;
-            book.store_units(*id, today, &[], &read, now)?;
-        }
-    }
     // each margin account's interest rates, with the day's pull alone: a rate
     // changes seldom, and the five-minute balances do not ask it again
     if daily {
@@ -725,16 +715,14 @@ pub struct BalancesRead {
 }
 
 /// The balances now, apart from a pull (`docs/plans/stage-3c-switch.md`, §3: every
-/// five minutes while a page is open): each open account's worth and cash, each
-/// closed one's cash as nothing (`store_closed`), and what each margin account
-/// can borrow, for the connection's accounts the book holds
+/// five minutes while a page is open): each open account's worth and cash, and
+/// what each margin account can borrow, for the connection's accounts the book holds
 /// (`SPEC.md`, the sources: net liquidation value at every sync and every five
 /// minutes while a page is open).
 pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, now: jiff::Timestamp) -> Result<BalancesRead> {
     let broker = adapter.broker();
     let mut keys_of: BTreeMap<AccountId, String> = BTreeMap::new();
     let mut margin = BTreeSet::new();
-    let mut closed = Vec::new();
     for a in book.accounts()? {
         if a.connection != connection {
             continue;
@@ -743,7 +731,6 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
             continue;
         };
         if a.status != AccountStatus::Open {
-            closed.push(a.id);
             continue;
         }
         if is_margin(&a.account_type) {
@@ -758,7 +745,6 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         Err(f) => failures.push(("accounts".into(), f)),
     }
     accounts.extend(store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?);
-    accounts.extend(store_closed(book, connection, &closed, now)?);
     let mut cash_moved = Vec::new();
     for a in &accounts {
         let stated = book.stated_latest(*a)?;
@@ -794,19 +780,6 @@ fn store_margin_rates(
         }
     }
     Ok(())
-}
-
-/// A closed account's cash now, stated as nothing: what closing means, asked
-/// of the broker by no request. The accounts it was stored for.
-fn store_closed(book: &Book, connection: ConnectionId, closed: &[AccountId], now: jiff::Timestamp) -> Result<Vec<AccountId>> {
-    if closed.is_empty() {
-        return Ok(Vec::new());
-    }
-    let read = book.broker_read(connection, "cash", now)?;
-    for id in closed {
-        book.store_cash(*id, now, &BTreeMap::new(), &read)?;
-    }
-    Ok(closed.to_vec())
 }
 
 /// What each account is worth now, where the broker states it. The accounts a

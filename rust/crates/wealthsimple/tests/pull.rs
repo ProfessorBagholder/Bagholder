@@ -540,37 +540,6 @@ fn a_move_out_of_a_closed_account_is_booked_once_from_its_own_row_read_beside_th
     }
 }
 
-/// A closed account the book holds cash in (the sale's cash, its leaving row
-/// not listed): its statement of nothing is stored by the sync and by the
-/// five-minute balances pass, neither asking Wealthsimple for its balance, so
-/// the difference waits after the sync and is confirmed by the pass.
-#[test]
-fn a_closed_account_with_cash_left_in_the_book_is_said_after_the_sync_and_one_balances_pass() {
-    let replies = resp_replies();
-    let home = tempfile::tempdir().unwrap();
-    let (sync, pass) = ("2025-11-19T20:00:00Z", "2025-11-19T20:05:00Z");
-    let (book, _) = Book::open_in(home.path(), "test", at(sync)).unwrap();
-    let mut replay = Replay::read(replies.path()).unwrap().taken_before_statements();
-    resp_rows(&mut replay.rows);
-    let mut ws = Wealthsimple::new(replay);
-    let c = connection(&book, sync);
-    pull(&book, &mut ws, c, "2025-11-19".parse().unwrap(), at(sync), &mut |_| {}).unwrap();
-    let managed = resp_account(&book, "anon-resp-1");
-    assert!(cash_by_account(&book).get(&managed).is_some_and(|c| !c.is_zero()), "the book holds the sale's cash there");
-    let stated = book.stated(managed).unwrap();
-    let (when, cash) = stated.cash.expect("its cash stated by the sync");
-    assert!(cash.is_empty(), "as nothing");
-    assert_eq!(stated.cash_read, Some(Default::default()), "nothing, as of the read");
-    assert_eq!(stated.units.map(|(_, l)| l.len()), Some(0), "and no units");
-    assert_eq!(Some(when), stated.activity_read_at, "stated with the read: a difference waits");
-    bagholder_broker::pull::balances(&book, &mut ws, c, at(pass)).unwrap();
-    let stated = book.stated(managed).unwrap();
-    let (when, cash) = stated.cash.expect("stated again by the pass");
-    assert!(cash.is_empty());
-    assert!(stated.activity_read_at.is_some_and(|read| when > read), "stated after the read: the difference is confirmed");
-    assert!(ws.source.asked_balances.iter().flatten().all(|k| k != "anon-resp-1"), "{:?}", ws.source.asked_balances);
-}
-
 /// The broker of the recorded replies, but one row's record cannot be put
 /// together: what a failed read for it answers.
 struct Unrecorded {
