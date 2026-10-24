@@ -772,3 +772,32 @@ fn accounts_wealthsimple_links_are_one_account_from_the_pull_that_states_the_lin
     once_with(&book, replies.path(), pulls[2], resp_rows);
     assert_eq!(count("SELECT COUNT(*) FROM accounts"), 1);
 }
+
+/// A move whose leaving row Wealthsimple does not list, its arrival naming the
+/// account it came from (rule 15, brief 75 §4 withdrawn: owner, 2026-10-23):
+/// booked leaving that account from the arrival, so its cash is not counted in
+/// both; and once the leaving row is listed, booked from that row alone, the
+/// arrival derived again without it, never twice.
+#[test]
+fn a_move_listed_only_by_its_arrival_books_its_leaving_and_once_its_own_row_comes_only_that() {
+    let replies = resp_replies();
+    let m = late_cash_move();
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at(m.pulls[0])).unwrap();
+    // the arrival listed, nothing leaving
+    once_with(&book, replies.path(), m.pulls[0], resp_rows);
+    let c = connection(&book, m.pulls[0]);
+    let source = SourceName::named("wealthsimple");
+    let arrival = book.record_by_key(Some(c), &source, m.inn).unwrap().expect("the arrival, stored");
+    let out = leaving(&book, m.day);
+    assert_eq!(out.len(), 1, "booked leaving from the arrival: {out:?}");
+    assert_eq!(out[0].id.record, arrival);
+    assert_eq!(out[0].cash, Some(Money::new(Dec::parse(&format!("-{MOVED}")).unwrap(), Currency::CAD)));
+    // the leaving row listed later: booked from it alone
+    once_with(&book, replies.path(), m.pulls[1], m.after);
+    let own = book.record_by_key(Some(c), &source, m.out).unwrap().expect("the leaving row, stored");
+    let out = leaving(&book, m.day);
+    assert_eq!(out.len(), 1, "once: {out:?}");
+    assert_eq!(out[0].id.record, own, "from its own row");
+    assert!(book.transactions_of(arrival).unwrap().iter().all(|t| t.kind == Kind::TransferIn), "the arrival books its own account alone");
+}
