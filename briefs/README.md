@@ -85,4 +85,4 @@ A session taking over the reviewing role starts with [HANDOFF.md](HANDOFF.md).
 | 72 | [Agents anywhere read the trade history: one agents-only address, through the person's own tunnel](72-agents-from-anywhere.md) | Planned in #572 (brief 73) |
 | 73 | [Verdict on plan #572, agents anywhere: Go with seven changes](73-agents-anywhere-plan-verdict.md) | Current |
 | 74 | [Verdict on plan #573, nothing of the earlier app kept: Go with four changes](74-remove-the-earlier-app-plan-verdict.md) | Current |
-| 75 | [The earlier app gone, every account read one way, and the page saying when the numbers match](75-the-earlier-app-gone.md) | Current; the record and the migration SQL in [75/](75/) |
+| 75 | [The earlier app gone, every account read one way, and the page saying when the numbers match](75-the-earlier-app-gone.md) | Shipped as 2.10.0 to 2.10.2 and withdrawn (wrong figures on a real book); 2.10.3 restores 2.9.0's build; the migrations stand; the record in [75/](75/). Next: the recorded capture set |
