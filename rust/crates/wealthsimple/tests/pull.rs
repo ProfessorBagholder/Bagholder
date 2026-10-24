@@ -740,3 +740,47 @@ fn accounts_wealthsimple_links_are_one_account_from_the_pull_that_states_the_lin
     once_with(&book, replies.path(), pulls[2], resp_rows);
     assert_eq!(count("SELECT COUNT(*) FROM accounts"), 1);
 }
+
+/// One book account behind two open ids Wealthsimple links as one: every read
+/// of what the broker states of it (cash, worth, holdings) asks for both ids,
+/// in the day's pull and in the five-minute balances alike, never one of them
+/// (2.10.3 read one id per account: its other id's holdings were stated as none).
+#[test]
+fn an_account_behind_two_open_ids_is_read_on_both_by_the_pull_and_the_balances() {
+    let replies = resp_replies_with("open");
+    link_resp(replies.path());
+    let home = tempfile::tempdir().unwrap();
+    let now = "2025-11-19T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
+    let mut replay = Replay::read(replies.path()).unwrap().taken_before_statements();
+    resp_rows(&mut replay.rows);
+    let mut ws = Wealthsimple::new(replay);
+    pull(&book, &mut ws, connection(&book, now), "2025-11-19".parse().unwrap(), at(now), &mut |_| {}).unwrap();
+    assert_eq!(resp_account(&book, "anon-resp-1"), resp_account(&book, "anon-resp-2"), "one account");
+    let both = |asked: &[String]| ["anon-resp-1", "anon-resp-2"].iter().all(|k| asked.iter().any(|a| a == k));
+    assert!(ws.source.asked_balances.iter().any(|b| both(b)), "the pull's balances: {:?}", ws.source.asked_balances);
+    for k in ["anon-resp-1", "anon-resp-2"] {
+        assert!(ws.source.asked.iter().any(|a| a.starts_with(&format!("positions {k} "))), "the holdings of {k}: {:?}", ws.source.asked);
+    }
+    let mut ws = Wealthsimple::new(Replay::read(replies.path()).unwrap().taken_before_statements());
+    bagholder_broker::pull::balances(&book, &mut ws, connection(&book, now), at("2025-11-19T20:05:00Z")).unwrap();
+    assert!(ws.source.asked_balances.iter().any(|b| both(b)), "the five-minute balances: {:?}", ws.source.asked_balances);
+}
+
+/// A statement that an account holds nothing is no read to stand on: the day's
+/// pull asks for its holdings again, as of the same day (2.10.2 wrote one onto
+/// the accounts it merged, and 2.10.3 took it as read).
+#[test]
+fn a_statement_of_nothing_held_is_read_again_on_the_day_s_pull() {
+    let replies = resp_replies_with("open");
+    let home = tempfile::tempdir().unwrap();
+    let now = "2025-11-19T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
+    once_with(&book, replies.path(), now, resp_rows);
+    let id = resp_account(&book, "anon-resp-2");
+    let c = connection(&book, now);
+    let read = book.broker_read(c, "units", at(now)).unwrap();
+    book.store_units(id, "2025-11-18".parse().unwrap(), &[], &read, at(now)).unwrap();
+    let (_, asked) = once_with(&book, replies.path(), "2025-11-19T21:00:00Z", resp_rows);
+    assert!(asked.iter().any(|a| a == "positions anon-resp-2 2025-11-18"), "{asked:?}");
+}
