@@ -721,6 +721,7 @@ const TERMINAL: [(&str, usize, &str); 9] = [
     ("server/src/pull_broker.rs", 4, "the `pull` subcommand's own output"),
     ("server/src/demo.rs", 3, "the `demo` subcommand's own output"),
     ("server/src/capacity.rs", 3, "the `capacity` subcommand's own output: the table row by row as it is measured, then the verdict"),
+    ("server/src/compare.rs", 3, "the `compare` subcommand's own output: the report, its usage, and why a side could not be read"),
 ];
 
 /// The terminal the app was started from says only what the person needs there
