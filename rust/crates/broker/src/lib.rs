@@ -204,6 +204,14 @@ pub trait BrokerAdapter {
     /// The rows about to be recorded, so an adapter can read what they share
     /// in as few requests as its broker takes (their securities, in batches).
     fn prepare(&mut self, _rows: &[&Row]) {}
+    /// The rows of the person's accounts the adapter read in this pull for
+    /// another row's record (a move's other side, over its days) beside each
+    /// account's own read, each given once: the pull stores them as it stores
+    /// every row read, so a row a closed account's feed lists after that
+    /// account was read whole is stored without the account being read again.
+    fn read_beside(&mut self) -> Vec<Row> {
+        Vec::new()
+    }
     /// A row's record: the row and every reply read once for it, as the book
     /// stores it.
     fn record(&mut self, row: &Row, book: &mut dyn BookMoves) -> Answer<Value>;
@@ -220,6 +228,35 @@ pub trait BrokerAdapter {
     /// A stored record's account and day: whether a read of that account
     /// from a day covers it.
     fn placed(&self, payload: &Value) -> Option<(String, jiff::civil::Date)>;
+    /// Whether `refresh` has something to add to a stored record: asked of
+    /// every stored record, so it reads nothing.
+    fn refreshes(&self, payload: &Value) -> bool {
+        let _ = payload;
+        false
+    }
+    /// A stored record put together before the adapter read a part it reads
+    /// now: the record with that part added, its other parts as stored, read
+    /// once by the pull after the accounts and their activity. None where the
+    /// record lacks nothing (or what it lacks cannot be read: it is asked
+    /// again on the next pull).
+    fn refresh(&mut self, payload: &Value, book: &mut dyn BookMoves) -> Option<Answer<Value>> {
+        let _ = (payload, book);
+        None
+    }
+    /// The other account whose rows a stored record holds over some days, as
+    /// they were when it was put together: a row of it recorded later is
+    /// given to `amend`.
+    fn watches(&self, payload: &Value) -> Option<String> {
+        let _ = payload;
+        None
+    }
+    /// A stored record that holds `row`'s account's rows over some days, with
+    /// `row` added where it falls in them and is not held as it is now; None
+    /// where nothing changes. The record is derived again from it.
+    fn amend(&self, payload: &Value, row: &Row) -> Option<Value> {
+        let _ = (payload, row);
+        None
+    }
     /// The day the broker files an instant under.
     fn day(&self, at: jiff::Timestamp) -> jiff::civil::Date;
     /// Each account's cash per currency now: an account left out is one the

@@ -79,6 +79,16 @@ pub struct Wealthsimple<S: Source> {
     statement_types: BTreeMap<String, &'static str>,
     /// Each account's own currency: a cash statement's rows are in it.
     currencies: BTreeMap<String, Currency>,
+    /// The accounts the person's accounts list stated in this pull.
+    stated: BTreeSet<String>,
+    /// The day each account's feed was read from in this pull (the whole of it
+    /// when `None`): its rows from then are among `rows`.
+    read_from: BTreeMap<String, Option<jiff::civil::Date>>,
+    /// An account's feed read again from a day before this pull's read of it,
+    /// for a move arriving from it: the day, and its rows from then.
+    read_again: BTreeMap<String, (jiff::civil::Date, Vec<Value>)>,
+    /// The rows of `read_again` given to the pull to store (`read_beside`).
+    given: BTreeSet<String>,
     /// The first failure met while putting a record together.
     failed: Option<Failure>,
 }
@@ -89,7 +99,7 @@ fn mismatch(m: Mismatch) -> Failure {
 
 impl<S: Source> Wealthsimple<S> {
     pub fn new(source: S) -> Wealthsimple<S> {
-        Wealthsimple { source, zones: bagholder_book::zones::Zones::default(), rows: vec![], securities: BTreeMap::new(), positions: BTreeMap::new(), moves: vec![], transfers: BTreeMap::new(), cards: BTreeMap::new(), statement_types: BTreeMap::new(), currencies: BTreeMap::new(), failed: None }
+        Wealthsimple { source, zones: bagholder_book::zones::Zones::default(), rows: vec![], securities: BTreeMap::new(), positions: BTreeMap::new(), moves: vec![], transfers: BTreeMap::new(), cards: BTreeMap::new(), statement_types: BTreeMap::new(), currencies: BTreeMap::new(), stated: BTreeSet::new(), read_from: BTreeMap::new(), read_again: BTreeMap::new(), given: BTreeSet::new(), failed: None }
     }
 
     fn day_of(&self, row: &Value) -> Option<jiff::civil::Date> {
@@ -254,6 +264,35 @@ impl<S: Source> Replies for Wealthsimple<S> {
     fn book(&mut self, accounts: &[String], days: &[String]) -> Vec<BookMove> {
         self.moves.iter().filter(|m| accounts.contains(&m.account) && days.contains(&m.day)).cloned().collect()
     }
+    fn opposing(&mut self, account: &str, first: &str, last: &str) -> Option<Vec<Value>> {
+        let (Ok(first), Ok(last)) = (first.parse::<jiff::civil::Date>(), last.parse::<jiff::civil::Date>()) else { return None };
+        let within = |r: &Value, zones: &bagholder_book::zones::Zones| {
+            let at: Option<jiff::Timestamp> = Node::root(r).text("occurredAt").ok().and_then(|t| t.parse().ok());
+            Node::root(r).text("accountId").ok() == Some(account) && at.and_then(|at| zones.day(at, ZONE).ok()).is_some_and(|d| d >= first && d <= last)
+        };
+        // read in this pull over those days
+        if self.read_from.get(account).is_some_and(|from| from.is_none_or(|f| f <= first)) {
+            return Some(self.rows.iter().filter(|r| within(r, &self.zones)).cloned().collect());
+        }
+        // one of the person's accounts not read over those days: read again from the first
+        if !self.stated.contains(account) {
+            return None;
+        }
+        if !self.read_again.get(account).is_some_and(|(from, _)| *from <= first) {
+            match self.source.activity(account, Some(first)) {
+                Ok(rows) => {
+                    self.read_again.insert(account.to_string(), (first, rows));
+                }
+                Err(Failure::Refused(_)) => return None,
+                Err(f) => {
+                    self.note(f);
+                    return None;
+                }
+            }
+        }
+        let (_, rows) = self.read_again.get(account)?;
+        Some(rows.iter().filter(|r| within(r, &self.zones)).cloned().collect())
+    }
 }
 
 /// The adapter's reading of one row, for the pull.
@@ -309,6 +348,21 @@ pub fn book_moves(book: &mut dyn BookMoves, accounts: &[String], days: &[String]
         .collect()
 }
 
+impl<S: Source> Wealthsimple<S> {
+    /// A stored record of a move arriving from another account put together
+    /// before its other account's feed was read with it: that account.
+    fn lacks_opposing<'a>(&self, payload: &'a Value) -> Option<&'a str> {
+        let root = Node::root(payload);
+        if root.field("unread").is_ok() || root.field("opposing").is_ok() {
+            return None;
+        }
+        let row = root.obj("activity").ok()?;
+        let day = self.day_of(row.value())?;
+        assemble::needs(row.value(), &day.to_string()).ok()?.opposing?;
+        row.opt_text("opposingAccountId").ok().flatten()
+    }
+}
+
 impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn broker(&self) -> Broker {
         broker()
@@ -319,6 +373,7 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn accounts(&mut self) -> Answer<Vec<AccountStated>> {
         let nodes = self.source.accounts()?;
         let stated = crate::read::accounts(&nodes).map_err(mismatch)?;
+        self.stated = stated.iter().map(|a| a.key.clone()).collect();
         for n in &nodes {
             let n = Node::root(n);
             let id = n.text("id").map_err(mismatch)?.to_string();
@@ -355,6 +410,14 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
             }
         }
         self.rows.extend(values);
+        // its feed read whole from `from`: a row it cannot keep leaves it not
+        if out.unkeyed.is_empty() {
+            let e = self.read_from.entry(account.to_string()).or_insert(from);
+            *e = match (*e, from) {
+                (Some(a), Some(b)) => Some(a.min(b)),
+                _ => None,
+            };
+        }
         Ok(out)
     }
     fn prepare(&mut self, rows: &[&Row]) {
@@ -418,6 +481,86 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
             return Err(f);
         }
         Ok(record?.to_value())
+    }
+    fn watches(&self, payload: &Value) -> Option<String> {
+        Node::root(payload).obj("opposing").ok()?.text("account").ok().map(str::to_string)
+    }
+    fn amend(&self, payload: &Value, row: &Row) -> Option<Value> {
+        let root = Node::root(payload);
+        let held = root.obj("opposing").ok()?;
+        let r = Node::root(&row.value);
+        if held.text("account").ok()? != row.account || r.text("accountId").ok()? != row.account || !assemble::is_move(&r) {
+            return None;
+        }
+        // within the days its rows were read over
+        let day = self.day_of(root.obj("activity").ok()?.value())?.to_string();
+        let siblings: Vec<Value> = match root.list("siblings") {
+            Ok(l) => l.into_iter().map(|n| n.value().clone()).collect(),
+            // a move read with no group (one of cash) has no siblings part
+            Err(_) => vec![],
+        };
+        let (first, last) = assemble::days_read(&siblings, &day);
+        let on = self.day_of(&row.value)?.to_string();
+        if on < first || on > last {
+            return None;
+        }
+        let id = r.text("canonicalId").ok()?;
+        let mut rows: Vec<Value> = held.list("rows").ok()?.into_iter().map(|n| n.value().clone()).collect();
+        match rows.iter().position(|x| Node::root(x).text("canonicalId").ok() == Some(id)) {
+            Some(i) if rows[i] == row.value => return None,
+            Some(i) => rows[i] = row.value.clone(),
+            None => rows.push(row.value.clone()),
+        }
+        let Value::Object(mut out) = payload.clone() else { return None };
+        let record = crate::record::Record { opposing: Some(crate::record::Opposing { account: row.account.clone(), rows }), ..crate::record::Record::of(Value::Null) };
+        if let Value::Object(part) = record.to_value() {
+            out.extend(part.into_iter().filter(|(k, _)| k == "opposing"));
+        }
+        Some(Value::Object(out))
+    }
+    fn read_beside(&mut self) -> Vec<Row> {
+        let mut out = Vec::new();
+        let again: Vec<(String, Value)> = self.read_again.iter().flat_map(|(a, (_, rows))| rows.iter().map(move |r| (a.clone(), r.clone()))).collect();
+        for (account, v) in again {
+            let Ok(key) = Node::root(&v).text("canonicalId").map(str::to_string) else { continue };
+            if !self.given.insert(key.clone()) {
+                continue;
+            }
+            if let Some(r) = read_row(&v, &account, self.day_of(&v)) {
+                // a row read in this pull, for a move's siblings, once
+                if !self.rows.iter().any(|x| Node::root(x).text("canonicalId").ok() == Some(key.as_str())) {
+                    self.rows.push(v);
+                }
+                out.push(r);
+            }
+        }
+        out
+    }
+    fn refreshes(&self, payload: &Value) -> bool {
+        self.lacks_opposing(payload).is_some_and(|o| self.stated.contains(o) || self.read_from.contains_key(o))
+    }
+    fn refresh(&mut self, payload: &Value, _book: &mut dyn BookMoves) -> Option<Answer<Value>> {
+        let o = self.lacks_opposing(payload)?.to_string();
+        let root = Node::root(payload);
+        let activity = root.obj("activity").ok()?;
+        let day = self.day_of(activity.value())?.to_string();
+        // a move read with no group (one of cash) has no siblings part
+        let siblings: Vec<Value> = match root.list("siblings") {
+            Ok(l) => l.into_iter().map(|n| n.value().clone()).collect(),
+            Err(_) => vec![],
+        };
+        self.failed = None;
+        let read = assemble::opposing(&o, &siblings, &day, self);
+        if let Some(f) = self.failed.take() {
+            return Some(Err(f));
+        }
+        let read = read?;
+        let Value::Object(mut out) = payload.clone() else { return None };
+        let record = crate::record::Record { opposing: Some(read), ..crate::record::Record::of(Value::Null) };
+        if let Value::Object(part) = record.to_value() {
+            out.extend(part.into_iter().filter(|(k, _)| k == "opposing"));
+        }
+        Some(Ok(Value::Object(out)))
     }
     fn reads_positions(&self, payload: &Value) -> bool {
         let Ok(row) = Node::root(payload).obj("activity") else { return false };
