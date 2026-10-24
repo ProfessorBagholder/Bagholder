@@ -150,6 +150,8 @@ To build the image yourself, from the root of a clone, `docker build -f rust/Doc
 
 Every copy checks GitHub for the latest release when it starts and once an hour. When there is a newer one, the header shows it. Your database and your login are never part of an update; they stay in the data folder.
 
+An update that changes the database first saves a copy of it under `~/.bagholder-rust/snapshots/`. To see what an update changed, `bagholder compare ~/.bagholder-rust/snapshots/<the copy> ~/.bagholder-rust` prints each account's holdings and cash that differ between the two, and what each disagrees with your broker on; neither is changed.
+
 - **Unpacked from a release archive:** the header shows an `Update to vX.Y.Z` button. Press it. Bagholder downloads the release's archive for your platform, checks it against the release's checksum, swaps its own files and restarts itself; the copies it replaced are kept under `~/.bagholder-rust/previous` until the next update.
 - **Cloned with git:** the same button runs `git pull` on `master`, builds the new page (`npm ci` and `npm run build` in `web/`) and the server (`cargo build --release --bins` in `rust/`) and restarts; a build that fails puts the previous commit back. A checkout with local changes or on another branch gets an `Update available` link instead, and you pull it yourself:
 

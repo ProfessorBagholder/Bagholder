@@ -7,6 +7,7 @@
 
 mod app;
 mod capacity;
+mod compare;
 mod logfile;
 #[cfg(feature = "demo")]
 mod demo;
@@ -389,6 +390,10 @@ fn main() {
     #[cfg(feature = "pull-broker")]
     if args.first().map(String::as_str) == Some("pull-broker") {
         std::process::exit(pull_broker::cli(&args[1..]));
+    }
+    // two books' figures side by side, for checking what an update did (README)
+    if args.first().map(String::as_str) == Some("compare") {
+        std::process::exit(compare::cli(&args[1..]));
     }
     // the server held to its cost budget at the reference size (docs/architecture.md §16)
     if args.first().map(String::as_str) == Some("capacity") {
