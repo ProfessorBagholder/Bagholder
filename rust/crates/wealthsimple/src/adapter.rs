@@ -87,6 +87,8 @@ pub struct Wealthsimple<S: Source> {
     /// An account's feed read again from a day before this pull's read of it,
     /// for a move arriving from it: the day, and its rows from then.
     read_again: BTreeMap<String, (jiff::civil::Date, Vec<Value>)>,
+    /// The rows of `read_again` given to the pull to store (`read_beside`).
+    given: BTreeSet<String>,
     /// The first failure met while putting a record together.
     failed: Option<Failure>,
 }
@@ -97,7 +99,7 @@ fn mismatch(m: Mismatch) -> Failure {
 
 impl<S: Source> Wealthsimple<S> {
     pub fn new(source: S) -> Wealthsimple<S> {
-        Wealthsimple { source, zones: bagholder_book::zones::Zones::default(), rows: vec![], securities: BTreeMap::new(), positions: BTreeMap::new(), moves: vec![], transfers: BTreeMap::new(), cards: BTreeMap::new(), statement_types: BTreeMap::new(), currencies: BTreeMap::new(), stated: BTreeSet::new(), read_from: BTreeMap::new(), read_again: BTreeMap::new(), failed: None }
+        Wealthsimple { source, zones: bagholder_book::zones::Zones::default(), rows: vec![], securities: BTreeMap::new(), positions: BTreeMap::new(), moves: vec![], transfers: BTreeMap::new(), cards: BTreeMap::new(), statement_types: BTreeMap::new(), currencies: BTreeMap::new(), stated: BTreeSet::new(), read_from: BTreeMap::new(), read_again: BTreeMap::new(), given: BTreeSet::new(), failed: None }
     }
 
     fn day_of(&self, row: &Value) -> Option<jiff::civil::Date> {
@@ -515,6 +517,24 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
             out.extend(part.into_iter().filter(|(k, _)| k == "opposing"));
         }
         Some(Value::Object(out))
+    }
+    fn read_beside(&mut self) -> Vec<Row> {
+        let mut out = Vec::new();
+        let again: Vec<(String, Value)> = self.read_again.iter().flat_map(|(a, (_, rows))| rows.iter().map(move |r| (a.clone(), r.clone()))).collect();
+        for (account, v) in again {
+            let Ok(key) = Node::root(&v).text("canonicalId").map(str::to_string) else { continue };
+            if !self.given.insert(key.clone()) {
+                continue;
+            }
+            if let Some(r) = read_row(&v, &account, self.day_of(&v)) {
+                // a row read in this pull, for a move's siblings, once
+                if !self.rows.iter().any(|x| Node::root(x).text("canonicalId").ok() == Some(key.as_str())) {
+                    self.rows.push(v);
+                }
+                out.push(r);
+            }
+        }
+        out
     }
     fn refreshes(&self, payload: &Value) -> bool {
         self.lacks_opposing(payload).is_some_and(|o| self.stated.contains(o) || self.read_from.contains_key(o))

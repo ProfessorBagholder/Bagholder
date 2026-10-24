@@ -204,6 +204,14 @@ pub trait BrokerAdapter {
     /// The rows about to be recorded, so an adapter can read what they share
     /// in as few requests as its broker takes (their securities, in batches).
     fn prepare(&mut self, _rows: &[&Row]) {}
+    /// The rows of the person's accounts the adapter read in this pull for
+    /// another row's record (a move's other side, over its days) beside each
+    /// account's own read, each given once: the pull stores them as it stores
+    /// every row read, so a row a closed account's feed lists after that
+    /// account was read whole is stored without the account being read again.
+    fn read_beside(&mut self) -> Vec<Row> {
+        Vec::new()
+    }
     /// A row's record: the row and every reply read once for it, as the book
     /// stores it.
     fn record(&mut self, row: &Row, book: &mut dyn BookMoves) -> Answer<Value>;
