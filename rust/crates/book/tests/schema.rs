@@ -612,3 +612,33 @@ fn a_merge_that_cannot_place_a_row_fails_whole() {
     assert_eq!((count("SELECT COUNT(*) FROM accounts"), count("SELECT COUNT(*) FROM account_links")), (2, 0), "nothing changed");
     assert_eq!((f.book.account_by_ref(&t("ws-1")).unwrap(), f.book.account_by_ref(&t("ws-2")).unwrap()), (Some(a), Some(b)));
 }
+
+/// Migration 40: the empty cash and units statements 2.10.0 to 2.10.2 wrote for
+/// every closed account go; a closed account's statement from when it was open,
+/// which has its rows, stays, and an open account's statements are untouched.
+#[test]
+fn migration_40_drops_only_a_closed_account_s_statements_of_nothing() {
+    let f = Fixture::new();
+    let t = |key: &str| -> AccountRef { AccountRef::new(Broker::named("wealthsimple"), key) };
+    let ty = AccountType::Known { kind: bagholder_core::account::AccountKind::Cash, registration: bagholder_core::account::Registration::Tfsa, managed: false, joint: false };
+    let closed = f.book.add_account(f.connection, &[t("ws-1")], &ty, AccountStatus::Closed, None, t0()).unwrap();
+    let open = f.book.add_account(f.connection, &[t("ws-2")], &ty, AccountStatus::Open, None, t0()).unwrap();
+    let cad = |v: &str| std::collections::BTreeMap::from([(bagholder_core::Currency::CAD, bagholder_core::Dec::parse(v).unwrap())]);
+    let read = f.book.broker_read(f.connection, "cash", t0()).unwrap();
+    // when it was open: a real statement
+    f.book.store_cash(closed, at("2026-01-02T00:00:00Z"), &cad("100"), &read).unwrap();
+    // since 2.10.0: stated as holding nothing
+    f.book.store_cash(closed, at("2026-10-23T00:00:00Z"), &std::collections::BTreeMap::new(), &read).unwrap();
+    f.book.store_units(closed, "2026-10-23".parse().unwrap(), &[], &read, at("2026-10-23T00:00:00Z")).unwrap();
+    // an open account's statement of no cash
+    f.book.store_cash(open, at("2026-10-23T00:00:00Z"), &std::collections::BTreeMap::new(), &read).unwrap();
+    let c = f.book.conn_for_tests();
+    let kinds = |a: bagholder_core::AccountId| -> Vec<(String, i64)> {
+        c.prepare("SELECT kind, (SELECT COUNT(*) FROM statement_cash WHERE statement_id = s.id) FROM statements s WHERE account_id = ?1 ORDER BY kind, rowid").unwrap().query_map([a.to_string()], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+    };
+    assert_eq!(kinds(closed), vec![("cash".to_string(), 1), ("cash".to_string(), 0), ("units".to_string(), 0)]);
+    let open_before = kinds(open);
+    c.execute_batch(MIGRATIONS[39].sql).unwrap();
+    assert_eq!(kinds(closed), vec![("cash".to_string(), 1)], "the statement with its rows stands");
+    assert_eq!(kinds(open), open_before, "an open account's, untouched");
+}
