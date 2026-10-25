@@ -53,18 +53,31 @@ fn a_withdrawal_no_match_named_is_no_repayment() {
 
 /// A repayment is set against the income in scope whichever account the money
 /// left: it stays in its month's bar under an account filter, the paying
-/// account's or another's, and leaves under a holding's, which pays no debt.
+/// account's or another's, and leaves under a holding's, which pays no debt (the
+/// owner, 2026-10-20: "repayments are not made on a per holding basis").
 #[test]
-fn a_repayment_is_under_the_account_it_left_and_not_under_a_holdings() {
-    // the owner, 2026-10-23: filtered to one account, Cashflow shows that account's
-    // payments, not another account's repayments
+fn a_repayment_stays_under_any_account_filter_and_not_under_a_holdings() {
     let (mut b, e) = with_a_loan();
     let feb = |e: &bagholder_engine::Engine, f: &Filters| e.scope(f).cashflow.months.iter().find(|m| (m.year, m.month) == (2026, 2)).map(|m| m.repayments.total.clone().unwrap());
-    let mut only = |acc: &str| Filters { accounts: BTreeSet::from([b.ids.account(acc)]), ..Filters::default() };
-    assert_eq!(feb(&e, &only("A")), Some(Money::new(d("200"), Currency::CAD)), "the account the money left");
-    assert!(feb(&e, &only("B")).is_none_or(|m| m.amount.is_zero()), "another account");
+    for acc in ["A", "B"] {
+        let only = Filters { accounts: BTreeSet::from([b.ids.account(acc)]), ..Filters::default() };
+        assert_eq!(feb(&e, &only), Some(Money::new(d("200"), Currency::CAD)), "filtered to account {acc}");
+    }
     let holding = Filters { instruments: BTreeSet::from([b.ids.instrument("U")]), ..Filters::default() };
     assert!(feb(&e, &holding).is_none_or(|m| m.amount.is_zero()), "under a holding's filter");
+}
+
+/// Under an account filter the chart begins at the first payment of the accounts
+/// in scope: another account's repayment draws no month before it (the owner,
+/// 2026-10-23: not "all the bars that had no history for the selected accounts").
+#[test]
+fn under_an_account_filter_the_chart_begins_at_that_account_s_first_payment() {
+    let (mut b, e) = with_a_loan();
+    let months = |b: &mut Built, acc: &str| e.scope(&Filters { accounts: BTreeSet::from([b.ids.account(acc)]), ..Filters::default() }).cashflow.months;
+    // B's first distribution is in February, the month of A's repayment
+    assert_eq!(months(&mut b, "B").first().map(|m| (m.year, m.month)), Some((2026, 2)));
+    // C has paid nothing and been paid nothing: no bar, the household's repayment none either
+    assert!(months(&mut b, "C").is_empty());
 }
 
 #[test]
