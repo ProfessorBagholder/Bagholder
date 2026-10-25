@@ -1168,3 +1168,135 @@ fn a_book_of_every_shape_is_pulled_whole_and_agrees_with_the_broker() {
         units_agree(&book, &ws.source);
     }
 }
+
+// ---------------------------------------------------------------------------
+// A book read whole again, and carried by the migrations (brief 76, PR 2): the
+// book built from the made-up broker with every shape on is the same book
+// whichever way it is reached.
+// ---------------------------------------------------------------------------
+
+/// What a book holds, by what names it apart from the book's own ids: each
+/// account, by the broker ids behind it, with its cash per currency and units
+/// per symbol, and each record's state by its source and key.
+#[allow(clippy::type_complexity)]
+fn held(book: &Book) -> (std::collections::BTreeMap<String, (std::collections::BTreeMap<String, Dec>, std::collections::BTreeMap<String, Dec>)>, std::collections::BTreeMap<(String, String), String>) {
+    let mut accounts = std::collections::BTreeMap::new();
+    for a in book.accounts().unwrap() {
+        let mut ids: Vec<String> = book.account_refs(a.id).unwrap().into_iter().map(|r| r.value).collect();
+        ids.sort();
+        accounts.insert(ids.join("+"), (book_cash(book, a.id), book_units(book, a.id)));
+    }
+    let records = book
+        .conn_for_tests()
+        .prepare("SELECT source, source_key, state FROM source_records")
+        .unwrap()
+        .query_map([], |r| Ok(((r.get::<_, String>(0)?, r.get::<_, String>(1)?), r.get::<_, String>(2)?)))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    (accounts, records)
+}
+
+/// A book of every shape read whole again from the same broker, every account's
+/// full read cleared as migration 37 cleared them: the same accounts, cash,
+/// units and records. 2.10.0's re-read of the owner's book was not the same book.
+#[test]
+fn a_book_of_every_shape_read_whole_again_is_the_same_book() {
+    for (seed, today) in [(13, "2026-10-08"), (5, "2026-10-25")] {
+        let today: jiff::civil::Date = today.parse().unwrap();
+        let (_h, book, mut ws, report) = shaped_by(Size { seed, ..SHAPED }, today, &SHAPES);
+        assert!(report.failures.is_empty(), "seed {seed}: {:?}", report.failures);
+        let before = held(&book);
+        book.conn_for_tests().execute("DELETE FROM activity_reads", []).unwrap();
+        let now = today.to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(jiff::SignedDuration::from_hours(21)).unwrap();
+        let report = pull(&book, &mut ws, connection(&book, &now.to_string()), today, now, &mut |_| {}).unwrap();
+        assert!(report.failures.is_empty(), "seed {seed}: {:?}", report.failures);
+        assert!(ws.source.asked_activity.iter().filter(|(_, from)| from.is_none()).count() >= ws.source.account_ids().len() * 2, "seed {seed}: every account read whole twice");
+        assert_eq!(held(&book), before, "seed {seed}");
+        cash_agrees(&book, &ws.source);
+        units_agree(&book, &ws.source);
+    }
+}
+
+/// A book's rows as a version-36 file holds them: every row of the tables both
+/// share copied into a file built from migrations 1 to 36, its change log's
+/// triggers set aside while the rows go in (`book/tests/schema.rs`, `as_v36`).
+fn as_v36(home: &Path) -> PathBuf {
+    use bagholder_book::schema::{MIGRATIONS, SCHEMA};
+    use bagholder_sqlite::migrate::{self, Schema};
+    let path = home.join("v36.db");
+    let v36: &'static Schema = Box::leak(Box::new(Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..36] }));
+    let (conn, _) = migrate::open(v36, &path, "test", at("2026-01-01T00:00:00Z")).unwrap();
+    conn.pragma_update(None, "foreign_keys", "OFF").unwrap();
+    conn.execute("ATTACH DATABASE ?1 AS src", [home.join("book.db").to_string_lossy()]).unwrap();
+    let triggers: Vec<(String, String)> = conn.prepare("SELECT name, sql FROM main.sqlite_master WHERE type = 'trigger'").unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect();
+    for (name, _) in &triggers {
+        conn.execute_batch(&format!("DROP TRIGGER main.\"{name}\"")).unwrap();
+    }
+    let tables: Vec<String> = conn.prepare("SELECT name FROM main.sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name <> 'schema_migrations'").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    let columns = |schema: &str, t: &str| -> Vec<String> { conn.prepare(&format!("SELECT name FROM pragma_table_info('{t}', '{schema}')")).unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect() };
+    for t in &tables {
+        let theirs = columns("src", t);
+        let both: Vec<String> = columns("main", t).into_iter().filter(|c| theirs.contains(c)).map(|c| format!("\"{c}\"")).collect();
+        if both.is_empty() {
+            continue;
+        }
+        conn.execute_batch(&format!("DELETE FROM main.\"{t}\"; INSERT INTO main.\"{t}\" ({0}) SELECT {0} FROM src.\"{t}\"", both.join(", "))).unwrap();
+    }
+    for (_, sql) in &triggers {
+        conn.execute_batch(sql).unwrap();
+    }
+    drop(conn);
+    path
+}
+
+/// A book of every shape as a version-36 file holds it (the ids Wealthsimple
+/// links on one account, as the import pooled them), carried by the migrations
+/// from 37 on: what each migration changes is its own intended effect, named,
+/// and the next pull makes it the same book again.
+#[test]
+fn a_book_of_every_shape_carried_from_version_36_is_the_same_book_after_its_next_pull() {
+    let (h, book, mut ws, report) = shaped(&SHAPES);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let before = held(&book);
+    drop(book);
+    let path = as_v36(h.path());
+    let opened = at("2026-10-08T21:00:00Z");
+    let mappings: [&dyn bagholder_book::mapping::Mapping; 2] = [&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_wealthsimple::statement::StatementMapping];
+    let (book, done) = Book::open_mapped(&path, "test", opened, &mappings).unwrap();
+    assert_eq!(done.from, 36);
+    let (accounts, records) = held(&book);
+    // migration 37: every account holding several broker ids split to one per id,
+    // its legs on the id each names; its records stand as they were
+    assert_eq!(records, before.1, "every record as it was");
+    let pooled: Vec<&String> = before.0.keys().filter(|k| k.contains('+')).collect();
+    assert_eq!(pooled.len(), 1, "the linked set, one account before: {:?}", before.0.keys());
+    for (ids, figures) in &before.0 {
+        if ids.contains('+') {
+            let mut cash: std::collections::BTreeMap<String, Dec> = std::collections::BTreeMap::new();
+            let mut units: std::collections::BTreeMap<String, Dec> = std::collections::BTreeMap::new();
+            for id in ids.split('+') {
+                let (c, u) = accounts.get(id).unwrap_or_else(|| panic!("{id} its own account after migration 37"));
+                for (k, v) in c {
+                    let e = cash.entry(k.clone()).or_insert(Dec::ZERO);
+                    *e = e.checked_add(*v).unwrap();
+                }
+                for (k, v) in u {
+                    let e = units.entry(k.clone()).or_insert(Dec::ZERO);
+                    *e = e.checked_add(*v).unwrap();
+                }
+            }
+            cash.retain(|_, v| !v.is_zero());
+            units.retain(|_, v| !v.is_zero());
+            assert_eq!((&cash, &units), (&figures.0, &figures.1), "{ids}: split, the same cash and units between its ids");
+        } else {
+            assert_eq!(accounts.get(ids), Some(figures), "{ids}: as it was");
+        }
+    }
+    // migration 39 finds no link to make it one (37 took the split account's
+    // links with its history): the next pull states them, and makes it one
+    let report = pull(&book, &mut ws, connection(&book, "2026-10-08T22:00:00Z"), shaped_today(), at("2026-10-08T22:00:00Z"), &mut |_| {}).unwrap();
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(report.accounts_merged, 1, "{report:?}");
+    assert_eq!(held(&book), before);
+}
