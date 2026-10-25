@@ -960,7 +960,8 @@ impl Generated {
             };
             self.conversions.insert(detail_id, detail);
             self.push(row);
-            let said = format!("Convert CAD (executed at {day}) - $1USD = $1.35CAD");
+            // the description states the made-up broker's own rate, 135 cents a dollar
+            let said = format!("Convert CAD (executed at {day}) - $1USD = ${}CAD", money(135));
             self.move_cash(a, Cur::Cad, -cad, day, "FXCONVERSION", said.clone());
             self.move_cash(a, Cur::Usd, want, day, "FXCONVERSION", said);
         }
