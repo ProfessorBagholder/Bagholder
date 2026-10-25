@@ -888,14 +888,40 @@ fn cash_agrees(book: &Book, g: &Generated) {
     }
 }
 
+/// Every account's units in the book are what the made-up broker states, the
+/// accounts it links as one added up.
+fn units_agree(book: &Book, g: &Generated) {
+    let retired = g.retired();
+    for key in g.account_ids() {
+        if retired.iter().any(|(old, _)| *old == key) {
+            continue;
+        }
+        let account = book_account(book, &key);
+        let mut want = g.units_of(&key);
+        for (old, new) in &retired {
+            if *new == key && book_account(book, old) == account {
+                for (k, v) in g.units_of(old) {
+                    let e = want.entry(k).or_insert(Dec::ZERO);
+                    *e = e.checked_add(v).unwrap();
+                }
+            }
+        }
+        want.retain(|_, v| !v.is_zero());
+        assert_eq!(book_units(book, account), want, "{key}");
+    }
+}
+
 #[test]
 fn a_move_listed_by_its_arrival_alone_is_booked_leaving_once() {
     let (_h, book, ws, report) = shaped(&[Shape::ArrivalOnly]);
     assert!(report.failures.is_empty(), "{:?}", report.failures);
-    let count = |sub: &str| ws.source.rows().iter().filter(|r| Node::root(r).text("type").ok() == Some("INTERNAL_TRANSFER") && Node::root(r).text("subType").ok() == Some(sub)).count();
-    assert!(count("DESTINATION") > count("SOURCE"), "some moves listed by their arrival alone: {} arrivals, {} leaving", count("DESTINATION"), count("SOURCE"));
-    // each leaving leg booked once: twice, or none, and the cash would not agree
+    let count = |ty: &str, sub: &str| ws.source.rows().iter().filter(|r| Node::root(r).text("type").ok() == Some(ty) && Node::root(r).text("subType").ok() == Some(sub)).count();
+    for ty in ["INTERNAL_TRANSFER", "ASSET_MOVEMENT"] {
+        assert!(count(ty, "DESTINATION") > count(ty, "SOURCE"), "some {ty} listed by their arrival alone: {} arrivals, {} leaving", count(ty, "DESTINATION"), count(ty, "SOURCE"));
+    }
+    // each leaving leg booked once: twice, or none, and the cash or the units would not agree
     cash_agrees(&book, &ws.source);
+    units_agree(&book, &ws.source);
 }
 
 #[test]
@@ -980,9 +1006,11 @@ fn every_statement_closes_where_the_book_does() {
     assert!(report.failures.is_empty(), "{:?}", report.failures);
     use bagholder_wealthsimple::adapter::Source;
     let mut months = 0;
+    // from the book's first month
+    let first = book.transactions().unwrap().iter().map(|t| t.trade_date).min().unwrap().first_of_month();
     for key in ws.source.account_ids() {
         let account = book_account(&book, &key);
-        let mut m: jiff::civil::Date = "2026-01-01".parse().unwrap();
+        let mut m = first;
         while m < shaped_today().first_of_month() {
             if let Some(s) = ws.source.statement(&key, m, bagholder_wealthsimple::statement::BROKERAGE).unwrap() {
                 let rows = bagholder_wealthsimple::statement::rows(&s, Currency::CAD).unwrap();
@@ -1007,17 +1035,5 @@ fn a_book_of_every_shape_is_pulled_whole_and_agrees_with_the_broker() {
     let (_h, book, ws, report) = shaped(&SHAPES);
     assert!(report.failures.is_empty(), "{:?}", report.failures);
     assert_eq!(report.statements.unreconciled, vec![], "{:?}", report.statements);
-    for key in ws.source.account_ids() {
-        if ws.source.retired().iter().any(|(old, _)| *old == key) {
-            continue;
-        }
-        let account = book_account(&book, &key);
-        let mut want = ws.source.units_of(&key);
-        for (old, new) in ws.source.retired() {
-            if new == key && book_account(&book, &old) == account {
-                want.extend(ws.source.units_of(&old));
-            }
-        }
-        assert_eq!(book_units(&book, account), want, "{key}");
-    }
+    units_agree(&book, &ws.source);
 }

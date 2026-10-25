@@ -61,11 +61,11 @@ const STATEMENT: &str = include_str!("../tests/replies/wealthsimple-statements/l
 /// A shape of the real feed (brief 76), off unless a book names it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Shape {
-    /// Every other move of cash between two accounts (an account retired by
-    /// the shapes below among them) listed by its arrival
+    /// Every other move between two accounts, of cash or of a holding (an
+    /// account retired by the shapes below among them), listed by its arrival
     /// alone: the arriving row names the account it came from, whose feed lists
     /// no row of it (a managed account's cash moved as it closed, read
-    /// 2026-10-20; rule 15).
+    /// 2026-10-20; the recorded `ASSET_MOVEMENT` of edges 91 and 100; rule 15).
     ArrivalOnly,
     /// An investment account under two ids Wealthsimple links: halfway through,
     /// the first id's holdings are sold and its cash moved to a second id, and
@@ -829,7 +829,7 @@ impl Generated {
         acct.ledger.push(Line { day, cur: c, cents, code, description });
     }
 
-    /// Whether the next move of cash is listed on both sides: with
+    /// Whether the next move is listed on both sides: with
     /// `Shape::ArrivalOnly`, every other one is listed by its arrival alone.
     fn listed_whole(&mut self) -> bool {
         self.moves += 1;
@@ -1079,7 +1079,9 @@ impl Generated {
                 let group = format!("{id}-x");
                 let out = set(self.row("ASSET_MOVEMENT", "SOURCE", from, at(day, *n), &format!("{id}-out")), &[(&["amount"], text(money(worth))), (&["currency"], text(l.cur.code())), (&["amountSign"], text("negative")), (&["opposingAccountId"], text(&self.accounts[to].id)), (&["externalCanonicalId"], text(&group))]);
                 let inn = set(self.row("ASSET_MOVEMENT", "DESTINATION", to, at(day, *n), &format!("{id}-in")), &[(&["amount"], text(money(worth))), (&["currency"], text(l.cur.code())), (&["amountSign"], text("positive")), (&["opposingAccountId"], text(&self.accounts[from].id)), (&["externalCanonicalId"], text(&group))]);
-                self.push(out);
+                if self.listed_whole() {
+                    self.push(out);
+                }
                 self.push(inn);
                 self.move_units(from, listing, -units, day);
                 self.move_units(to, listing, units, day);
