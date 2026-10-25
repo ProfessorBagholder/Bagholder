@@ -393,6 +393,8 @@ pub struct Generated {
     /// The move of `LateRow`, not listed until `publish_late`: its day, from,
     /// to and cents.
     late: Option<(jiff::civil::Date, usize, usize, i64)>,
+    /// Rows whose cash has moved, not listed until `publish_late`.
+    held: Vec<Value>,
 }
 
 struct Templates {
@@ -550,7 +552,7 @@ impl Generated {
         }
         let shapes: BTreeSet<Shape> = shapes.iter().copied().collect();
         assert!(!shapes.contains(&Shape::LateRow) || shapes.contains(&Shape::Closed), "a late row is in the closed account");
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new() };
         let mut plans = g.plan(&mut r, size, start);
         let span = (today - start).get_days().max(2) as i64;
         let on = |n: i64| start.checked_add(jiff::Span::new().days(n)).expect("a day");
@@ -588,6 +590,8 @@ impl Generated {
     /// The move of `Shape::LateRow` listed: Wealthsimple lists a row in the
     /// closed account, dated after the pull's one full read of it.
     pub fn publish_late(&mut self) {
+        let held = std::mem::take(&mut self.held);
+        self.rows.extend(held);
         let Some((day, from, to, cents)) = self.late.take() else { return };
         let mut n = 10_000;
         self.transfer(from, to, Cur::Cad, cents, day, &mut n, true);
@@ -654,7 +658,7 @@ impl Generated {
             };
             plans.entry(*day).or_default().push(p);
         }
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new() };
         // nothing stated whole is drawn
         g.run(&mut Rng(0), plans);
         g
@@ -921,46 +925,82 @@ impl Generated {
         self.move_cash(a, Cur::Cad, cad, day, "EFT", "Deposit".into());
         self.net_deposit(a, cad, day);
         if c == Cur::Usd {
-            *n += 1;
-            let id = self.next_id("conversion");
-            let detail_id = format!("{id}-x");
-            let row = set(self.row("FUNDS_CONVERSION", "", a, at(day, *n), &id), &[(&["amount"], text(money(want))), (&["currency"], text("USD")), (&["amountSign"], text("positive"))]);
             // every other one a funding intent, whose detail states the side received alone
             self.funded += 1;
-            let detail = if self.shapes.contains(&Shape::FundingIntent) && self.funded % 2 == 0 {
-                set(
-                    self.templates.funding.clone(),
-                    &[
-                        (&["id"], text(&detail_id)),
-                        (&["createdAt"], text(at(day, *n))),
-                        (&["updatedAt"], text(at(day, *n))),
-                        (&["fundableDetails", "fxAdjustedAmount"], text(money(want))),
-                        (&["fundableDetails", "targetCurrency"], text("USD")),
-                        (&["source", "id"], text(&self.accounts[a].id)),
-                        (&["destination", "id"], text(&self.accounts[a].id)),
-                    ],
-                )
-            } else {
-                set(
-                    self.templates.conversion.clone(),
-                    &[
-                        (&["id"], text(&detail_id)),
-                        (&["amount"], text(money(cad))),
-                        (&["currency"], text("CAD")),
-                        (&["fxAdjustedAmount"], text(money(want))),
-                        (&["fxRate"], text("0.740740")),
-                        (&["source_account", "id"], text(&self.accounts[a].id)),
-                        (&["source_account", "unifiedAccountType"], text(&self.accounts[a].ty)),
-                    ],
-                )
-            };
-            self.conversions.insert(detail_id, detail);
-            self.push(row);
-            // the description states the made-up broker's own rate, 135 cents a dollar
-            let said = format!("Convert CAD (executed at {day}) - $1USD = ${}CAD", money(135));
-            self.move_cash(a, Cur::Cad, -cad, day, "FXCONVERSION", said.clone());
-            self.move_cash(a, Cur::Usd, want, day, "FXCONVERSION", said);
+            let funding = self.shapes.contains(&Shape::FundingIntent) && self.funded % 2 == 0;
+            self.conversion(a, day, n, want, cad, funding);
         }
+    }
+
+    /// A conversion in account `a` of `cad` cents for `want` USD cents, its
+    /// detail a funding intent where `funding`, else an internal transfer
+    /// stating both sides.
+    fn conversion(&mut self, a: usize, day: jiff::civil::Date, n: &mut u32, want: i64, cad: i64, funding: bool) {
+        *n += 1;
+        let id = self.next_id("conversion");
+        let detail_id = format!("{id}-x");
+        let row = set(self.row("FUNDS_CONVERSION", "", a, at(day, *n), &id), &[(&["amount"], text(money(want))), (&["currency"], text("USD")), (&["amountSign"], text("positive"))]);
+        let detail = if funding {
+            set(
+                self.templates.funding.clone(),
+                &[
+                    (&["id"], text(&detail_id)),
+                    (&["createdAt"], text(at(day, *n))),
+                    (&["updatedAt"], text(at(day, *n))),
+                    (&["fundableDetails", "fxAdjustedAmount"], text(money(want))),
+                    (&["fundableDetails", "targetCurrency"], text("USD")),
+                    (&["source", "id"], text(&self.accounts[a].id)),
+                    (&["destination", "id"], text(&self.accounts[a].id)),
+                ],
+            )
+        } else {
+            set(
+                self.templates.conversion.clone(),
+                &[
+                    (&["id"], text(&detail_id)),
+                    (&["amount"], text(money(cad))),
+                    (&["currency"], text("CAD")),
+                    (&["fxAdjustedAmount"], text(money(want))),
+                    (&["fxRate"], text("0.740740")),
+                    (&["source_account", "id"], text(&self.accounts[a].id)),
+                    (&["source_account", "unifiedAccountType"], text(&self.accounts[a].ty)),
+                ],
+            )
+        };
+        self.conversions.insert(detail_id, detail);
+        self.push(row);
+        // the description states the made-up broker's own rate, 135 cents a dollar
+        let said = format!("Convert CAD (executed at {day}) - $1USD = ${}CAD", money(135));
+        self.move_cash(a, Cur::Cad, -cad, day, "FXCONVERSION", said.clone());
+        self.move_cash(a, Cur::Usd, want, day, "FXCONVERSION", said);
+    }
+
+    /// A conversion made today in `account`, `usd` cents received for CAD at the
+    /// made-up broker's rate, whose detail is a funding intent: the CAD deposited
+    /// first, both rows listed.
+    pub fn convert_today(&mut self, account: &str, usd: i64) {
+        let a = self.account_index(account).unwrap_or_else(|| panic!("no account {account}"));
+        let (day, mut n) = (self.today, 20_000 + self.rows.len() as u32);
+        let cad = usd * 135 / 100 + 1;
+        n += 1;
+        let id = self.next_id("deposit");
+        let row = set(self.row("DEPOSIT", "EFT", a, at(day, n), &id), &[(&["amount"], text(money(cad))), (&["currency"], text("CAD")), (&["amountSign"], text("positive"))]);
+        self.push(row);
+        self.move_cash(a, Cur::Cad, cad, day, "EFT", "Deposit".into());
+        self.net_deposit(a, cad, day);
+        self.conversion(a, day, &mut n, usd, cad, true);
+    }
+
+    /// A deposit of `cents` CAD into `account` today, the cash there already, its
+    /// row listed only once `publish_late` is called.
+    pub fn deposit_listed_later(&mut self, account: &str, cents: i64) {
+        let a = self.account_index(account).unwrap_or_else(|| panic!("no account {account}"));
+        let (day, n) = (self.today, 30_000 + self.rows.len() as u32);
+        let id = format!("{}-later", self.next_id("deposit"));
+        let row = set(self.row("DEPOSIT", "EFT", a, at(day, n), &id), &[(&["amount"], text(money(cents))), (&["currency"], text("CAD")), (&["amountSign"], text("positive"))]);
+        self.held.push(row);
+        self.move_cash(a, Cur::Cad, cents, day, "EFT", "Deposit".into());
+        self.net_deposit(a, cents, day);
     }
 
     fn apply(&mut self, r: &mut Rng, day: jiff::civil::Date, p: Plan, n: &mut u32) {

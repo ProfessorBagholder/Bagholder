@@ -145,9 +145,16 @@ pub fn paid_payload(p: &bagholder_broker::statements::Paid) -> Value {
     )
 }
 
-/// One per conversion: a later reading of the stated cash revises it.
+/// One per day's conversions paid in one currency (their keys joined by `|`;
+/// one conversion's alone as before): a later reading of the day's cash revises it.
 pub fn paid_key(p: &bagholder_broker::statements::Paid) -> String {
     format!("{}|paid|{}", p.account, p.conversion)
+}
+
+/// The conversions a side paid's record names, by their keys, from its own key.
+pub fn paid_conversions(key: &str) -> Option<Vec<&str>> {
+    let (_, names) = key.split_once("|paid|")?;
+    Some(names.split('|').collect())
 }
 
 /// A fill as the statement states it (`statements::Fill`): the statement's row,
