@@ -353,6 +353,7 @@ dependencies = [
  "bagholder-core",
  "bagholder-net",
  "bagholder-sources",
+ "bagholder-sqlite",
  "jiff",
  "tempfile",
 ]
