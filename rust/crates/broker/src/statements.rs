@@ -326,8 +326,10 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             if !proven_rows.is_empty() {
                 done.feed_only.push(FeedOnly { account: *account, currency, rows: proven_rows });
             }
-            // the months that reconcile: from the base to the month before any that does not
-            let proven = |m: jiff::civil::Date| m >= b && forward.stopped.as_ref().is_none_or(|s| m < s.month);
+            // the months that reconcile: from the base to the month before any that
+            // does not, and no later than the newest statement (a side paid read
+            // after it is no statement's to withdraw)
+            let proven = |m: jiff::civil::Date| m >= b && m <= top && forward.stopped.as_ref().is_none_or(|s| m < s.month);
             let mut places = forward.book.clone();
             // a row an imported file's row holds, in a month proven, takes its place
             places.extend(r.file_rows.keys().filter(|p| proven(p.1)).cloned());

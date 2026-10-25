@@ -1088,6 +1088,25 @@ fn two_conversions_on_one_day_share_one_side_paid_and_the_cash_agrees() {
     cash_agrees(&book, &ws.source);
 }
 
+/// A second conversion on a day whose first was paid alone: the day's side paid
+/// is read again for both, one record naming both, and the first's alone gives way.
+#[test]
+fn a_second_conversion_on_a_day_already_paid_takes_the_day_s_one_record() {
+    let (_h, book, mut ws, report) = shaped_then(SHAPED, shaped_today(), &[Shape::FundingIntent, Shape::Statements], |g| g.convert_today("gen-account-0", 10_000));
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let account = book_account(&book, "gen-account-0");
+    let today = |b: &Book| sides_paid(b, account).into_iter().filter(|(d, _)| *d == shaped_today()).map(|(_, v)| v).collect::<Vec<_>>();
+    assert_eq!(today(&book), vec![Dec::parse("-135.01").unwrap()]);
+    ws.source.convert_today("gen-account-0", 25_000);
+    let report = pull(&book, &mut ws, connection(&book, "2026-10-08T21:00:00Z"), shaped_today(), at("2026-10-08T21:00:00Z"), &mut |_| {}).unwrap();
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(report.statements.withdrawn, 0, "no statement covers the day: {:?}", report.statements);
+    assert_eq!(today(&book), vec![Dec::parse("-472.52").unwrap()], "one record for the day");
+    let paid = book.transactions().unwrap().into_iter().find(|t| t.account == account && t.trade_date == shaped_today() && t.id.leg == bagholder_broker::statements::paid_leg() && t.mapping.source == SourceName::named("wealthsimple-statement")).unwrap();
+    assert_eq!(bagholder_wealthsimple::statement::paid_conversions(&book.record(paid.id.record).unwrap().source_key).unwrap().len(), 2, "naming both");
+    cash_agrees(&book, &ws.source);
+}
+
 /// A row of a conversion's day listed only after the side paid was read: the
 /// next pull reads the side paid again from the day's cash, and corrects it.
 #[test]
