@@ -831,11 +831,16 @@ fn shaped_today() -> jiff::civil::Date {
 
 /// A book pulled once from a made-up Wealthsimple with these shapes.
 fn shaped(shapes: &[Shape]) -> (tempfile::TempDir, Book, Wealthsimple<Generated>, Report) {
+    shaped_by(SHAPED, shaped_today(), shapes)
+}
+
+/// A book pulled once, on `today`, from a made-up Wealthsimple of this size with these shapes.
+fn shaped_by(size: Size, today: jiff::civil::Date, shapes: &[Shape]) -> (tempfile::TempDir, Book, Wealthsimple<Generated>, Report) {
     let home = tempfile::tempdir().unwrap();
-    let now = at("2026-10-08T20:00:00Z");
+    let now = today.to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(jiff::SignedDuration::from_hours(20)).unwrap();
     let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
-    let mut ws = Wealthsimple::new(Generated::shaped(SHAPED, shaped_today(), shapes));
-    let report = pull(&book, &mut ws, connection(&book, "2026-10-08T20:00:00Z"), shaped_today(), now, &mut |_| {}).unwrap();
+    let mut ws = Wealthsimple::new(Generated::shaped(size, today, shapes));
+    let report = pull(&book, &mut ws, connection(&book, &now.to_string()), today, now, &mut |_| {}).unwrap();
     (home, book, ws, report)
 }
 
@@ -968,6 +973,28 @@ fn a_closed_account_with_history_is_read_whole_once_and_holds_nothing() {
     let report = pull(&book, &mut ws, connection(&book, "2026-10-08T21:00:00Z"), shaped_today(), at("2026-10-08T21:00:00Z"), &mut |_| {}).unwrap();
     assert!(report.failures.is_empty(), "{:?}", report.failures);
     assert!(!ws.source.asked_activity.iter().any(|(a, _)| *a == closed), "{:?}", ws.source.asked_activity);
+}
+
+/// A closed account holds nothing now, and Wealthsimple states no balances of
+/// it: its book is held to nothing, its statements are read back to the month
+/// it closed, and what only they state is booked (seed 1: a conversion in it
+/// whose detail states the side received alone, before it closed).
+#[test]
+fn a_closed_account_s_statements_are_read_and_book_what_only_they_state() {
+    let (_h, book, ws, report) = shaped_by(Size { seed: 1, ..SHAPED }, shaped_today(), &[Shape::Closed, Shape::FundingIntent, Shape::Statements]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(report.statements.unreconciled, vec![], "{:?}", report.statements);
+    let retired = ws.source.retired();
+    let [(closed, _)] = &retired[..] else { panic!("one account closed") };
+    let account = book_account(&book, closed);
+    let intents = ws.source.funding_intents();
+    let conn = connection(&book, "2026-10-08T20:00:00Z");
+    assert!(
+        intents.iter().any(|k| book.record_by_key(Some(conn), &SourceName::named("wealthsimple"), k).unwrap().is_some_and(|r| book.transactions_of(r).unwrap().iter().any(|t| t.account == account))),
+        "a funding intent in the closed account"
+    );
+    assert!(book_cash(&book, account).is_empty(), "{:?}", book_cash(&book, account));
+    cash_agrees(&book, &ws.source);
 }
 
 #[test]
