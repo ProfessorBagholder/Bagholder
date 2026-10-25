@@ -100,22 +100,23 @@ impl Gap {
     }
 }
 
-/// The side paid of a conversion whose record states only the side received,
-/// read from the broker's stated cash: where it is the only movement in the
-/// account the broker's records leave unstated since the statements reconcile,
-/// the currency paid in is the one currency whose cash disagrees, and what
-/// was paid is by how much.
+/// The side paid of the conversions of one day whose records state only the
+/// side received, read from the broker's cash at the end of the day (`sides_paid`):
+/// the currency whose cash moved that day by more than the book's own movements
+/// of it explain is the one paid in, and by how much.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Paid {
     /// The broker's account.
     pub account: String,
-    /// The conversion's own record, by its key.
+    /// The conversions' own records, by their keys, joined by `|`: one alone is
+    /// paid exactly this; several share it, which is all the broker states.
     pub conversion: String,
     pub day: jiff::civil::Date,
     pub currency: Currency,
     /// The signed cash paid.
     pub cash: Dec,
-    /// The broker's cash in that currency it is read from, and when stated.
+    /// The broker's cash in that currency at the end of the day it is read
+    /// from, and that day's end.
     pub stated: Dec,
     pub stated_at: jiff::Timestamp,
 }
@@ -380,7 +381,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         }
     }
     for (account, keys, after) in read_to {
-        if let Some(r) = side_paid(book, adapter, connection, account, keys, after, &mapping_source, now)? {
+        for r in sides_paid(book, adapter, connection, account, keys, after, &mapping_source, now)? {
             done.booked += 1;
             booked_now.push(r);
         }
@@ -436,72 +437,111 @@ fn restore_withdrawn(
     Ok(out)
 }
 
-/// The side paid of the one conversion in `account` after `after` whose record
-/// states only the side received, read from the broker's stated cash, where
-/// that conversion is the only movement left unstated: the book's cash then
-/// disagrees with the broker's in one currency alone, not the one received, by
-/// a payment. Booked, or revised where the stated cash now says otherwise; the
-/// statement that covers it later matches it, or withdraws it for its own row.
+/// The side paid of each conversion in `account` after `after` (where no
+/// statement can state it yet) whose record states only the side received, read
+/// from the broker's cash at the end of its day and the day before: the one
+/// currency whose cash moved that day by more than the book's own movements of
+/// it that day explain is the one paid in, and by that much. One record a day,
+/// naming the day's conversions paid in that currency: one alone is paid exactly
+/// that; several share it, which is all the broker states. It is derived again on
+/// every pull, so a row of that day the feed lists later corrects it; a day
+/// whose cash is not read, or moved in more than one currency unexplained, books
+/// nothing new. The statement that covers it later matches it, or withdraws it
+/// for its own row.
 #[allow(clippy::too_many_arguments)]
-fn side_paid(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, account: AccountId, keys: &[String], after: Option<jiff::civil::Date>, source: &SourceName, now: jiff::Timestamp) -> Result<Option<RecordId>> {
-    let Some(first_key) = keys.first() else { return Ok(None) };
+fn sides_paid(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, account: AccountId, keys: &[String], after: Option<jiff::civil::Date>, source: &SourceName, now: jiff::Timestamp) -> Result<Vec<RecordId>> {
+    let Some(first_key) = keys.first() else { return Ok(vec![]) };
+    if adapter.statement_mapping().is_none() {
+        return Ok(vec![]);
+    }
     let txs = book.transactions()?;
-    let differing = differing(book, &txs, account, false)?;
-    let [currency] = differing.iter().copied().collect::<Vec<_>>()[..] else { return Ok(None) };
-    let Some((stated_at, stated)) = book.stated(account)?.cash else { return Ok(None) };
-    let stated = stated.get(&currency).copied().unwrap_or(Dec::ZERO);
     let later = |t: &&Transaction| t.account == account && after.is_none_or(|a| t.trade_date > a);
-    // each of the broker's conversions in the span, by its record: its day and the currencies it moves
-    let mut conversions: BTreeMap<RecordId, (jiff::civil::Date, BTreeSet<Currency>)> = BTreeMap::new();
+    // each of the broker's conversions in the span, by its record: its day and what it moves
+    let mut conversions: BTreeMap<RecordId, (jiff::civil::Date, Vec<bagholder_core::Money>)> = BTreeMap::new();
     for t in txs.iter().filter(later).filter(|t| t.kind == Kind::CurrencyConversion && source_of(t) != *source && source_of(t) != crate::csv::source()) {
-        let e = conversions.entry(t.id.record).or_insert((t.trade_date, BTreeSet::new()));
-        if let Some(c) = t.cash {
-            e.1.insert(c.currency);
+        let e = conversions.entry(t.id.record).or_insert((t.trade_date, vec![]));
+        e.1.extend(t.cash);
+    }
+    // those stating only the side received, by day: each one's received currency
+    let mut by_day: BTreeMap<jiff::civil::Date, Vec<(RecordId, Currency)>> = BTreeMap::new();
+    for (rec, (day, moves)) in &conversions {
+        let currencies: BTreeSet<Currency> = moves.iter().map(|m| m.currency).collect();
+        if let ([c], true) = (currencies.iter().collect::<Vec<_>>().as_slice(), moves.iter().all(|m| m.amount.is_positive())) {
+            by_day.entry(*day).or_default().push((*rec, **c));
         }
     }
-    let paid_for = |rec: RecordId, day: jiff::civil::Date| -> Result<Paid> {
-        let conversion = book.record(rec)?.source_key;
-        Ok(Paid { account: first_key.clone(), conversion, day, currency, cash: Dec::ZERO, stated, stated_at })
-    };
-    // the side paid each already has from the stated cash, where it has one
-    let mut one_sided: Vec<(RecordId, jiff::civil::Date, Option<(RecordId, Dec)>)> = vec![];
-    for (rec, (day, moves)) in conversions.iter().filter(|(_, (_, m))| m.len() == 1) {
-        if moves.contains(&currency) {
-            // the side received disagrees: what is unstated is not its side paid
-            return Ok(None);
-        }
-        let Some((key, _)) = adapter.conversion_paid_record(&paid_for(*rec, *day)?) else { return Ok(None) };
-        let before = match book.record_by_key(Some(connection), source, &key)? {
-            Some(r) if book.record(r)?.state == bagholder_core::record::RecordState::Live => {
-                let sum = book.transactions_of(r)?.iter().filter_map(|t| t.cash).filter(|c| c.currency == currency).try_fold(Dec::ZERO, |a, c| a.checked_add(c.amount).ok());
-                let Some(sum) = sum else { return Ok(None) };
-                Some((r, sum))
+    let mut out = Vec::new();
+    for (day, list) in by_day {
+        let Ok(before) = day.yesterday() else { continue };
+        // the broker's cash at the end of the day and of the day before, every
+        // account of its behind the book's added up
+        let mut cash: [BTreeMap<Currency, Dec>; 2] = [BTreeMap::new(), BTreeMap::new()];
+        let mut read = true;
+        'keys: for k in keys {
+            for (i, d) in [day, before].into_iter().enumerate() {
+                match adapter.cash_on(k, d) {
+                    Ok(Some(held)) => {
+                        for (c, v) in held {
+                            let e = cash[i].entry(c).or_insert(Dec::ZERO);
+                            let Ok(sum) = e.checked_add(v) else {
+                                read = false;
+                                break 'keys;
+                            };
+                            *e = sum;
+                        }
+                    }
+                    _ => {
+                        read = false;
+                        break 'keys;
+                    }
+                }
             }
-            _ => None,
-        };
-        one_sided.push((*rec, *day, before));
+        }
+        if !read {
+            continue;
+        }
+        // the book's own movements that day, but the sides paid read before
+        let mut own: BTreeMap<Currency, Dec> = BTreeMap::new();
+        for c in txs.iter().filter(|t| t.account == account && t.trade_date == day && source_of(t) != *source).filter_map(|t| t.cash) {
+            let e = own.entry(c.currency).or_insert(Dec::ZERO);
+            let Ok(sum) = e.checked_add(c.amount) else { continue };
+            *e = sum;
+        }
+        let currencies: BTreeSet<Currency> = cash[0].keys().chain(cash[1].keys()).chain(own.keys()).copied().collect();
+        let mut unexplained: Vec<(Currency, Dec)> = Vec::new();
+        for c in currencies {
+            let get = |m: &BTreeMap<Currency, Dec>| m.get(&c).copied().unwrap_or(Dec::ZERO);
+            let Some(v) = get(&cash[0]).checked_sub(get(&cash[1])).ok().and_then(|moved| moved.checked_sub(get(&own)).ok()) else { continue };
+            if !v.is_zero() {
+                unexplained.push((c, v));
+            }
+        }
+        // the one currency paid in, which none of the day's conversions received
+        let [(currency, paid)] = unexplained[..] else { continue };
+        if !paid.is_negative() || list.iter().any(|(_, received)| *received == currency) {
+            continue;
+        }
+        let mut names: Vec<String> = Vec::new();
+        for (rec, _) in &list {
+            names.push(book.record(*rec)?.source_key);
+        }
+        names.sort();
+        let end = day.tomorrow().ok().and_then(|d| d.to_zoned(jiff::tz::TimeZone::UTC).ok()).map(|z| z.timestamp()).unwrap_or(now);
+        let p = Paid { account: first_key.clone(), conversion: names.join("|"), day, currency, cash: paid, stated: cash[0].get(&currency).copied().unwrap_or(Dec::ZERO), stated_at: end };
+        let Some((key, payload)) = adapter.conversion_paid_record(&p) else { continue };
+        let payload = payload.canonical();
+        let incoming = Incoming { connection: Some(connection), source_key: &key, payload: &payload, refs: vec![] };
+        let mapping = adapter.statement_mapping().expect("a broker that reads conversions' sides paid issues statements");
+        let stored = book.store(mapping, &incoming, now)?;
+        // one record a day and currency: one read before for another set of the day's conversions gives way
+        for t in txs.iter().filter(|t| t.account == account && t.trade_date == day && source_of(t) == *source && t.id.leg == paid_leg() && t.cash.is_some_and(|c| c.currency == currency) && t.id.record != stored.record) {
+            book.mark_removed(t.id.record, now)?;
+        }
+        if stored.outcome != bagholder_book::records::Outcome::Unchanged {
+            out.push(stored.record);
+        }
     }
-    // the one conversion whose side paid is unstated: the only one, or the only one not read yet
-    let target = match one_sided.as_slice() {
-        [one] => one.clone(),
-        many => match many.iter().filter(|(_, _, b)| b.is_none()).collect::<Vec<_>>().as_slice() {
-            [one] => (*one).clone(),
-            _ => return Ok(None),
-        },
-    };
-    let own = txs.iter().filter(|t| t.account == account).filter_map(|t| t.cash).filter(|c| c.currency == currency).try_fold(Dec::ZERO, |a, c| a.checked_add(c.amount).ok());
-    let without = own.and_then(|o| o.checked_sub(target.2.map(|(_, v)| v).unwrap_or(Dec::ZERO)).ok());
-    let Some(cash) = without.and_then(|w| stated.checked_sub(w).ok()) else { return Ok(None) };
-    if !cash.is_negative() || target.2.is_some_and(|(_, v)| v == cash) {
-        return Ok(None);
-    }
-    let paid = Paid { cash, ..paid_for(target.0, target.1)? };
-    let Some((key, payload)) = adapter.conversion_paid_record(&paid) else { return Ok(None) };
-    let payload = payload.canonical();
-    let incoming = Incoming { connection: Some(connection), source_key: &key, payload: &payload, refs: vec![] };
-    let mapping = adapter.statement_mapping().expect("a broker that reads conversions' sides paid issues statements");
-    let stored = book.store(mapping, &incoming, now)?;
-    Ok((stored.outcome != bagholder_book::records::Outcome::Unchanged).then_some(stored.record))
+    Ok(out)
 }
 
 /// A fill whose quantity the broker's statement states otherwise than its

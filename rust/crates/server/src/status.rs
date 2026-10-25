@@ -274,10 +274,27 @@ fn settled_conversions(inputs: &bagholder_engine::input::Inputs) -> std::collect
         }
     }
     let flagged = |r: &RecordId| inputs.ledger.records.get(r).is_some_and(|i| i.problems.iter().any(|p| p.code == CONVERSION_SIDE_UNSTATED));
+    let key = |r: &RecordId| inputs.ledger.records.get(r).map(|i| i.source_key.as_str());
+    // a side paid read for several conversions of its day, from the broker's cash
+    // that day, settles each it names that received another currency
+    let mut settled = BTreeSet::new();
+    let mut shared: BTreeSet<RecordId> = BTreeSet::new();
+    for (record, (day, received, paid, only_conversion)) in &legs {
+        let names = key(record).and_then(bagholder_wealthsimple::statement::paid_conversions).unwrap_or_default();
+        if !only_conversion || !received.is_empty() || paid.is_empty() || names.len() < 2 {
+            continue;
+        }
+        shared.insert(*record);
+        for (c, (d, got, _, _)) in legs.iter().filter(|(c, _)| key(c).is_some_and(|k| names.contains(&k))) {
+            if d == day && flagged(c) && got.len() == 1 && got.is_disjoint(paid) {
+                settled.insert(*c);
+            }
+        }
+    }
     // per account and day: the one-sided conversions (the currency received) and the paying legs
     let mut days: BTreeMap<Day, (Vec<(RecordId, Currency)>, Vec<Currency>)> = BTreeMap::new();
     for (record, (day, received, paid, only_conversion)) in &legs {
-        if !only_conversion {
+        if !only_conversion || shared.contains(record) || settled.contains(record) {
             continue;
         }
         match (received.iter().collect::<Vec<_>>().as_slice(), paid.is_empty()) {
@@ -286,7 +303,6 @@ fn settled_conversions(inputs: &bagholder_engine::input::Inputs) -> std::collect
             _ => {}
         }
     }
-    let mut settled = BTreeSet::new();
     for (conversions, paying) in days.values() {
         // the largest pairing of conversions to paying legs in another currency
         // (Kuhn's augmenting paths; a day holds a handful)
@@ -809,6 +825,31 @@ mod tests {
         // and nothing else changed
         let rest = |l: &str| l.split(". ").map(|s| s.trim_end_matches('.').to_string()).filter(|s| !s.starts_with(&this)).collect::<Vec<_>>();
         assert_eq!(rest(&line), rest(&before));
+    }
+
+    /// Two conversions on one day whose records state only the side received,
+    /// their side paid read together from the day's cash in one record naming
+    /// both: neither is said as kept with a problem (a made-up broker's book).
+    #[test]
+    fn conversions_one_side_paid_names_are_each_settled_by_it() {
+        use bagholder_wealthsimple::generated::{Generated, Shape, Size};
+        let home = tempfile::tempdir().unwrap();
+        let today: bagholder_core::jiff::civil::Date = "2026-10-08".parse().unwrap();
+        let at: Timestamp = "2026-10-08T20:00:00Z".parse().unwrap();
+        let (book, _) = bagholder_book::Book::open_in(home.path(), crate::app::APP_VERSION, at).unwrap();
+        let connection = book.add_connection(&bagholder_core::Broker::named("wealthsimple"), "Wealthsimple", at).unwrap();
+        let mut g = Generated::shaped(Size { accounts: 8, instruments: 16, trades: 60, months: 12, seed: 13, deep: 0 }, today, &[Shape::FundingIntent, Shape::Statements]);
+        g.convert_today("gen-account-0", 10_000);
+        g.convert_today("gen-account-0", 25_000);
+        let mut ws = bagholder_wealthsimple::adapter::Wealthsimple::new(g);
+        let r = bagholder_broker::pull::pull(&book, &mut ws, connection, today, at, &mut |_| {}).unwrap();
+        assert!(r.failures.is_empty(), "{:?}", r.failures);
+        drop(book);
+        let f = crate::figures::Figures::open(home.path(), at).unwrap();
+        f.state_zone("America/Toronto", at).unwrap();
+        let said = f.read(|e| super::unread_rows(e.inputs())).unwrap();
+        let today_said = said.iter().filter(|s| s.contains("side received") && s.contains("2026-10-08")).collect::<Vec<_>>();
+        assert!(today_said.is_empty(), "{said:?}");
     }
 
     #[test]
