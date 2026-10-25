@@ -501,6 +501,38 @@ fn the_withdrawal_only_the_statements_state_is_booked_once_on_both_sides_and_joi
     assert_eq!((done.read, done.booked), (0, 0));
 }
 
+/// A row booked from a statement that an earlier walk withdrew is booked again
+/// by the next walk that finds no feed row for it: the statements are what the
+/// book holds, not what an earlier walk made of them. 2.10.2 and 2.10.3 walked
+/// an account behind two of Wealthsimple's ids on one id's statements, and
+/// withdrew what they had booked from the other's (a conversion's side paid);
+/// 2.10.4 walked both and booked them again, and the book kept them withdrawn.
+#[test]
+fn a_row_an_earlier_walk_withdrew_is_booked_again_by_the_next_walk_that_finds_it_unmatched() {
+    let mut w = owners_june();
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert_eq!(done.booked, 2, "{done:?}");
+    let booked = w.book.live_records(&statement::StatementMapping.source()).unwrap();
+    assert_eq!(booked.len(), 2);
+    for r in &booked {
+        w.book.mark_removed(*r, at(NOW)).unwrap();
+    }
+    assert_ne!(w.book_cash(w.cash), dec("35821.69"));
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.unreconciled.len()), (2, 0), "{done:?}");
+    assert_eq!(w.book.transfer_links().unwrap().len(), 1, "still joined, once");
+    for r in &booked {
+        assert_eq!(w.book.record(*r).unwrap().state, RecordState::Live);
+    }
+    assert_eq!(w.book_cash(w.lira), dec("24.10"));
+    assert_eq!(w.book_cash(w.cash), dec("35821.69"));
+    // and the walk after, with the cash agreeing, books nothing
+    let done = w.run(&mut failures);
+    assert_eq!((done.read, done.booked), (0, 0));
+}
+
 #[test]
 fn a_persistent_difference_is_read_once_and_the_next_pull_asks_nothing() {
     let mut w = owners_june();
@@ -957,6 +989,39 @@ fn an_account_whose_activity_begins_after_the_newest_statement_reads_nothing() {
 fn kept(w: &mut World, m: &str, rows: &[(&str, &str, &str, &str, &str)]) {
     let read = w.book.broker_read(w.conn, "statement:lira-1", at(NOW)).unwrap();
     w.book.keep_monthly_statement(w.conn, "lira-1", day(m), &brokerage_statement(rows).canonical(), &read).unwrap();
+}
+
+/// A row an earlier walk withdrew in a month past one that stops the walk is
+/// booked again all the same, where the statement kept states it as it was
+/// booked and no feed row holds it: the withdrawal is undone in every month
+/// kept, not only in the months a walk proves.
+#[test]
+fn a_withdrawn_row_past_a_month_that_stops_the_walk_is_booked_again() {
+    let mut w = World::new();
+    w.feed("lira-1", "2025-04-10", "deposit", "100");
+    kept(&mut w, "2025-04-01", &[("2025-04-10", "CONT", "Contribution", "100", "100")]);
+    kept(&mut w, "2025-05-01", &[("2025-05-12", "BUY", "Bought", "-10", "90")]);
+    let june = [("2025-06-05", "CONT", "Contribution", "50", "140")];
+    kept(&mut w, "2025-06-01", &june);
+    // June's row, booked by an earlier walk and withdrawn by another
+    let row = &statement::rows(&brokerage_statement(&june), Currency::CAD).unwrap()[0];
+    let key = statement::key("lira-1", day("2025-06-01"), 0);
+    let payload = statement::payload("lira-1", day("2025-06-01"), 0, row).canonical();
+    let booked = w.book.store(&statement::StatementMapping, &Incoming { connection: Some(w.conn), source_key: &key, payload: &payload, refs: vec![] }, at(NOW)).unwrap().record;
+    w.book.mark_removed(booked, at(NOW)).unwrap();
+    let (lira, cash) = (w.lira, w.cash);
+    w.states(lira, "140");
+    w.states(cash, "0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(w.book.record(booked).unwrap().state, RecordState::Live);
+    assert_eq!(w.book_cash(lira), dec("150"));
+    // May's buy, which only the statement states, still stops the walk
+    let u = done.unreconciled.iter().find(|u| u.account == lira).expect("named");
+    assert_eq!(u.month, day("2025-05-01"), "{u:?}");
+    assert!(u.why.as_deref().is_some_and(|w| w.contains("buy")), "{u:?}");
+    assert!(w.broker.asked.is_empty(), "every month was kept: {:?}", w.broker.asked);
 }
 
 #[test]

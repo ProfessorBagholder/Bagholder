@@ -99,6 +99,35 @@ fn a_record_missing_from_a_pull_is_left_alone_and_only_a_reported_removal_remove
     assert_eq!(f.book.revisions(r1.record).unwrap().len(), 1, "what the source said is kept");
 }
 
+/// A record an earlier read removed that its source states again is counted
+/// again: what the source states now is what the book holds (2.10.2 and 2.10.3
+/// withdrew rows booked from one of an account's two ids' statements; 2.10.4
+/// read them again and the book kept them removed).
+#[test]
+fn a_removed_record_its_source_states_again_is_live_again() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let m = Spelled::v(1);
+    let row = legs(vec![buy("a1", share("CA0000000001", "QNC"), "10", "-100", "2026-01-02T15:00:00Z")]);
+    let r1 = f.store(&m, "r1", &row);
+    f.book.mark_removed(r1.record, at("2026-09-24T00:00:00Z")).unwrap();
+    assert!(f.book.transactions_of(r1.record).unwrap().is_empty());
+    // the same payload again
+    let again = f.store(&m, "r1", &row);
+    assert_eq!((again.record, again.outcome.clone()), (r1.record, Outcome::Restored));
+    assert_eq!(f.book.record(r1.record).unwrap().state, RecordState::Live);
+    assert_eq!(f.book.transactions_of(r1.record).unwrap().len(), 1);
+    assert_eq!(f.book.revisions(r1.record).unwrap().len(), 1, "nothing new was said");
+    // and once live, the same payload changes nothing
+    assert_eq!(f.store(&m, "r1", &row).outcome, Outcome::Unchanged);
+    // a removed record stated otherwise is live with what it states now
+    f.book.mark_removed(r1.record, at("2026-09-25T00:00:00Z")).unwrap();
+    let other = legs(vec![buy("a1", share("CA0000000001", "QNC"), "12", "-120", "2026-01-02T15:00:00Z")]);
+    assert_eq!(f.store(&m, "r1", &other).outcome, Outcome::Restored);
+    assert_eq!(f.book.revisions(r1.record).unwrap().len(), 2);
+    assert_eq!(f.book.transactions_of(r1.record).unwrap()[0].quantity, Some(bagholder_core::Dec::parse("12").unwrap()));
+}
+
 #[test]
 fn a_payload_the_mapping_cannot_read_is_kept_with_a_problem() {
     let f = Fixture::new();

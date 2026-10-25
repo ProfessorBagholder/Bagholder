@@ -234,11 +234,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // not put together again
     let mut changed: Vec<&Row> = Vec::new();
     for row in &rows {
-        let same = match book.record_by_key(Some(connection), &source, &row.key)? {
-            Some(r) => book.revisions(r)?.pop().is_some_and(|(_, _, p)| json::parse(&p).is_ok_and(|v| adapter.holds(&v, row))),
-            None => false,
-        };
-        if same {
+        if held(book, adapter, connection, row)? {
             report.records_unchanged += 1;
         } else {
             changed.push(row);
@@ -288,7 +284,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
                     let stored = book.store(adapter.mapping(), &incoming, now)?;
                     match stored.outcome {
                         bagholder_book::records::Outcome::New => report.records_new += 1,
-                        bagholder_book::records::Outcome::Revised(_) => report.records_revised += 1,
+                        bagholder_book::records::Outcome::Revised(_) | bagholder_book::records::Outcome::Restored => report.records_revised += 1,
                         bagholder_book::records::Outcome::Unchanged => report.records_unchanged += 1,
                     }
                     if adapter.reads_positions(&payload) {
@@ -311,11 +307,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             if rows.iter().chain(&beside).chain(&fresh).any(|r| r.key == row.key) {
                 continue;
             }
-            let held = match book.record_by_key(Some(connection), &source, &row.key)? {
-                Some(r) => book.revisions(r)?.pop().is_some_and(|(_, _, p)| json::parse(&p).is_ok_and(|v| adapter.holds(&v, &row))),
-                None => false,
-            };
-            if !held {
+            if !held(book, adapter, connection, &row)? {
                 fresh.push(row);
             }
         }
@@ -548,6 +540,15 @@ pub const DAILY_READ: &str = "daily";
 /// suspect.
 const FEW: usize = 3;
 
+/// Whether the book counts a row's record as the row is now: one an earlier
+/// read removed is stored again, and so counted again (`Outcome::Restored`).
+fn held(book: &Book, adapter: &dyn BrokerAdapter, connection: ConnectionId, row: &Row) -> Result<bool> {
+    Ok(match book.record_by_key(Some(connection), &adapter.mapping().source(), &row.key)? {
+        Some(r) if book.record(r)?.state != bagholder_core::record::RecordState::Removed => book.revisions(r)?.pop().is_some_and(|(_, _, p)| json::parse(&p).is_ok_and(|v| adapter.holds(&v, row))),
+        _ => false,
+    })
+}
+
 /// The records of rows the broker no longer lists over a span it was read in:
 /// a row posted again under another id once final (a card purchase's pending
 /// row), a row withdrawn, by the account and day they name.
@@ -623,7 +624,7 @@ fn store_row(book: &Book, adapter: &mut dyn BrokerAdapter, moves: &mut dyn BookM
         let stored = book.store(adapter.mapping(), &incoming, now)?;
         match stored.outcome {
             bagholder_book::records::Outcome::New => report.records_new += 1,
-            bagholder_book::records::Outcome::Revised(_) => report.records_revised += 1,
+            bagholder_book::records::Outcome::Revised(_) | bagholder_book::records::Outcome::Restored => report.records_revised += 1,
             bagholder_book::records::Outcome::Unchanged => report.records_unchanged += 1,
         }
         // the stored records holding this account's rows over the row's day:
