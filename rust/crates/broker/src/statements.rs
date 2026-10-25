@@ -291,6 +291,19 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         if !any_issued {
             continue;
         }
+        // an account holds nothing before its first movement: where no month read
+        // back to its first reconciles, and the statements open that month at
+        // nothing, the month before closes at nothing on both sides (a conversion
+        // in its first month whose detail states the side received alone)
+        if oldest == first {
+            if let Some(before) = previous(first) {
+                for (c, b) in base.iter_mut().filter(|(_, b)| b.is_none()) {
+                    if opening(*c, first, top, keys, &kept) == Some(Dec::ZERO) {
+                        *b = Some(before);
+                    }
+                }
+            }
+        }
         let mut reconciled = true;
         for (currency, b) in base {
             let Some(b) = b else {
@@ -1008,6 +1021,22 @@ fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], k
 
 /// Each month's (opening, closing) of one of the broker's accounts in
 /// `currency`, where it has rows in it.
+/// What the statements open month `m` at in a currency, every account behind the
+/// book's added up: each one's first month from `m` to `top` with rows in it
+/// opens where it stood at `m`'s opening (nothing moved it in between); one
+/// with no rows in it from `m` held none. None where an opening is not stated.
+fn opening(currency: Currency, m: jiff::civil::Date, top: jiff::civil::Date, keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>) -> Option<Dec> {
+    let months = months_between(m, top);
+    let mut sum = Dec::ZERO;
+    for k in keys {
+        let known = ends(currency, &months, k, kept);
+        if let Some((_, (o, _))) = known.iter().next() {
+            sum = sum.checked_add((*o)?).ok()?;
+        }
+    }
+    Some(sum)
+}
+
 fn ends(currency: Currency, months: &[jiff::civil::Date], k: &str, kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>) -> BTreeMap<jiff::civil::Date, (Option<Dec>, Option<Dec>)> {
     months
         .iter()

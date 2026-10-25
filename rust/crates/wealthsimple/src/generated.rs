@@ -80,7 +80,7 @@ pub enum Shape {
     /// `publish_late` is called: a row in a closed account dated after its one
     /// full read.
     LateRow,
-    /// Every other conversion after the month of an account's first movement a funding intent
+    /// Every other conversion a funding intent
     /// (`FetchFundingIntent`), whose detail states the side received alone; the
     /// statements state the side paid.
     FundingIntent,
@@ -925,13 +925,9 @@ impl Generated {
             let id = self.next_id("conversion");
             let detail_id = format!("{id}-x");
             let row = set(self.row("FUNDS_CONVERSION", "", a, at(day, *n), &id), &[(&["amount"], text(money(want))), (&["currency"], text("USD")), (&["amountSign"], text("positive"))]);
-            // every other one after the month of the account's first movement a
-            // funding intent, whose detail states the side received alone (one in
-            // that first month leaves the statements no month to start from)
+            // every other one a funding intent, whose detail states the side received alone
             self.funded += 1;
-            let first = self.accounts[a].ledger.first().map_or(day, |l| l.day);
-            let first_month = first.first_of_month().checked_add(jiff::Span::new().months(1)).expect("a month");
-            let detail = if self.shapes.contains(&Shape::FundingIntent) && self.funded % 2 == 0 && day >= first_month {
+            let detail = if self.shapes.contains(&Shape::FundingIntent) && self.funded % 2 == 0 {
                 set(
                     self.templates.funding.clone(),
                     &[
