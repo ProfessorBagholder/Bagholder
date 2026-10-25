@@ -533,6 +533,39 @@ fn a_row_an_earlier_walk_withdrew_is_booked_again_by_the_next_walk_that_finds_it
     assert_eq!((done.read, done.booked), (0, 0));
 }
 
+/// A movement only the statements state in an account's first month (a
+/// conversion whose detail states the side received alone): no month read back
+/// to its first reconciles, but the account held nothing before it, and its
+/// statement opens that month at nothing, so the walk starts from nothing and
+/// books it.
+#[test]
+fn a_movement_only_the_statements_state_in_an_account_s_first_month_is_booked_from_nothing_before_it() {
+    let mut w = World::new();
+    w.feed("lira-1", "2025-05-20", "deposit", "100");
+    w.feed("lira-1", "2025-06-05", "deposit", "10");
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-20", "CONT", "Contribution", "100", "100"), ("2025-05-21", "FEE", "Fee", "-5", "95")])));
+    w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[("2025-06-05", "CONT", "Contribution", "10", "105")])));
+    let (lira, cash) = (w.lira, w.cash);
+    w.states(lira, "105");
+    w.states(cash, "0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.booked, done.unreconciled.len()), (1, 0), "{done:?}");
+    assert_eq!(w.book_cash(lira), dec("105"));
+    // one whose statement opens its first month at something is not started from nothing
+    let mut w = World::new();
+    w.feed("lira-1", "2025-05-20", "deposit", "100");
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-20", "CONT", "Contribution", "100", "130"), ("2025-05-21", "FEE", "Fee", "-5", "125")])));
+    w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[])));
+    let (lira, cash) = (w.lira, w.cash);
+    w.states(lira, "125");
+    w.states(cash, "0");
+    let done = w.run(&mut failures);
+    assert_eq!(done.booked, 0, "{done:?}");
+    assert!(done.unreconciled.iter().any(|u| u.account == lira), "{done:?}");
+}
+
 #[test]
 fn a_persistent_difference_is_read_once_and_the_next_pull_asks_nothing() {
     let mut w = owners_june();

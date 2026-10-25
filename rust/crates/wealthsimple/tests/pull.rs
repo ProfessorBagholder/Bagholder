@@ -1049,5 +1049,10 @@ fn a_book_of_every_shape_is_pulled_whole_and_agrees_with_the_broker() {
     let (_h, book, ws, report) = shaped(&SHAPES);
     assert!(report.failures.is_empty(), "{:?}", report.failures);
     assert_eq!(report.statements.unreconciled, vec![], "{:?}", report.statements);
+    // a funding intent of this month has no statement yet to state its side paid
+    let this_month = shaped_today().first_of_month();
+    let open: Vec<String> = ws.source.funding_intents().into_iter().filter(|k| book.record_by_key(Some(connection(&book, "2026-10-08T20:00:00Z")), &SourceName::named("wealthsimple"), k).unwrap().is_some_and(|r| book.transactions_of(r).unwrap().iter().all(|t| t.trade_date >= this_month))).collect();
+    assert!(open.is_empty(), "this month's funding intents leave the cash open: {open:?}");
+    cash_agrees(&book, &ws.source);
     units_agree(&book, &ws.source);
 }
