@@ -30,7 +30,7 @@ use bagholder_core::jiff::{SignedDuration, Timestamp};
 use bagholder_core::{Broker, Currency, Dec, Money, SourceName};
 use bagholder_sources::cache::{MarketCache, StoredQuote};
 use bagholder_wealthsimple::adapter::Wealthsimple;
-use bagholder_wealthsimple::generated::{Generated, Size};
+use bagholder_wealthsimple::generated::{Generated, Size, SHAPES};
 
 // ---- the budget (docs/architecture.md §16; a test holds the two equal) ----
 
@@ -450,7 +450,9 @@ pub fn build(home: &Path, size: Size, balances_days: u32) -> Result<String, Stri
         Some(c) => c.id,
         None => book.add_connection(&ws, "Wealthsimple", at).map_err(err)?,
     };
-    let mut adapter = Wealthsimple::new(Generated::new(size, today));
+    // every shape the real feed has (brief 76): the budget is measured on a book
+    // of the feed's real shapes, not a smooth one
+    let mut adapter = Wealthsimple::new(Generated::shaped(size, today, &SHAPES));
     let report = pull::pull(&book, &mut adapter, connection, today, at, &mut |_| {}).map_err(err)?;
     if !report.failures.is_empty() {
         return Err(format!("the pull failed: {:?}", report.failures));
@@ -1370,8 +1372,12 @@ mod tests {
         let (ca, cb) = (counts(a.path()), counts(b.path()));
         assert!(ca.iter().any(|(t, n)| t == "transactions" && *n > 0), "{ca:?}");
         assert_eq!(ca, cb);
-        // every row, the feed's and the export's, is read with no problem
-        assert!(ca.iter().any(|(t, n)| t == "record_problems" && *n == 0), "{ca:?}");
+        // every row, the feed's and the export's, is read with no problem but the
+        // one a conversion whose detail states the side received alone carries
+        // (`Shape::FundingIntent`), until the statements state its side paid
+        let c = rusqlite::Connection::open(a.path().join(bagholder_book::BOOK_FILE)).unwrap();
+        let codes: Vec<String> = c.prepare("SELECT DISTINCT code FROM record_problems ORDER BY code").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+        assert!(codes.iter().all(|c| c == "conversion-side-unstated"), "{codes:?}");
         let (fa, fb) = (figures_digest(a.path()), figures_digest(b.path()));
         assert!(fa.iter().any(|l| l.starts_with("trade")) && fa.iter().any(|l| l.starts_with("held")), "{fa:?}");
         assert_eq!(fa, fb);
@@ -1426,7 +1432,7 @@ mod tests {
             let held = f.read(|e| e.inputs().market.brokers.clone()).unwrap();
             assert_eq!(held, whole, "after {what}: the engine holds what the book states");
         };
-        let mut adapter = Wealthsimple::new(Generated::new(SMALL, today));
+        let mut adapter = Wealthsimple::new(Generated::shaped(SMALL, today, &SHAPES));
         let before = f.version();
         let report = pull::pull(&book, &mut adapter, connection, today, at, &mut |_| {}).unwrap();
         assert!(report.failures.is_empty(), "{:?}", report.failures);
