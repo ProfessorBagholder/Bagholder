@@ -1,6 +1,6 @@
 # Handoff: the CTO session for Bagholder
 
-Written 2026-10-18 by the CTO session that ran on the owner's Mac; section 2 last rewritten 2026-10-21; and the home-server lessons updated the same day by the home-server CTO session for the next one. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
+Written 2026-10-18 by the CTO session that ran on the owner's Mac; section 2 last rewritten 2026-10-25; and the home-server lessons updated the same day by the home-server CTO session for the next one. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
 
 The old session's memory (about 95 notes) lived only on the Mac. Everything in it that still matters is folded in below. Where a rule is already in the repo's `CLAUDE.md`, this file points to it and does not restate it.
 
@@ -22,49 +22,45 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-21 ~17:00 UTC, written by the home-server CTO session before a compaction)
+## 2. Where things stand (2026-10-25 ~22:30 UTC, written by the home-server CTO session before a compaction)
 
-**HOLD: the Architect said "Hold everything until the brief; I'll send it when it's done." Build nothing until that brief arrives.** It covers the earlier-app removal design, whether to revert #575/#586's machinery, and how users can trust their numbers. The owner handed it to the Architect after saying the work had become "slop on top of slop", that 156k lines (2.7.0) had grown to 184k (2.9.0), and that they "can no longer assure my users that their numbers will be accurate". When the brief comes, build exactly what it says, and nothing else.
+### Released, newest first (each a patch; `gh release list` is the truth)
+- **v2.10.7** (Latest), from #612–#616, brief 76 PR 1 and the four fixes its shapes found:
+  - Rule set 16 (#613): a leaving row in the other account's feed is the move's only where it is of the move's kind and group (`externalCanonicalId`); without a group, the same amount and currency; without an amount, as before.
+  - #614: the statements walk starts from nothing before an account's first month, where the statements open it at nothing.
+  - #615: a closed account's book is held to nothing, and its statements are walked back to the month it closed.
+  - #616: `side_paid` was replaced by `sides_paid`. A conversion whose record states only the side received, after the newest statement, is paid what its day's cash (`BrokerAdapter::cash_on`, the positions' `sec-c-` nodes) moved unexplained. One record a day names that day's conversions, it is re-derived every pull, and `settled_conversions` takes a record naming several as settling each. The walk proves nothing after `top` (`proven` bounded).
+- **v2.10.6** (#611): repayments under any account filter again, with the Cashflow chart starting at the filtered accounts' first payment. The statements are consulted only when the book disagrees with the newest statement's close (a difference after it is left to the next activity read).
+- **v2.10.5** (#610): what Wealthsimple states now is what the book holds. A removed record its source states again is restored (`Outcome::Restored`); the pull's `held` counts no removed record; `restore_withdrawn` rebooks rows a walk withdrew where no feed row holds them, in every kept month. (2.10.2–2.10.3 walked a two-id account on one id's statements.)
+- 2.10.0–2.10.4: the earlier-app removal and its repairs (migrations 37–40). See `docs/decisions.md` 2026-10-24 and 2026-10-25.
 
-### Released
-- **v2.8.0** (#574, #575, #577 Net worth tab, #579 capacity dead band).
-- **v2.9.0** (#586: closed-account re-read-when-due, broker label on Net worth rows, click-to-sort on Net worth). The owner's Mac runs 2.9.0, installed from `~/Applications/Bagholder/` (release-archive layout, run directly).
-- Docs PRs merged: #585 (no code-signing certificate: the owner's decision), #588 (two decisions: the earlier app is retired by one migration and never a standing condition; closed accounts are read like any other).
+### The owner's book
+After 2.10.6 the owner's header showed only "USD cash in 🚀 Trading: Wealthsimple's June 2026 statement: a buy only the statement states…", and it came back after the five-minute reads. 2.10.6's newest-statement rule targets exactly that trigger, and 2.10.7 adds the conversion fixes. Whether anything still shows after 2.10.7's first sync is unknown. If the owner reports something, trace it from the code and the shapes without asking them anything (their words: "why is this so hard… you're still putting questions back to me").
 
-### The established fact behind the hold
-- The owner's book has one live `bagholder-import` row: the leaving side of a cash move out of a closed managed RESP, 2025-06-16. Counts: live 1, superseded 5,867, removed 288.
-- Wealthsimple's feed DOES list that leaving row (ASSET_MOVEMENT/SOURCE, COMPLETED). It's held in the arrival record's `$.opposing.rows`.
-- The book never stored it for one reason: pull.rs never re-reads a closed account once it has been read in full.
-- #575 and #586 added layers around that premise instead of removing it.
-- 2.9.0 had not run its daily full pull (weekdays after 2 PM Mountain) when the last count was taken.
-- Unverified: whether any person data (journal, anchors, carried orders) sits on import-derived trades.
+### Brief 76 (the shapes the feed has), on `architecture-briefs`
+- PR 1, #612: merged (in 2.10.7). `Generated::shaped`, `Shape`, `SHAPES`; one pull test per shape; an every-shape test over seeds 13, 1, 5 and 9; the rule in `docs/architecture.md` §16 "The shapes the feed has". The hand-edited recorded fixtures stay (the Architect agreed).
+- PR 2, #617: merged (tests only). `a_book_of_every_shape_read_whole_again_is_the_same_book`, and `a_book_of_every_shape_carried_from_version_36_is_the_same_book_after_its_next_pull` (37 splits the linked set, 39 finds no link, the next pull merges it). Both assert `report.suspect` is empty.
+- **PR 3, #618 OPEN at e1e701db** (worktree `scratchpad/b78`, branch `capacity-on-the-shaped-books`): `capacity::build` and the engine-inputs oracle read `Generated::shaped(.., &SHAPES)`; `test_the_same_seed_and_size_build_the_same_book` allows only `conversion-side-unstated`. **CI failed and is not yet investigated:**
+  - capacity growth rule on the shaped books: `brokers` (breadth) allocations grew 3.11×; `add-trade` (depth) allocations grew 3.29×; `backdated-trade` (depth) time was under budget, so it could come off `OVER_BUDGET`. `feed-step` time 179.5 against 169.5 is reported, not failing. The job's table is in the run's step summary.
+  - browser: `e2e/dataflow.spec.ts:204` "each interaction keeps within its request budget": "a minute idle: POST /api/events/watch" over budget. Check first whether the e2e app builds its book through `capacity::build` (then the shapes changed its data); else it may be flaky.
+  - Next: find why the two allocation counts grow with the shapes (likely per-account or per-record work the linked/closed/statement shapes add). Fix or propose `OVER_BUDGET` entries with issues; that is the Architect's call. Paste the re-measured table into #618's body, then send the Architect the head.
+- The Architect's note for later: a past day's positions are final, so a settled day's cash could be kept like statements and not read again every pull.
+- After brief 76: the agents-anywhere build (plan #572) at the owner's word.
 
-### Stopped / not built
-- The 3.0.0 build: stopped, nothing pushed. Branch `remove-earlier-app` (de4e40d) is still the old Part 2 build.
-- No identifier-scan test, ever. The owner: a test naming old code is old code kept.
-- `install-check` branch (423bcfe7): `.github/workflows/install-check.yml`, a Windows job that downloads, unpacks and starts the release. It passed on Windows Server 2025 for v2.8.0. Not a PR yet. The owner noted Server isn't Windows 11. The owner wants Windows steps as short as possible: the one-line PowerShell `irm …releases/latest | … ; Expand-Archive …; & $HOME\Bagholder\bagholder.exe`, no hashes. Not yet run on Windows.
+### Older queue, status not rechecked this segment
+#580–#584, #587, the `install-check` branch, the short-interest bug (options sent to FINRA), PR #589. Check each before acting.
 
-### Waiting on the owner
-- **Short-interest bug.** Option holdings get sent to FINRA, and the header shows an EOF error. Cause: my c913b605 (10-16) passes the listing key's symbol, with spaces stripped, to `shorts::market_of`, whose `is_option_symbol` needs the spaced form. Proposed fix: decide by instrument kind in `server/src/feeds.rs` `shorts_listings`. I asked the owner whether to do it despite the hold. No answer yet.
-- **PR #589** (opened by a session the owner started): tests delete their temp folders, plus a CI leftover check. Untouched because of the hold. To mention to the Architect.
-
-### Issues filed 2026-10-21
-- #580: flaky notices.spec.
-- #581: sync progress text stuck on one percentage.
-- #582: sync logs nothing.
-- #583: CLOSE_WAIT socket leak.
-- #584: a copy that can't open the book retries every 30 s.
-- #587: card last-4 digits on Net worth (the owner wants it; needs a plan, since it's a migration).
-
-### Queue after the brief (the owner's order)
-1. The earlier-app work, as the Architect's brief says.
-2. The agents build (briefs 72/73).
-3. Then: #587; CI efficiency (affected-only jobs, cancel-in-progress, full run only before a release); the rest of #569; #581–#584; the Windows 11 check.
+### How a release goes (all delegated: Architect clearance + green checks = merge and release)
+- Bump `rust/Cargo.toml` `version`, `rust/crates/server/src/app.rs` `APP_VERSION`, `rust/crates/server/tests/golden/routes.json` `"version"`, then let cargo update `Cargo.lock`.
+- Merge with `gh api -X PUT repos/ProfessorBagholder/Bagholder/pulls/N/merge -f merge_method=merge -f sha=<cleared head>`.
+- Then `gh release create vX.Y.Z --target <merge sha> --prerelease --title vX.Y.Z --notes-file <notes>`. release.yml builds 8 assets and marks it Latest; confirm with `gh release view` and `gh release list` before telling the owner it is out (never a link before it is ready).
+- Stacked PRs: merge each into the stack's base in order, retargeting the next with `gh api -X PATCH …/pulls/N -f base=<branch>`. Merge master into a long branch before its last run if master moved (#612 was cut before 2.10.6).
 
 ### Workspace
-- Server worktrees in the scratchpad: `g558` (paused guard-recorded-figures, the owner's call) and `ho` (this handoff). Nothing else.
-- No sessions of mine are running, and the owner deleted the rest.
-- The merge script: `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/merge-when-green.sh <pr…>`. It merges with `--merge` when every check is green. Only run it after the Architect has cleared the head.
+- Worktrees in this session's scratchpad: `b78` (#618), `g558` (paused, the owner's call), `ho` (this file).
+- Scratch notes: `history-test.patch` (a test replaying 2.9.0 → 2.10.2's one-id walk → 2.10.5 that ends where 2.9.0 left the book; uncommitted, could join a later tests PR); `brief75.md`, `facts-pull.md`, `nt.md` and `verification.md` are older notes.
+- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`.
+- **Lesson from today:** a background waiter on CI never reported, and the owner saw an hour of "waiting" on checks that had already failed. Read `gh pr checks N` yourself at the point the result is needed, and never tell the owner you are waiting without having just checked.
 
 ## 3. How the owner wants to be worked with
 
