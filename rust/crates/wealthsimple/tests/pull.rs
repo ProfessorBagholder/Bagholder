@@ -190,6 +190,35 @@ fn a_pending_row_posted_again_under_another_id_leaves_the_book() {
     assert_eq!((third.records_new, third.removed.len()), (0, 0));
 }
 
+/// A row whose record an earlier read removed (2.10.0 to 2.10.3 read accounts
+/// that sat apart, then were merged, on one id) is in the book again once
+/// Wealthsimple lists it: what the broker lists now is what the book holds.
+#[test]
+fn a_row_whose_record_an_earlier_read_removed_is_live_again_once_the_broker_lists_it() {
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at("2025-11-19T20:00:00Z")).unwrap();
+    let listed = |rows: &mut Vec<Value>| {
+        let row = with(row_as(rows, "anon-listed-1", "COMPLETED"), "occurredAt", Value::String("2025-11-19T15:00:00.000000+00:00".into()));
+        rows.push(row);
+    };
+    let (first, _) = once_with(&book, &dir(), "2025-11-19T20:00:00Z", listed);
+    assert!(first.failures.is_empty(), "{:?}", first.failures);
+    let conn = connection(&book, "2025-11-19T20:00:00Z");
+    let r = book.record_by_key(Some(conn), &SourceName::named("wealthsimple"), "anon-listed-1").unwrap().unwrap();
+    let held = book.transactions_of(r).unwrap();
+    assert!(!held.is_empty());
+    book.mark_removed(r, at("2025-11-19T20:30:00Z")).unwrap();
+    // the next pull reads from the last full read's day, and the row is listed
+    let (second, _) = once_with(&book, &dir(), "2025-11-19T21:00:00Z", listed);
+    assert!(second.failures.is_empty(), "{:?}", second.failures);
+    assert_eq!(state(&book, "wealthsimple", "anon-listed-1"), RecordState::Live);
+    assert_eq!(book.transactions_of(r).unwrap(), held);
+    assert_eq!(second.records_revised, 1, "{second:?}");
+    // and once held, the pull after changes nothing
+    let (third, _) = once_with(&book, &dir(), "2025-11-19T22:00:00Z", listed);
+    assert_eq!((third.records_new, third.records_revised), (0, 0), "{third:?}");
+}
+
 #[test]
 fn a_credit_card_s_cash_is_what_is_owed_on_it() {
     // the accounts list with a card beside the account (its node edited from

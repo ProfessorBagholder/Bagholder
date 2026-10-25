@@ -88,7 +88,7 @@ Everything rests on naming things in Bagholder's own terms, not in any source's.
 
 Both are SQLite in WAL mode, every multi-row change in one transaction. Broker credentials are in neither (§12).
 
-**Source records are kept as received**, with their source, the source's id, when they arrived and their revisions (a broker replacing its own row keeps the history). A row is marked removed only when its source reports the removal, never because it is missing from an incremental pull.
+**Source records are kept as received**, with their source, the source's id, when they arrived and their revisions (a broker replacing its own row keeps the history). A row is marked removed only when its source reports the removal, never because it is missing from an incremental pull, and is counted again when its source states it again: what the source states now is what the book holds, whatever an earlier read made of it.
 
 **Transactions are Bagholder's own**, derived from source records by each source's mapping, deterministically, the mapping's version recorded: buy, sell, dividend, interest, fee, deposit, withdrawal, transfer, corporate event, in one vocabulary for every broker. When a mapping improves, transactions are derived again from the kept records; when that moves a past figure, the app says so ("figures corrected by the Wealthsimple mapping, version 7") rather than changing history silently.
 

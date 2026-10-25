@@ -155,7 +155,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         if differing.is_empty() {
             continue;
         }
-        let own: Vec<&Transaction> = txs.iter().filter(|t| t.account == *account).collect();
+        let mut own: Vec<&Transaction> = txs.iter().filter(|t| t.account == *account).collect();
         let Some(first) = own.iter().map(|t| month_of(t.trade_date)).min() else { continue };
         // its activity begins after the newest month a statement could cover:
         // the difference lies where no statement is issued yet
@@ -183,6 +183,23 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             }
             kept.insert(k.clone(), months);
         }
+        // a row an earlier walk booked and then withdrew, which the feed does not
+        // hold now, is booked again before this walk reads on
+        let restored = restore_withdrawn(book, adapter, connection, keys, &kept, closed, &own, &mapping_source, now)?;
+        done.booked += restored.len();
+        let reread;
+        let differing = if !restored.is_empty() {
+            booked_now.extend(restored);
+            reread = book.transactions()?;
+            own = reread.iter().filter(|t| t.account == *account).collect();
+            let d = self::differing(book, &reread, *account)?;
+            if d.is_empty() {
+                continue;
+            }
+            d
+        } else {
+            differing
+        };
         // the newest month issued: the one before it until the broker issues it
         let mut top = newest;
         let mut base: BTreeMap<Currency, Option<jiff::civil::Date>> = differing.iter().map(|c| (*c, None)).collect();
@@ -321,7 +338,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
                     continue;
                 }
                 let stored = book.store_superseding(mapping, &incoming, &[rec], "the broker's statement row for the same movement", now)?;
-                if stored.outcome == bagholder_book::records::Outcome::New {
+                if matches!(stored.outcome, bagholder_book::records::Outcome::New | bagholder_book::records::Outcome::Restored) {
                     done.booked += 1;
                     booked_now.push(stored.record);
                 }
@@ -336,7 +353,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
                 let incoming = Incoming { connection: Some(connection), source_key: &key, payload: &payload, refs: vec![] };
                 let mapping = adapter.statement_mapping().expect("checked above");
                 let stored = book.store(mapping, &incoming, now)?;
-                if stored.outcome == bagholder_book::records::Outcome::New {
+                if matches!(stored.outcome, bagholder_book::records::Outcome::New | bagholder_book::records::Outcome::Restored) {
                     done.booked += 1;
                     booked_now.push(stored.record);
                 }
@@ -354,6 +371,53 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     }
     done.joined = join_moves(book, &mapping_source, &booked_now)?;
     Ok(done)
+}
+
+/// The rows an earlier walk booked and then withdrew that no feed row holds now,
+/// nor a row booked since, each live again where the statement kept states it
+/// as it was booked, in any month kept. A walk withdraws a row a feed
+/// row holds; one whose row no feed row holds was withdrawn by a reading the
+/// statements no longer bear out (2.10.2 and 2.10.3 walked an account behind
+/// two of the broker's ids on one id's statements, and withdrew every row booked
+/// from the other's), and the walk reads the statements again.
+#[allow(clippy::too_many_arguments)]
+fn restore_withdrawn(
+    book: &Book,
+    adapter: &dyn BrokerAdapter,
+    connection: ConnectionId,
+    keys: &[String],
+    kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>,
+    closed: &BTreeSet<String>,
+    own: &[&Transaction],
+    source: &SourceName,
+    now: jiff::Timestamp,
+) -> Result<Vec<RecordId>> {
+    let withdrawn: BTreeMap<String, RecordId> = book.removed_records(source)?.into_iter().map(|(r, k)| (k, r)).collect();
+    if withdrawn.is_empty() {
+        return Ok(vec![]);
+    }
+    let months: Vec<jiff::civil::Date> = keys.iter().flat_map(|k| kept[k].keys().copied()).collect::<BTreeSet<_>>().into_iter().collect();
+    let currencies: BTreeSet<Currency> = keys.iter().flat_map(|k| kept[k].values().flatten().flatten().map(|r| r.currency)).collect();
+    let mapping = adapter.statement_mapping().expect("checked by the walk");
+    let mut out = Vec::new();
+    for currency in currencies {
+        let r = reconcile(currency, &months, keys, kept, closed, own, source);
+        for (place, _, _) in r.unmatched.values().flatten() {
+            let row = &kept[&place.0][&place.1].as_ref().expect("an unmatched row's month was issued")[place.2];
+            let Some((key, payload)) = adapter.statement_record(&place.0, place.1, place.2, row) else { continue };
+            let Some(rec) = withdrawn.get(&key) else { continue };
+            // the row as it was booked: one the statement now states otherwise is the walk's to prove
+            if book.revisions(*rec)?.pop().and_then(|(_, _, p)| bagholder_core::json::parse(&p).ok()).as_ref() != Some(&payload) {
+                continue;
+            }
+            let payload = payload.canonical();
+            let incoming = Incoming { connection: Some(connection), source_key: &key, payload: &payload, refs: vec![] };
+            if book.store(mapping, &incoming, now)?.outcome == bagholder_book::records::Outcome::Restored {
+                out.push(*rec);
+            }
+        }
+    }
+    Ok(out)
 }
 
 /// The side paid of the one conversion in `account` after `after` whose record

@@ -5,6 +5,8 @@
 //! one appends a revision and derives the record's transactions again. A record
 //! leaves the count only when its source reports it removed (`mark_removed`) or
 //! another record supersedes it (`links.rs`); one missing from a pull is left alone.
+//! A removed record its source states again is counted again: what the source
+//! states now is what the book holds, whatever an earlier read made of it.
 
 use std::collections::BTreeMap;
 
@@ -38,6 +40,9 @@ pub enum Outcome {
     Revised(u32),
     /// The same payload as the latest revision: nothing was written.
     Unchanged,
+    /// A record its source had reported removed, stated again: live again, its
+    /// transactions derived from what the source states now.
+    Restored,
 }
 
 /// Which transactions a write added, changed and removed.
@@ -166,10 +171,15 @@ impl Book {
             }
             Some(id) => {
                 let (latest, n) = self.latest_revision(id)?;
-                if latest == payload {
+                if latest != payload {
+                    self.add_revision(id, n + 1, &payload, at)?;
+                }
+                if self.record(id)?.state == RecordState::Removed {
+                    self.set_state(id, RecordState::Live, at)?;
+                    (id, Outcome::Restored)
+                } else if latest == payload {
                     (id, Outcome::Unchanged)
                 } else {
-                    self.add_revision(id, n + 1, &payload, at)?;
                     (id, Outcome::Revised(n + 1))
                 }
             }
@@ -718,6 +728,17 @@ impl Book {
         let mut stmt = self.conn().prepare_cached("SELECT id FROM source_records WHERE source = ? AND state = 'live' ORDER BY first_received_at, rowid")?;
         let ids = stmt.query_map([source.as_str()], |r| r.get::<_, String>(0))?;
         ids.map(|s| text::parsed("source_records", "id", &s?, RecordId::parse)).collect()
+    }
+
+    /// The records of a source it reported removed, each with its key.
+    pub fn removed_records(&self, source: &SourceName) -> Result<Vec<(RecordId, String)>> {
+        let mut stmt = self.conn().prepare_cached("SELECT id, source_key FROM source_records WHERE source = ? AND state = 'removed' ORDER BY first_received_at, rowid")?;
+        let rows = stmt.query_map([source.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+        rows.map(|row| {
+            let (id, key) = row?;
+            Ok((text::parsed("source_records", "id", &id, RecordId::parse)?, key))
+        })
+        .collect()
     }
 
     /// The records that have superseded a record of `source`: each has taken

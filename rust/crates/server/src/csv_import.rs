@@ -259,7 +259,7 @@ pub fn import_from(
                 };
                 match stored.outcome {
                     Outcome::Unchanged => report.unchanged += 1,
-                    Outcome::New | Outcome::Revised(_) => report.added += 1,
+                    Outcome::New | Outcome::Revised(_) | Outcome::Restored => report.added += 1,
                 }
                 lines.insert(stored.record, line);
                 report.problem_rows += problems.len() as u32;
