@@ -270,21 +270,22 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
                 }
             }
             oldest = m;
-            // the newest month issued: a currency the book closes where the
-            // statements close differs only after them, where no statement reads
-            // yet (a movement the activity read has not listed); the walk is
-            // not theirs to make
-            if m == top {
-                let end = month_end(top);
-                base.retain(|c, _| {
-                    let closing = closings(*c, &[top], keys, &kept, closed).get(&top).copied().flatten();
-                    let book = own.iter().filter(|t| t.trade_date <= end).filter_map(|t| t.cash).filter(|x| x.currency == *c).try_fold(Dec::ZERO, |a, x| a.checked_add(x.amount).ok());
-                    closing.is_none() || closing != book
-                });
-                if base.is_empty() {
-                    after_statements = true;
-                    break 'walk;
-                }
+            // a currency the book closes the newest month issued with where the
+            // statements close it differs only after them, where no statement
+            // reads yet (a movement the activity read has not listed): the walk
+            // is not theirs to make. A newest month with no rows in the currency
+            // closes where the last month with rows did, so it is known once the
+            // walk reaches that month.
+            let end = month_end(top);
+            let read: Vec<jiff::civil::Date> = months_between(m, top);
+            base.retain(|c, _| {
+                let closing = closings(*c, &read, keys, &kept, closed).get(&top).copied().flatten();
+                let book = own.iter().filter(|t| t.trade_date <= end).filter_map(|t| t.cash).filter(|x| x.currency == *c).try_fold(Dec::ZERO, |a, x| a.checked_add(x.amount).ok());
+                closing.is_none() || closing != book
+            });
+            if base.is_empty() {
+                after_statements = true;
+                break 'walk;
             }
             // every currency that disagrees needs its base month
             let months: Vec<jiff::civil::Date> = months_between(m, top);

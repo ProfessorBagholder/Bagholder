@@ -545,16 +545,32 @@ fn a_difference_after_the_newest_statement_reads_no_month_before_it_and_says_not
     // May's statement states a buy, and June's a sale, that the feed states otherwise
     w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-12", "BUY", "Bought", "-10", "90")])));
     w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[("2025-06-12", "SELL", "Sold", "10", "100")])));
-    // a deposit in July, which Wealthsimple states and the feed does not list yet
+    // two deposits in July: one the feed lists, one Wealthsimple states and the feed does not list yet
+    w.feed("lira-1", "2025-07-02", "deposit", "3");
     let (lira, cash) = (w.lira, w.cash);
-    w.states(lira, "103");
+    w.states(lira, "106");
     w.states(cash, "0");
     let mut failures = vec![];
     let done = w.run(&mut failures);
     assert!(failures.is_empty(), "{failures:?}");
     assert_eq!(done.unreconciled, vec![], "{done:?}");
     assert_eq!(w.broker.asked, vec!["lira-1 2025-06-01".to_string()], "the newest month alone");
-    assert_eq!(w.book_cash(lira), dec("100"), "nothing booked");
+    assert_eq!(w.book_cash(lira), dec("103"), "nothing booked");
+    // a newest month with no rows closes where the month before did: the walk
+    // reaches that month, and goes no further back
+    let mut w = World::new();
+    w.feed("lira-1", "2025-03-10", "deposit", "100");
+    w.month("lira-1", "2025-03-01", Some(brokerage_statement(&[("2025-03-10", "CONT", "Contribution", "100", "100")])));
+    w.month("lira-1", "2025-04-01", Some(brokerage_statement(&[("2025-04-12", "BUY", "Bought", "-10", "90")])));
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-12", "SELL", "Sold", "10", "100")])));
+    w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[])));
+    let (lira, cash) = (w.lira, w.cash);
+    w.states(lira, "103");
+    w.states(cash, "0");
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(done.unreconciled, vec![], "{done:?}");
+    assert_eq!(w.broker.asked, vec!["lira-1 2025-06-01".to_string(), "lira-1 2025-05-01".to_string()], "back to the last month with rows");
     // and with the deposit in the newest statement's month, the walk is made as before
     let mut w = World::new();
     w.feed("lira-1", "2025-04-10", "deposit", "100");
