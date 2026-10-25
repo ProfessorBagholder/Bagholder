@@ -151,7 +151,9 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // after which none covers them (none where no statement covers any of it)
     let mut read_to: Vec<(AccountId, &Vec<String>, Option<jiff::civil::Date>)> = Vec::new();
     for (account, keys) in keys_of {
-        let differing = differing(book, &txs, *account)?;
+        // every account of the broker's behind it closed: it holds nothing now
+        let account_closed = !keys.is_empty() && keys.iter().all(|k| closed.contains(k));
+        let differing = differing(book, &txs, *account, account_closed)?;
         if differing.is_empty() {
             continue;
         }
@@ -192,7 +194,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             booked_now.extend(restored);
             reread = book.transactions()?;
             own = reread.iter().filter(|t| t.account == *account).collect();
-            let d = self::differing(book, &reread, *account)?;
+            let d = self::differing(book, &reread, *account, account_closed)?;
             if d.is_empty() {
                 continue;
             }
@@ -255,10 +257,11 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             }
             if !issued {
                 // the newest completed month not issued yet: the one before is
-                // the newest there is; any earlier month not issued is where the
-                // account's statements begin
+                // the newest there is (a closed account's last is the month it
+                // closed, back from any month after); any earlier month not
+                // issued is where the account's statements begin
                 match previous(m) {
-                    Some(p) if m == newest && p >= first => {
+                    Some(p) if (m == newest || (account_closed && m == top)) && p >= first => {
                         top = p;
                         m = p;
                         oldest = p;
@@ -443,7 +446,7 @@ fn restore_withdrawn(
 fn side_paid(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, account: AccountId, keys: &[String], after: Option<jiff::civil::Date>, source: &SourceName, now: jiff::Timestamp) -> Result<Option<RecordId>> {
     let Some(first_key) = keys.first() else { return Ok(None) };
     let txs = book.transactions()?;
-    let differing = differing(book, &txs, account)?;
+    let differing = differing(book, &txs, account, false)?;
     let [currency] = differing.iter().copied().collect::<Vec<_>>()[..] else { return Ok(None) };
     let Some((stated_at, stated)) = book.stated(account)?.cash else { return Ok(None) };
     let stated = stated.get(&currency).copied().unwrap_or(Dec::ZERO);
@@ -640,8 +643,15 @@ fn months_between(from: jiff::civil::Date, to: jiff::civil::Date) -> Vec<jiff::c
 
 /// The currencies whose cash the book and the broker's newest statement of it
 /// disagree on.
-fn differing(book: &Book, txs: &[Transaction], account: AccountId) -> Result<BTreeSet<Currency>> {
-    let Some((_, stated)) = book.stated(account)?.cash else { return Ok(BTreeSet::new()) };
+/// The currencies an account's cash in the book differs in from what the broker
+/// states. A closed account holds nothing now, whatever was stated of it when
+/// it was open: its balances are not read, and its book is held to nothing.
+fn differing(book: &Book, txs: &[Transaction], account: AccountId, closed: bool) -> Result<BTreeSet<Currency>> {
+    let stated = match book.stated(account)?.cash {
+        _ if closed => BTreeMap::new(),
+        Some((_, stated)) => stated,
+        None => return Ok(BTreeSet::new()),
+    };
     let mut own: BTreeMap<Currency, Dec> = BTreeMap::new();
     for t in txs.iter().filter(|t| t.account == account) {
         if let Some(c) = t.cash {
