@@ -924,6 +924,20 @@ fn a_move_listed_by_its_arrival_alone_is_booked_leaving_once() {
     units_agree(&book, &ws.source);
 }
 
+/// A move listed by its arrival alone on a day another move between the same
+/// two accounts is listed whole (an account retired: its CAD by its arrival, its
+/// USD on both sides) is booked leaving all the same: the other move's leaving
+/// row moves other cash, and records nothing of this one.
+#[test]
+fn a_move_listed_by_its_arrival_alone_beside_another_listed_whole_is_booked_leaving() {
+    for with in [Shape::Closed, Shape::LinkedIds] {
+        let (_h, book, ws, report) = shaped(&[Shape::ArrivalOnly, with]);
+        assert!(report.failures.is_empty(), "{with:?}: {:?}", report.failures);
+        cash_agrees(&book, &ws.source);
+        units_agree(&book, &ws.source);
+    }
+}
+
 #[test]
 fn an_account_under_two_ids_wealthsimple_links_is_one_account_open_while_either_is() {
     let (_h, book, ws, report) = shaped(&[Shape::LinkedIds]);
