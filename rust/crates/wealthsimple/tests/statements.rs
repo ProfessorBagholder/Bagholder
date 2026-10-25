@@ -533,6 +533,42 @@ fn a_row_an_earlier_walk_withdrew_is_booked_again_by_the_next_walk_that_finds_it
     assert_eq!((done.read, done.booked), (0, 0));
 }
 
+/// The book closes the newest statement where the statements do: a difference
+/// now lies after them (a movement Wealthsimple has made that the activity read
+/// does not list yet), and no month before is read or said, though one the
+/// statements state otherwise than the feed would stop a walk back.
+#[test]
+fn a_difference_after_the_newest_statement_reads_no_month_before_it_and_says_nothing() {
+    let mut w = World::new();
+    w.feed("lira-1", "2025-04-10", "deposit", "100");
+    w.month("lira-1", "2025-04-01", Some(brokerage_statement(&[("2025-04-10", "CONT", "Contribution", "100", "100")])));
+    // May's statement states a buy, and June's a sale, that the feed states otherwise
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-12", "BUY", "Bought", "-10", "90")])));
+    w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[("2025-06-12", "SELL", "Sold", "10", "100")])));
+    // a deposit in July, which Wealthsimple states and the feed does not list yet
+    let (lira, cash) = (w.lira, w.cash);
+    w.states(lira, "103");
+    w.states(cash, "0");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(done.unreconciled, vec![], "{done:?}");
+    assert_eq!(w.broker.asked, vec!["lira-1 2025-06-01".to_string()], "the newest month alone");
+    assert_eq!(w.book_cash(lira), dec("100"), "nothing booked");
+    // and with the deposit in the newest statement's month, the walk is made as before
+    let mut w = World::new();
+    w.feed("lira-1", "2025-04-10", "deposit", "100");
+    w.month("lira-1", "2025-04-01", Some(brokerage_statement(&[("2025-04-10", "CONT", "Contribution", "100", "100")])));
+    w.month("lira-1", "2025-05-01", Some(brokerage_statement(&[("2025-05-12", "BUY", "Bought", "-10", "90")])));
+    w.month("lira-1", "2025-06-01", Some(brokerage_statement(&[("2025-06-12", "SELL", "Sold", "10", "100"), ("2025-06-20", "CONT", "Contribution", "3", "103")])));
+    let (lira, cash) = (w.lira, w.cash);
+    w.states(lira, "103");
+    w.states(cash, "0");
+    let done = w.run(&mut failures);
+    let u = done.unreconciled.iter().find(|u| u.account == lira).expect("named");
+    assert_eq!(u.month, day("2025-05-01"), "{u:?}");
+}
+
 #[test]
 fn a_persistent_difference_is_read_once_and_the_next_pull_asks_nothing() {
     let mut w = owners_june();

@@ -205,6 +205,8 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         let mut base: BTreeMap<Currency, Option<jiff::civil::Date>> = differing.iter().map(|c| (*c, None)).collect();
         let mut m = newest;
         let mut stopped = false;
+        // every currency's difference lies after the newest statement
+        let mut after_statements = false;
         // the oldest month statements were read back to
         let mut oldest = newest;
         'walk: loop {
@@ -268,6 +270,22 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
                 }
             }
             oldest = m;
+            // the newest month issued: a currency the book closes where the
+            // statements close differs only after them, where no statement reads
+            // yet (a movement the activity read has not listed); the walk is
+            // not theirs to make
+            if m == top {
+                let end = month_end(top);
+                base.retain(|c, _| {
+                    let closing = closings(*c, &[top], keys, &kept, closed).get(&top).copied().flatten();
+                    let book = own.iter().filter(|t| t.trade_date <= end).filter_map(|t| t.cash).filter(|x| x.currency == *c).try_fold(Dec::ZERO, |a, x| a.checked_add(x.amount).ok());
+                    closing.is_none() || closing != book
+                });
+                if base.is_empty() {
+                    after_statements = true;
+                    break 'walk;
+                }
+            }
             // every currency that disagrees needs its base month
             let months: Vec<jiff::civil::Date> = months_between(m, top);
             for (c, b) in base.iter_mut() {
@@ -284,6 +302,10 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             }
         }
         if stopped {
+            continue;
+        }
+        if after_statements {
+            read_to.push((*account, keys, Some(month_end(top))));
             continue;
         }
         // no statement issued for any month read: nothing to reconcile against

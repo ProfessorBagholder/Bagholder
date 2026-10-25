@@ -1493,8 +1493,10 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
         let (Some(i), Some(ex)) = (r.instrument, crate::cashflow::entitled_ex(inputs, r)) else { return false };
         trades.iter().any(|t| t.account == r.account && t.instruments.contains(&i) && t.opened_on < ex && t.closed_on.is_none_or(|c| c >= ex) && journal_matches(f, &t.journal, t.direction))
     };
-    // every payment under the account filter, a repayment by the account the money left
-    let everything: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| in_accounts(&r.account) && in_instruments(r.instrument) && f.in_dates(today, r.day) && entitled(r)).map(|(i, _)| i).collect();
+    // a repayment of a debt held outside is the household's, whichever account the
+    // money left: what the income in scope is set against, under any account filter
+    // (the owner, 2026-10-20: "repayments are not made on a per holding basis")
+    let everything: Vec<usize> = rows.iter().enumerate().filter(|(_, r)| (in_accounts(&r.account) || r.kind == Payment::Repayment) && in_instruments(r.instrument) && f.in_dates(today, r.day) && entitled(r)).map(|(i, _)| i).collect();
     let dividends: Vec<usize> = everything.iter().copied().filter(|i| rows[*i].kind == Payment::Dividend).collect();
     let other: Vec<usize> = everything.iter().copied().filter(|i| rows[*i].kind != Payment::Dividend).collect();
     let partial = |ix: &mut dyn Iterator<Item = usize>| -> Partial {
@@ -1502,11 +1504,14 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
         Partial::of(&figs)
     };
 
-    // the chart: every month from the first payment to the current month (or the date filter's end)
+    // the chart: every month from the first payment of the accounts in scope to
+    // the current month (or the date filter's end); another account's repayment
+    // before it draws no month (the owner, 2026-10-23: not "all the bars that had
+    // no history for the selected accounts")
     let mut months: Vec<CashMonth> = Vec::new();
     // the bars' own payments: distributions, interest charged and repayments
     let charted = |i: &usize| matches!(rows[*i].kind, Payment::Dividend | Payment::InterestCharge | Payment::Repayment);
-    if let Some(first) = everything.iter().filter(|i| charted(i)).map(|i| rows[*i].day).min() {
+    if let Some(first) = everything.iter().filter(|i| charted(i) && in_accounts(&rows[**i].account)).map(|i| rows[*i].day).min() {
         let end = match f.bounds(today) {
             Some((_, hi)) => hi.min(today),
             None => match &f.dates {
