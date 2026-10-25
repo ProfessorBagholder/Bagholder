@@ -245,6 +245,10 @@ A small machine (a Raspberry Pi) must carry the app at the reference size and we
 - **What is over budget today** is listed in `capacity.rs` (`OVER_BUDGET`), each entry an operation, the measure that is over (time, steps, allocations or bytes read) and its issue. An operation listed for one measure is still held to the others. The job fails when a measure off the list misses its budget, and when one on the list meets it, so the list only shrinks. A wall time within `TIME_SPREAD` (10.6%) of its budget, half the range between runs of the same code on the runner (`capacity.rs` names its runs), is at the edge: it passes only listed with its issue, so a run landing either side of the budget says the same; past the band it is over, and under it a listed one is said to be able to come off, without failing the job (time is noisy, and the listing stays in sight beside its open issue).
 - The cost line of every pull request that touches the server or what the page reads pastes the job's table (`CLAUDE.md`, Verifying a change).
 
+### The shapes the feed has
+
+A change to how the book is built from the broker names the shapes of the feed it touches, and the made-up Wealthsimple (`rust/crates/wealthsimple/src/generated.rs`, `Shape`) states them: a move listed by its arrival alone, an account under two ids Wealthsimple links, a closed account with history, a row listed in it after its one full read, a conversion whose detail states the side received alone, and the monthly statements. Each shape has its pull test over the made-up broker (`wealthsimple/tests/pull.rs`), and one book with every shape on is held to agree with what the broker states. A shape the real feed turns out to have that the made-up broker lacks is added to it first, from the recorded reply of its kind, and the change follows (brief 76).
+
 ## 17. How the design is held
 
 - **Tests come from `SPEC.md` and from real source replies**, never from what an older build did.

@@ -813,3 +813,211 @@ fn a_statement_of_nothing_held_is_read_again_on_the_day_s_pull() {
     let (_, asked) = once_with(&book, replies.path(), "2025-11-19T21:00:00Z", resp_rows);
     assert!(asked.iter().any(|a| a == "positions anon-resp-2 2025-11-18"), "{asked:?}");
 }
+
+// ---------------------------------------------------------------------------
+// The shapes the real feed has (brief 76), each over the made-up Wealthsimple
+// as the capacity job reads it: the pull runs on `Generated::shaped`, and the
+// book is held to what the made-up broker states.
+// ---------------------------------------------------------------------------
+
+use bagholder_wealthsimple::generated::{Generated, Shape, Size, SHAPES};
+
+/// Eight accounts: five investment accounts, crypto, spending and a card.
+const SHAPED: Size = Size { accounts: 8, instruments: 16, trades: 60, months: 12, seed: 13, deep: 0 };
+
+fn shaped_today() -> jiff::civil::Date {
+    "2026-10-08".parse().unwrap()
+}
+
+/// A book pulled once from a made-up Wealthsimple with these shapes.
+fn shaped(shapes: &[Shape]) -> (tempfile::TempDir, Book, Wealthsimple<Generated>, Report) {
+    let home = tempfile::tempdir().unwrap();
+    let now = at("2026-10-08T20:00:00Z");
+    let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
+    let mut ws = Wealthsimple::new(Generated::shaped(SHAPED, shaped_today(), shapes));
+    let report = pull(&book, &mut ws, connection(&book, "2026-10-08T20:00:00Z"), shaped_today(), now, &mut |_| {}).unwrap();
+    (home, book, ws, report)
+}
+
+fn book_account(book: &Book, key: &str) -> bagholder_core::AccountId {
+    book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), key)).unwrap().unwrap_or_else(|| panic!("no account for {key}"))
+}
+
+/// A book account's cash per currency, from its transactions.
+fn book_cash(book: &Book, account: bagholder_core::AccountId) -> std::collections::BTreeMap<String, Dec> {
+    let mut out: std::collections::BTreeMap<String, Dec> = std::collections::BTreeMap::new();
+    for c in book.transactions().unwrap().into_iter().filter(|t| t.account == account).filter_map(|t| t.cash) {
+        let e = out.entry(c.currency.to_string()).or_insert(Dec::ZERO);
+        *e = e.checked_add(c.amount).unwrap();
+    }
+    out.retain(|_, v| !v.is_zero());
+    out
+}
+
+/// A book account's units per symbol (a contract by its terms), from its transactions.
+fn book_units(book: &Book, account: bagholder_core::AccountId) -> std::collections::BTreeMap<String, Dec> {
+    let mut out: std::collections::BTreeMap<String, Dec> = std::collections::BTreeMap::new();
+    for t in book.transactions().unwrap().into_iter().filter(|t| t.account == account) {
+        let (Some(i), Some(q)) = (t.instrument, t.quantity) else { continue };
+        let symbol = book.current_symbol(i).unwrap().unwrap_or_default();
+        let key = match book.option_terms(i).unwrap() {
+            Some(o) => format!("{} {} {} {}", book.current_symbol(o.underlying).unwrap().unwrap_or_default(), o.expiry, o.strike.to_text(), if format!("{:?}", o.right).contains("Put") { "P" } else { "C" }),
+            None => symbol,
+        };
+        let e = out.entry(key).or_insert(Dec::ZERO);
+        *e = e.checked_add(q).unwrap();
+    }
+    out.retain(|_, v| !v.is_zero());
+    out
+}
+
+/// Every account's cash in the book is what the made-up broker states, the
+/// accounts it links as one added up.
+fn cash_agrees(book: &Book, g: &Generated) {
+    let mut stated: std::collections::BTreeMap<bagholder_core::AccountId, std::collections::BTreeMap<String, Dec>> = std::collections::BTreeMap::new();
+    for key in g.account_ids() {
+        let e = stated.entry(book_account(book, &key)).or_default();
+        for (c, v) in g.cash_of(&key) {
+            let x = e.entry(c).or_insert(Dec::ZERO);
+            *x = x.checked_add(v).unwrap();
+        }
+    }
+    for (account, mut want) in stated {
+        want.retain(|_, v| !v.is_zero());
+        assert_eq!(book_cash(book, account), want, "account {account}");
+    }
+}
+
+#[test]
+fn a_move_listed_by_its_arrival_alone_is_booked_leaving_once() {
+    let (_h, book, ws, report) = shaped(&[Shape::ArrivalOnly]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let count = |sub: &str| ws.source.rows().iter().filter(|r| Node::root(r).text("type").ok() == Some("INTERNAL_TRANSFER") && Node::root(r).text("subType").ok() == Some(sub)).count();
+    assert!(count("DESTINATION") > count("SOURCE"), "some moves listed by their arrival alone: {} arrivals, {} leaving", count("DESTINATION"), count("SOURCE"));
+    // each leaving leg booked once: twice, or none, and the cash would not agree
+    cash_agrees(&book, &ws.source);
+}
+
+#[test]
+fn an_account_under_two_ids_wealthsimple_links_is_one_account_open_while_either_is() {
+    let (_h, book, ws, report) = shaped(&[Shape::LinkedIds]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let retired = ws.source.retired();
+    let [(old, new)] = &retired[..] else { panic!("one id retired") };
+    let account = book_account(&book, old);
+    assert_eq!(book_account(&book, new), account, "one book account for both ids");
+    assert_eq!(book.account(account).unwrap().status, AccountStatus::Open);
+    cash_agrees(&book, &ws.source);
+    assert_eq!(book_units(&book, account), ws.source.units_of(new));
+}
+
+#[test]
+fn a_closed_account_with_history_is_read_whole_once_and_holds_nothing() {
+    let (_h, book, mut ws, report) = shaped(&[Shape::Closed]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let retired = ws.source.retired();
+    let [(closed, _)] = &retired[..] else { panic!("one account closed") };
+    let closed = closed.clone();
+    let account = book_account(&book, &closed);
+    assert_eq!(book.account(account).unwrap().status, AccountStatus::Closed);
+    assert!(book_cash(&book, account).is_empty() && book_units(&book, account).is_empty());
+    assert!(ws.source.asked_activity.iter().any(|(a, from)| *a == closed && from.is_none()), "read whole");
+    cash_agrees(&book, &ws.source);
+    // the next pull reads it no more
+    ws.source.asked_activity.clear();
+    let report = pull(&book, &mut ws, connection(&book, "2026-10-08T21:00:00Z"), shaped_today(), at("2026-10-08T21:00:00Z"), &mut |_| {}).unwrap();
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert!(!ws.source.asked_activity.iter().any(|(a, _)| *a == closed), "{:?}", ws.source.asked_activity);
+}
+
+#[test]
+fn a_row_listed_in_a_closed_account_after_its_one_full_read_is_booked_once() {
+    let (_h, book, mut ws, report) = shaped(&[Shape::Closed, Shape::LateRow]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let retired = ws.source.retired();
+    let [(closed, to)] = &retired[..] else { panic!("one account closed") };
+    let (closed, to) = (closed.clone(), to.clone());
+    let kept = book_cash(&book, book_account(&book, &closed));
+    assert!(!kept.is_empty(), "a little cash kept in it until the late row");
+    ws.source.publish_late();
+    ws.source.asked_activity.clear();
+    let report = pull(&book, &mut ws, connection(&book, "2026-10-08T21:00:00Z"), shaped_today(), at("2026-10-08T21:00:00Z"), &mut |_| {}).unwrap();
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert!(!ws.source.asked_activity.iter().any(|(a, from)| *a == closed && from.is_none()), "not read whole again: {:?}", ws.source.asked_activity);
+    assert!(ws.source.asked_activity.iter().any(|(a, _)| *a == to));
+    assert!(book_cash(&book, book_account(&book, &closed)).is_empty(), "moved out once");
+    cash_agrees(&book, &ws.source);
+}
+
+#[test]
+fn a_conversion_whose_detail_states_the_side_received_is_settled_from_the_statements() {
+    let (_h, book, ws, report) = shaped(&[Shape::FundingIntent, Shape::Statements]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(report.statements.unreconciled, vec![], "{:?}", report.statements);
+    let intents = ws.source.funding_intents();
+    assert!(!intents.is_empty(), "some conversions are funding intents");
+    let this_month = shaped_today().first_of_month();
+    let txs = book.transactions().unwrap();
+    let mut settled = 0;
+    for key in &intents {
+        let r = book.record_by_key(Some(connection(&book, "2026-10-08T20:00:00Z")), &SourceName::named("wealthsimple"), key).unwrap().unwrap();
+        let received = book.transactions_of(r).unwrap();
+        let [t] = &received[..] else { panic!("the side received alone: {received:?}") };
+        if t.trade_date >= this_month {
+            continue;
+        }
+        // the side paid, booked from the statement on its account and day
+        let paid = txs.iter().filter(|p| p.account == t.account && p.trade_date == t.trade_date && p.kind == Kind::CurrencyConversion && p.cash.is_some_and(|c| c.amount.is_negative() && c.currency == Currency::CAD) && p.mapping.source == SourceName::named("wealthsimple-statement")).count();
+        assert_eq!(paid, 1, "{key} on {}", t.trade_date);
+        settled += 1;
+    }
+    assert!(settled > 0, "a funding intent before this month");
+}
+
+#[test]
+fn every_statement_closes_where_the_book_does() {
+    let (_h, book, mut ws, report) = shaped(&[Shape::Statements]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    use bagholder_wealthsimple::adapter::Source;
+    let mut months = 0;
+    for key in ws.source.account_ids() {
+        let account = book_account(&book, &key);
+        let mut m: jiff::civil::Date = "2026-01-01".parse().unwrap();
+        while m < shaped_today().first_of_month() {
+            if let Some(s) = ws.source.statement(&key, m, bagholder_wealthsimple::statement::BROKERAGE).unwrap() {
+                let rows = bagholder_wealthsimple::statement::rows(&s, Currency::CAD).unwrap();
+                for c in [Currency::CAD, Currency::USD] {
+                    let Some(last) = rows.iter().filter(|r| r.currency == c).last() else { continue };
+                    let end = m.last_of_month();
+                    let book_side = book.transactions().unwrap().into_iter().filter(|t| t.account == account && t.trade_date <= end).filter_map(|t| t.cash).filter(|x| x.currency == c).fold(Dec::ZERO, |a, x| a.checked_add(x.amount).unwrap());
+                    assert_eq!(last.balance, book_side, "{key} {m} {c}");
+                }
+                months += 1;
+            }
+            m = m.checked_add(jiff::Span::new().months(1)).unwrap();
+        }
+    }
+    assert!(months > 10, "{months} statements read");
+}
+
+/// Every shape at once, as a real book has them: the pull fails nothing, every
+/// account's cash and units agree with the broker, and the statements say nothing.
+#[test]
+fn a_book_of_every_shape_is_pulled_whole_and_agrees_with_the_broker() {
+    let (_h, book, ws, report) = shaped(&SHAPES);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert_eq!(report.statements.unreconciled, vec![], "{:?}", report.statements);
+    for key in ws.source.account_ids() {
+        if ws.source.retired().iter().any(|(old, _)| *old == key) {
+            continue;
+        }
+        let account = book_account(&book, &key);
+        let mut want = ws.source.units_of(&key);
+        for (old, new) in ws.source.retired() {
+            if new == key && book_account(&book, &old) == account {
+                want.extend(ws.source.units_of(&old));
+            }
+        }
+        assert_eq!(book_units(&book, account), want, "{key}");
+    }
+}
