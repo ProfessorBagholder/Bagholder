@@ -1206,11 +1206,14 @@ fn a_book_of_every_shape_read_whole_again_is_the_same_book() {
         let today: jiff::civil::Date = today.parse().unwrap();
         let (_h, book, mut ws, report) = shaped_by(Size { seed, ..SHAPED }, today, &SHAPES);
         assert!(report.failures.is_empty(), "seed {seed}: {:?}", report.failures);
+        assert!(report.suspect.is_empty(), "seed {seed}: {:?}", report.suspect);
         let before = held(&book);
         book.conn_for_tests().execute("DELETE FROM activity_reads", []).unwrap();
         let now = today.to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(jiff::SignedDuration::from_hours(21)).unwrap();
         let report = pull(&book, &mut ws, connection(&book, &now.to_string()), today, now, &mut |_| {}).unwrap();
         assert!(report.failures.is_empty(), "seed {seed}: {:?}", report.failures);
+        // nothing read is held suspect: a guard keeping rows in the book would hide their loss
+        assert!(report.suspect.is_empty(), "seed {seed}: {:?}", report.suspect);
         assert!(ws.source.asked_activity.iter().filter(|(_, from)| from.is_none()).count() >= ws.source.account_ids().len() * 2, "seed {seed}: every account read whole twice");
         assert_eq!(held(&book), before, "seed {seed}");
         cash_agrees(&book, &ws.source);
@@ -1297,6 +1300,7 @@ fn a_book_of_every_shape_carried_from_version_36_is_the_same_book_after_its_next
     // links with its history): the next pull states them, and makes it one
     let report = pull(&book, &mut ws, connection(&book, "2026-10-08T22:00:00Z"), shaped_today(), at("2026-10-08T22:00:00Z"), &mut |_| {}).unwrap();
     assert!(report.failures.is_empty(), "{:?}", report.failures);
+    assert!(report.suspect.is_empty(), "{:?}", report.suspect);
     assert_eq!(report.accounts_merged, 1, "{report:?}");
     assert_eq!(held(&book), before);
 }
