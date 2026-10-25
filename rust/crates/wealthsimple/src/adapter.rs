@@ -624,6 +624,10 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         let nodes = self.source.positions(account, day)?;
         crate::read::units(&nodes).map_err(mismatch)
     }
+    fn cash_on(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Option<BTreeMap<Currency, Dec>>> {
+        let nodes = self.source.positions(account, day)?;
+        crate::read::cash_held(&nodes).map(Some).map_err(mismatch)
+    }
     fn instruments(&mut self, refs: &[Reference], day: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)> {
         // their securities' records a batch at a time, then options' underlyings
         self.failed = None;

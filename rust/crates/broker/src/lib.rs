@@ -271,6 +271,12 @@ pub trait BrokerAdapter {
         Ok(None)
     }
     fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>>;
+    /// An account's cash per currency at the end of a day, as its positions on
+    /// that day state it: none from a broker that states none.
+    fn cash_on(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Option<BTreeMap<Currency, Dec>>> {
+        let _ = (account, day);
+        Ok(None)
+    }
     /// The person's accounts held outside the broker that the broker's own net
     /// worth feature states (`docs/plans/debts-held-outside-wealthsimple.md`):
     /// none from a broker that states none.

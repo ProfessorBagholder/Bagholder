@@ -146,6 +146,20 @@ pub fn units(nodes: &Value) -> Read<Vec<Units>> {
     Ok(out)
 }
 
+/// The cash an account's positions on a day state, per currency: each currency's
+/// own position (`sec-c-cad`), by the currency its id names.
+pub fn cash_held(nodes: &Value) -> Read<BTreeMap<Currency, Dec>> {
+    let mut out = BTreeMap::new();
+    for n in Node::root(nodes).as_list()? {
+        let s = n.obj("security")?;
+        let id = s.text("id")?;
+        let Some(code) = id.strip_prefix("sec-c-") else { continue };
+        let currency = Currency::parse(&code.to_uppercase()).map_err(|e| s.field("id").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
+        out.insert(currency, n.dec_text("quantity")?);
+    }
+    Ok(out)
+}
+
 /// An account's value and net deposits per day (`historicalDaily`'s nodes).
 pub fn history(nodes: &[Value]) -> Read<Vec<DayValue>> {
     let mut out = Vec::new();
