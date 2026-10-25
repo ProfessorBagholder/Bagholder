@@ -98,8 +98,13 @@ impl Mapping for WealthsimpleMapping {
     ///    from another of the person's accounts whose feed records nothing
     ///    leaving books it leaving there too, from the arrival's own statement
     ///    of where it came from (owner, 2026-10-23).
+    /// 16: a leaving row in that account's feed records the move only where it
+    ///    is of its kind and its group (else moves what arrived): another move
+    ///    between the two accounts that day is not this one (brief 76's shapes,
+    ///    an account retired with its USD moved on both sides and its CAD by
+    ///    its arrival).
     fn version(&self) -> u32 {
-        15
+        16
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -1017,9 +1022,13 @@ fn transfer(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<(),
 /// cash or units. Only where the record holds that account's feed over the
 /// move's days (`opposing`: it is the person's, and read), and nothing records
 /// it leaving: no row of the move's group in it, no move of its feed leaving
-/// it for this account (or for none named) that is done or under way, and no
-/// transaction of the book's moving out the same cash or units there on those
-/// days, other than an import's (which the pull replaces with this leg).
+/// it for this account (or for none named) that is done or under way and is
+/// this move (of its kind and of its group, `externalCanonicalId`; where either
+/// row states no group, stating the amount and currency the arrival states, or
+/// either stating none: another move between the two accounts that day is not
+/// this one), and no transaction of the book's moving out the same cash or units
+/// there on those days, other than an import's (which the pull replaces with
+/// this leg).
 fn leaving(root: &Node, row: &Row, out: &mut Mapped) -> Result<(), Failed> {
     if !matches!(row.sub, Some("DESTINATION" | "TRANSFER_IN")) {
         return Ok(());
@@ -1035,13 +1044,26 @@ fn leaving(root: &Node, row: &Row, out: &mut Mapped) -> Result<(), Failed> {
             return Ok(());
         }
     }
-    // the other account's feed records it leaving
+    // the other account's feed records it leaving: a row of its kind and its
+    // group (a withdrawal's leaving row states the gross, its arrival the net
+    // of the tax withheld); without a group, one moving what arrived
+    let group = row.node.opt_text("externalCanonicalId")?;
     for r in feed.list("rows")? {
         let status = r.text("unifiedStatus")?;
         let stands = status == "COMPLETED" || crate::adapter::settled(status) == Some(false);
         let out_of_it = matches!(r.opt_text("subType")?, Some("SOURCE" | "TRANSFER_OUT"));
         let to_here = r.opt_text("opposingAccountId")?.is_none_or(|o| o == row.account);
-        if r.text("accountId")? == other && stands && out_of_it && to_here {
+        let amount = r.opt_dec_text("amount")?;
+        let currency = r.opt_text("currency")?.map(Currency::parse).transpose().map_err(|e| Problem::new("unreadable", e.to_string()))?;
+        let this_move = r.text("type")? == row.ty
+            && match (r.opt_text("externalCanonicalId")?, group) {
+                (Some(a), Some(b)) => a == b,
+                _ => match (amount, row.amount) {
+                    (Some(a), Some(b)) => a.abs() == b.abs() && currency == row.currency,
+                    _ => true,
+                },
+            };
+        if r.text("accountId")? == other && stands && out_of_it && to_here && this_move {
             return Ok(());
         }
     }
