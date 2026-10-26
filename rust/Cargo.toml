@@ -18,6 +18,12 @@ let_underscore_must_use = "deny"
 unused_result_ok = "deny"
 disallowed_methods = "deny"
 
+# the dependencies optimized in a build for tests (sqlite's bundled C among them): the
+# suites spend most of their time in them, and the workspace's own crates stay quick to
+# compile (brief 77, §8)
+[profile.dev.package."*"]
+opt-level = 2
+
 [profile.release]
 # the toolchain's objcopy is not installed with the minimal profile
 strip = false
