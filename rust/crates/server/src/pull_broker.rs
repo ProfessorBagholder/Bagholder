@@ -71,14 +71,15 @@ fn run(home: &std::path::Path, capture: Option<&std::path::Path>, now: Timestamp
 /// The statements walk of a pull, alone, on the book's kept statements: a capture
 /// with no reply in it answers every read, so a month the book keeps none of is a
 /// failure, never a read. The broker's accounts behind each of the book's are its
-/// own references to them. It counts what it did and names nothing.
+/// own references to them, each in the one currency the broker last stated the
+/// account's cash in (an account in several states each list's own). It counts
+/// what it did, and each failure by its words with the accounts' ids left out.
 fn walk(home: &std::path::Path, now: Timestamp) -> Result<String, String> {
     crate::app::hold_home(home)?;
     let empty = std::env::temp_dir().join(format!("bagholder-no-replies-{}", std::process::id()));
     std::fs::create_dir_all(&empty).map_err(|e| e.to_string())?;
     let replay = Replay::read(&empty).map_err(|e| e.to_string());
     let _ = std::fs::remove_dir(&empty);
-    let mut adapter = Wealthsimple::new(replay?);
     let (book, _) = Book::open_in(home, crate::app::APP_VERSION, now).map_err(|e| e.to_string())?;
     let wealthsimple = Broker::named("wealthsimple");
     let Some(connection) = book.connections().map_err(|e| e.to_string())?.into_iter().find(|c| c.broker == wealthsimple).map(|c| c.id) else {
@@ -86,25 +87,31 @@ fn walk(home: &std::path::Path, now: Timestamp) -> Result<String, String> {
     };
     let mut keys_of = std::collections::BTreeMap::new();
     let mut closed = std::collections::BTreeSet::new();
+    let mut currencies = std::collections::BTreeMap::new();
     for a in book.accounts().map_err(|e| e.to_string())?.into_iter().filter(|a| a.connection == connection) {
         let keys: Vec<String> = book.account_refs(a.id).map_err(|e| e.to_string())?.into_iter().filter(|r| r.broker == wealthsimple).map(|r| r.value).collect();
         if a.status == bagholder_core::account::AccountStatus::Closed {
             closed.extend(keys.iter().cloned());
         }
+        let stated: Vec<bagholder_core::Currency> = book.stated_latest(a.id).map_err(|e| e.to_string())?.cash.map(|(_, c)| c.into_keys().collect()).unwrap_or_default();
+        let currency = if let [one] = stated.as_slice() { *one } else { bagholder_core::Currency::CAD };
+        currencies.extend(keys.iter().map(|k| (k.clone(), currency)));
         keys_of.insert(a.id, keys);
     }
+    let mut adapter = Wealthsimple::new(replay?).with_currencies(currencies);
     let mut failures = Vec::new();
     let today = adapter.day(now);
     let d = bagholder_broker::statements::run(&book, &mut adapter, connection, &keys_of, &closed, today, now, &mut |_| {}, &mut failures).map_err(|e| e.to_string())?;
-    Ok(format!(
-        "statements walked: withdrawn {}, booked {}, joined {}, unreconciled {}, feed only {}, months not kept and so not read {}\n",
-        d.withdrawn,
-        d.booked,
-        d.joined,
-        d.unreconciled.len(),
-        d.feed_only.len(),
-        failures.len()
-    ))
+    let mut out = format!("statements walked: withdrawn {}, booked {}, joined {}, unreconciled {}, feed only {}, failures {}\n", d.withdrawn, d.booked, d.joined, d.unreconciled.len(), d.feed_only.len(), failures.len());
+    let mut said: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
+    for (_, f) in &failures {
+        let words = keys_of.values().flatten().fold(f.to_string(), |w, k| w.replace(k.as_str(), "<account>"));
+        *said.entry(words).or_default() += 1;
+    }
+    for (words, n) in said {
+        out.push_str(&format!("  {n} × {words}\n"));
+    }
+    Ok(out)
 }
 
 fn pull_with<S: Source>(home: &std::path::Path, adapter: &mut Wealthsimple<S>, now: Timestamp) -> Result<String, String> {
@@ -166,6 +173,6 @@ mod tests {
             book.add_account(conn, &[AccountRef::new(ws, "acct-1")], &bagholder_wealthsimple::account_types::account_type("CASH"), AccountStatus::Open, None, now).unwrap();
         }
         let out = walk(home.path(), now).unwrap();
-        assert_eq!(out, "statements walked: withdrawn 0, booked 0, joined 0, unreconciled 0, feed only 0, months not kept and so not read 0\n");
+        assert_eq!(out, "statements walked: withdrawn 0, booked 0, joined 0, unreconciled 0, feed only 0, failures 0\n");
     }
 }
