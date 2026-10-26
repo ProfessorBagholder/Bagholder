@@ -131,6 +131,9 @@ pub struct Paid {
 /// month's rows.
 type Place = (String, jiff::civil::Date, usize);
 
+/// The statements kept, per broker account and month: none where the broker has not issued one.
+type Kept = BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>;
+
 fn month_of(d: jiff::civil::Date) -> jiff::civil::Date {
     d.first_of_month()
 }
@@ -164,11 +167,14 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         if differing.is_empty() {
             continue;
         }
+        // the months kept, and those read now, per broker account: a month
+        // the broker answered it has not issued is kept as none
+        let mut kept = kept_of(book, adapter, connection, keys, failures)?;
         // each fill the statements kept state otherwise than the feed, or the feed
         // does not list, taken as the statements state it before the walk reads on:
         // a fill is matched by what it is, never left for the walk as a row of cash
         let refilled;
-        let (txs, differing) = if fills_of(book, adapter, connection, *account, keys, &txs, now, failures)? > 0 {
+        let (txs, differing) = if fills_of(book, adapter, connection, *account, &kept, &txs, now)? > 0 {
             refilled = book.transactions()?;
             let d = self::differing(book, &refilled, *account, account_closed)?;
             if d.is_empty() {
@@ -185,26 +191,6 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         if first > newest {
             read_to.push((*account, keys, None));
             continue;
-        }
-        // the months kept, and those read now, per broker account: a month
-        // the broker answered it has not issued is kept as none
-        let mut kept: BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>> = BTreeMap::new();
-        for k in keys {
-            let mut months = BTreeMap::new();
-            for (m, payload) in book.monthly_statements(connection, k)? {
-                let v = bagholder_core::json::parse(&payload).map_err(|e| bagholder_book::BookError::Refused(format!("a kept statement of {k} for {m} is not JSON: {e}")))?;
-                if matches!(v, bagholder_core::json::Value::Null) {
-                    months.insert(m, None);
-                    continue;
-                }
-                match adapter.statement_rows(k, &v) {
-                    Ok(rows) => {
-                        months.insert(m, Some(rows));
-                    }
-                    Err(f) => failures.push((format!("statement:{k}:{m}"), f)),
-                }
-            }
-            kept.insert(k.clone(), months);
         }
         // a row an earlier walk booked and then withdrew, which the feed does not
         // hold now, is booked again before this walk reads on
@@ -333,7 +319,7 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         // feed, or the feed does not list, is taken as they state it before the
         // walk books anything
         let refilled_read;
-        if fills_of(book, adapter, connection, *account, keys, txs, now, failures)? > 0 {
+        if fills_of(book, adapter, connection, *account, &kept, txs, now)? > 0 {
             refilled_read = book.transactions()?;
             own = refilled_read.iter().filter(|t| t.account == *account).collect();
             if self::differing(book, &refilled_read, *account, account_closed)?.is_empty() {
@@ -459,7 +445,7 @@ fn restore_withdrawn(
     adapter: &dyn BrokerAdapter,
     connection: ConnectionId,
     keys: &[String],
-    kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>,
+    kept: &Kept,
     closed: &BTreeSet<String>,
     own: &[&Transaction],
     source: &SourceName,
@@ -658,12 +644,37 @@ fn names_it(book: &Book, named: &Named, i: bagholder_core::InstrumentId) -> Resu
     })
 }
 
+/// The statements kept of each of an account's broker accounts, by month, read
+/// from the book: a month the broker answered it has not issued is kept as none.
+fn kept_of(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys: &[String], failures: &mut Vec<(String, Failure)>) -> Result<Kept> {
+    let mut kept = Kept::new();
+    for k in keys {
+        let mut months = BTreeMap::new();
+        for (m, payload) in book.monthly_statements(connection, k)? {
+            let v = bagholder_core::json::parse(&payload).map_err(|e| bagholder_book::BookError::Refused(format!("a kept statement of {k} for {m} is not JSON: {e}")))?;
+            if matches!(v, bagholder_core::json::Value::Null) {
+                months.insert(m, None);
+                continue;
+            }
+            match adapter.statement_rows(k, &v) {
+                Ok(rows) => {
+                    months.insert(m, Some(rows));
+                }
+                Err(f) => failures.push((format!("statement:{k}:{m}"), f)),
+            }
+        }
+        kept.insert(k.clone(), months);
+    }
+    Ok(kept)
+}
+
 /// The fills of each account behind the book's, against its kept statements.
 pub fn fills(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys_of: &BTreeMap<AccountId, Vec<String>>, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<usize> {
     let txs = book.transactions()?;
     let mut n = 0;
     for (account, keys) in keys_of {
-        n += fills_of(book, adapter, connection, *account, keys, &txs, now, failures)?;
+        let kept = kept_of(book, adapter, connection, keys, failures)?;
+        n += fills_of(book, adapter, connection, *account, &kept, &txs, now)?;
     }
     Ok(n)
 }
@@ -681,32 +692,20 @@ pub fn fills(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connectio
 /// - a statement fill the feed lists nothing of (no fill of what it names, on
 ///   that side, near its day) is booked from the statement, under the security
 ///   the account holds by that name, else the one its positions hold that day.
-#[allow(clippy::too_many_arguments)]
-fn fills_of(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, account: AccountId, keys: &[String], txs: &[Transaction], now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<usize> {
+fn fills_of(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, account: AccountId, kept: &Kept, txs: &[Transaction], now: jiff::Timestamp) -> Result<usize> {
     let Some(mapping) = adapter.statement_mapping().map(|m| m.source()) else { return Ok(0) };
     // the feed's fills, and those already taken from a statement, which keep their
     // rows so a row is never paired again with a neighbouring fill
     let feed: Vec<&Transaction> = txs.iter().filter(|t| t.account == account && matches!(t.kind, Kind::Buy | Kind::Sell) && t.quantity.is_some() && t.cash.is_some() && t.instrument.is_some() && source_of(t) != crate::csv::source()).collect();
     let mut rows: Vec<(Place, StatementRow, Named, Dec)> = vec![];
-    for k in keys {
-        for (m, payload) in book.monthly_statements(connection, k)? {
-            let v = bagholder_core::json::parse(&payload).map_err(|e| bagholder_book::BookError::Refused(format!("a kept statement of {k} for {m} is not JSON: {e}")))?;
-            if matches!(v, bagholder_core::json::Value::Null) {
-                continue;
-            }
-            let list = match adapter.statement_rows(k, &v) {
-                Ok(l) => l,
-                Err(f) => {
-                    failures.push((format!("statement:{k}:{m}"), f));
-                    continue;
-                }
-            };
-            for (i, r) in list.into_iter().enumerate() {
+    for (k, months) in kept {
+        for (m, list) in months {
+            for (i, r) in list.iter().flatten().enumerate() {
                 if !matches!(crate::codes::kind(&r.code), Some(Kind::Buy | Kind::Sell)) || r.cash.is_zero() {
                     continue;
                 }
                 if let Some((named, q)) = named_of(&r.description) {
-                    rows.push(((k.clone(), m, i), r, named, q));
+                    rows.push(((k.clone(), *m, i), r.clone(), named, q));
                 }
             }
         }
@@ -1057,7 +1056,7 @@ impl Reconciled {
 /// Match one currency's statement rows over `months` to the account's book
 /// transactions and work out each month's closing on both sides.
 #[allow(clippy::too_many_arguments)]
-fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>, closed: &BTreeSet<String>, own: &[&Transaction], booked_source: &SourceName) -> Reconciled {
+fn reconcile(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &Kept, closed: &BTreeSet<String>, own: &[&Transaction], booked_source: &SourceName) -> Reconciled {
     // the rows in this currency, each by its place
     let mut rows: Vec<(Place, &StatementRow)> = vec![];
     for k in keys {
@@ -1273,7 +1272,7 @@ fn source_of(t: &Transaction) -> SourceName {
 /// with no row in any month read holds nothing where the broker states it
 /// closed; an open one's balance is not stated by them, and leaves the sum
 /// unstated (its cash now may have moved in since).
-fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>, closed: &BTreeSet<String>) -> BTreeMap<jiff::civil::Date, Option<Dec>> {
+fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &Kept, closed: &BTreeSet<String>) -> BTreeMap<jiff::civil::Date, Option<Dec>> {
     let mut sums: BTreeMap<jiff::civil::Date, Option<Dec>> = months.iter().map(|m| (*m, Some(Dec::ZERO))).collect();
     for k in keys {
         let known = ends(currency, months, k, kept);
@@ -1296,7 +1295,7 @@ fn closings(currency: Currency, months: &[jiff::civil::Date], keys: &[String], k
 /// book's added up: each one's first month from `m` to `top` with rows in it
 /// opens where it stood at `m`'s opening (nothing moved it in between); one
 /// with no rows in it from `m` held none. None where an opening is not stated.
-fn opening(currency: Currency, m: jiff::civil::Date, top: jiff::civil::Date, keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>) -> Option<Dec> {
+fn opening(currency: Currency, m: jiff::civil::Date, top: jiff::civil::Date, keys: &[String], kept: &Kept) -> Option<Dec> {
     let months = months_between(m, top);
     let mut sum = Dec::ZERO;
     for k in keys {
@@ -1308,7 +1307,7 @@ fn opening(currency: Currency, m: jiff::civil::Date, top: jiff::civil::Date, key
     Some(sum)
 }
 
-fn ends(currency: Currency, months: &[jiff::civil::Date], k: &str, kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>) -> BTreeMap<jiff::civil::Date, (Option<Dec>, Option<Dec>)> {
+fn ends(currency: Currency, months: &[jiff::civil::Date], k: &str, kept: &Kept) -> BTreeMap<jiff::civil::Date, (Option<Dec>, Option<Dec>)> {
     months
         .iter()
         .filter_map(|m| {
@@ -1323,7 +1322,7 @@ fn ends(currency: Currency, months: &[jiff::civil::Date], k: &str, kept: &BTreeM
 
 /// Each month whose statement opens off where the one before with rows in
 /// `currency` closed, per broker account, by the month that opens.
-fn gaps(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>) -> BTreeMap<jiff::civil::Date, Vec<Gap>> {
+fn gaps(currency: Currency, months: &[jiff::civil::Date], keys: &[String], kept: &Kept) -> BTreeMap<jiff::civil::Date, Vec<Gap>> {
     let mut out: BTreeMap<jiff::civil::Date, Vec<Gap>> = BTreeMap::new();
     for k in keys {
         let known: Vec<(jiff::civil::Date, (Option<Dec>, Option<Dec>))> = ends(currency, months, k, kept).into_iter().collect();
