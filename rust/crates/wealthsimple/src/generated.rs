@@ -507,8 +507,10 @@ fn units_text(units: i64, scale: u32) -> String {
 }
 
 fn at(day: jiff::civil::Date, n: u32) -> String {
-    // 15:00 UTC is the same day in Toronto all year; `n` keeps a day's rows in order
-    format!("{day}T15:{:02}:{:02}.000000+00:00", (n / 60) % 60, n % 60)
+    // a second a row from 15:00 UTC, so `n` keeps a day's rows in order; never
+    // past 23:59:59 UTC, which is the same day in Toronto all year
+    let s = n.min(9 * 3600 - 1);
+    format!("{day}T{:02}:{:02}:{:02}.000000+00:00", 15 + s / 3600, (s / 60) % 60, s % 60)
 }
 
 impl Generated {
@@ -788,8 +790,10 @@ impl Generated {
     }
 
     fn run(&mut self, r: &mut Rng, plans: BTreeMap<jiff::civil::Date, Vec<Plan>>) {
-        let mut n: u32 = 0;
         for (day, list) in plans {
+            // counted from each day's first row: a count over the whole book ran past
+            // the hour and timed a day's sale before its buy (#618)
+            let mut n: u32 = 0;
             for p in list {
                 n += 1;
                 let p = self.redirected(p, day);

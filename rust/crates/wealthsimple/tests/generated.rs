@@ -25,6 +25,22 @@ fn the_same_seed_makes_the_same_replies() {
     assert_ne!(canon(&Generated::new(SIZE, today())), canon(&other));
 }
 
+/// A day's rows are timed in the order they are made, in a book of more rows
+/// than an hour has seconds: timed by a count over the whole book, the day the
+/// count passed the hour timed a sale before the buy it sold, and that holding
+/// was never flat again (#618).
+#[test]
+fn a_days_rows_are_timed_in_the_order_they_are_made() {
+    use bagholder_sources::reply::Node;
+    let g = Generated::new(Size { accounts: 29, instruments: 157, trades: 646, months: 36, seed: 1, deep: 0 }, today());
+    // an expiry is timed at the close, whenever it is made
+    let at: Vec<&str> = g.rows().iter().map(Node::root).filter(|r| r.text("type") != Ok("OPTIONS_EXPIRY")).map(|r| r.text("occurredAt").unwrap()).collect();
+    assert!(at.len() > 3_600, "{} rows", at.len());
+    for w in at.windows(2) {
+        assert!(w[0][..10] != w[1][..10] || w[0] <= w[1], "{} is made after {}", w[1], w[0]);
+    }
+}
+
 #[test]
 fn every_row_is_read_with_no_problem_and_the_pull_fails_nothing() {
     let home = tempfile::tempdir().unwrap();

@@ -1072,21 +1072,25 @@ impl Engine {
                 self.compare(&before, &mut moved);
             }
             Change::Broker(a, b) => {
-                let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.account == a).cloned().collect();
                 let before_equity: Option<AccountEquity> = self.equity.get(&a).cloned();
                 let before_stated: Option<BrokerAccount> = self.inputs.market.brokers.get(&a).cloned();
                 match b {
                     Some(b) => self.inputs.market.brokers.insert(a, b),
                     None => self.inputs.market.brokers.remove(&a),
                 };
+                // what the broker holds is all a statement moves of a position: that is
+                // compared, never the position's lots copied to learn it (#618)
                 for p in self.positions.iter_mut().filter(|p| p.account == a) {
-                    p.broker_qty = self.inputs.market.brokers.get(&a).and_then(|b| b.held.get(&p.instrument)).copied();
+                    let now = self.inputs.market.brokers.get(&a).and_then(|b| b.held.get(&p.instrument)).copied();
+                    if p.broker_qty != now {
+                        p.broker_qty = now;
+                        moved.0.entry(position_entity(p)).or_default().insert("broker_qty");
+                    }
                 }
                 self.equity.remove(&a);
                 self.equity.extend(build_equity(&self.inputs, Some(&BTreeSet::from([a]))));
                 // only this account's check moves: the others' inputs are as they were
                 self.recheck(a, &mut moved);
-                diff(&mut moved, before_positions.iter().map(|p| (position_entity(p), p)), self.positions.iter().filter(|p| p.account == a).map(|p| (position_entity(p), p)));
                 diff(&mut moved, before_equity.iter().map(|e| (Entity::Equity(a), e)), self.equity.get(&a).map(|e| (Entity::Equity(a), e)));
                 let now_stated = self.inputs.market.brokers.get(&a);
                 diff(&mut moved, before_stated.as_ref().map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)), now_stated.map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)));
