@@ -605,6 +605,8 @@ mod tests_docs_golden;
 #[cfg(test)]
 mod tests_routes_golden;
 #[cfg(test)]
+mod tests_figures_golden;
+#[cfg(test)]
 mod tests_boundary;
 #[cfg(test)]
 mod tests_lints;

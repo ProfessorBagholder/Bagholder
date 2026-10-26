@@ -1,0 +1,86 @@
+//! The figures every reading of the broker comes to, pinned (brief 77, §3): for
+//! the made-up Wealthsimple with every shape on, at twelve seeds, each account's
+//! cash in each currency and units of each symbol, and the header's lines about
+//! the broker, as the pull and the engine make them for a person's book. A change
+//! to the pull, a mapping or the statements walk that moves a figure moves it in
+//! `tests/golden/figures.json` in the same PR, so that file's diff is every
+//! figure it moves. `BAGHOLDER_BLESS=1` writes the file; a missing file fails.
+
+use std::collections::BTreeMap;
+use std::path::PathBuf;
+
+use bagholder_book::Book;
+use bagholder_broker::pull::pull;
+use bagholder_core::Broker;
+use bagholder_wealthsimple::adapter::Wealthsimple;
+use bagholder_wealthsimple::generated::{Generated, Shape, Size, SHAPES, STATED_OTHERWISE};
+use serde_json::{json, Map, Value};
+
+/// Every shape the made-up broker has.
+fn every_shape() -> Vec<Shape> {
+    SHAPES.iter().chain(STATED_OTHERWISE.iter()).copied().collect()
+}
+
+/// One seed's book, pulled whole and opened as the app opens it: its figures.
+fn figures(seed: u64) -> Value {
+    let today: bagholder_core::jiff::civil::Date = "2026-10-25".parse().unwrap();
+    let now = today.to_zoned(bagholder_core::jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(bagholder_core::jiff::SignedDuration::from_hours(20)).unwrap();
+    let home = tempfile::tempdir().unwrap();
+    let report = {
+        let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
+        // the zone the page states, as a person's first visit keeps it
+        book.state_zone("America/Toronto", now).unwrap();
+        let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
+        let size = Size { accounts: 8, instruments: 16, trades: 60, months: 12, seed, deep: 0 };
+        let mut ws = Wealthsimple::new(Generated::shaped(size, today, &every_shape()));
+        pull(&book, &mut ws, connection, today, now, &mut |_| {}).unwrap()
+    };
+    let f = crate::figures::Figures::open(home.path(), now).unwrap();
+    f.read(|e| {
+        let inputs = e.inputs();
+        let mut accounts: BTreeMap<String, (BTreeMap<String, bagholder_core::Dec>, BTreeMap<String, bagholder_core::Dec>)> = BTreeMap::new();
+        for t in inputs.ledger.transactions.iter() {
+            let (cash, units) = accounts.entry(crate::wire::build::account_name(inputs, t.account)).or_default();
+            if let Some(c) = t.cash {
+                let e = cash.entry(c.currency.to_string()).or_insert(bagholder_core::Dec::ZERO);
+                *e = e.checked_add(c.amount).unwrap();
+            }
+            if let (Some(i), Some(q)) = (t.instrument, t.quantity) {
+                let e = units.entry(crate::status::symbol(inputs, i)).or_insert(bagholder_core::Dec::ZERO);
+                *e = e.checked_add(q).unwrap();
+            }
+        }
+        let accounts: Map<String, Value> = accounts
+            .into_iter()
+            .map(|(name, (cash, units))| {
+                let text = |m: BTreeMap<String, bagholder_core::Dec>| -> Map<String, Value> { m.into_iter().filter(|(_, v)| !v.is_zero()).map(|(k, v)| (k, json!(v.to_text()))).collect() };
+                (name, json!({"cash": text(cash), "units": text(units)}))
+            })
+            .collect();
+        let mut header = crate::status::broker_failures(e);
+        header.extend(crate::status::unreconciled(e, &report.statements.unreconciled));
+        header.extend(crate::status::feed_only(e, &report.statements.feed_only));
+        header.extend(crate::status::unread_rows(inputs));
+        json!({"accounts": accounts, "header": header})
+    })
+    .unwrap()
+}
+
+#[test]
+fn every_figure_the_broker_s_reading_comes_to_is_the_golden_one() {
+    let _g = crate::tests_common::guard();
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/golden/figures.json");
+    let got: Map<String, Value> = (1..=12u64).map(|seed| (format!("seed {seed:02}"), figures(seed))).collect();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, serde_json::to_string_pretty(&Value::Object(got)).unwrap() + "\n").unwrap();
+        return;
+    }
+    let text = std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{} is missing ({e}): write it with BAGHOLDER_BLESS=1 and review its every line", path.display()));
+    let want: Map<String, Value> = serde_json::from_str(&text).unwrap();
+    let mut seeds: Vec<&String> = got.keys().chain(want.keys()).collect();
+    seeds.sort();
+    seeds.dedup();
+    for seed in seeds {
+        assert_eq!(got.get(seed), want.get(seed), "{seed}'s figures are not the golden ones: a change that moves a figure moves it in tests/golden/figures.json");
+    }
+}
