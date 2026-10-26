@@ -187,6 +187,22 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             }
             kept.insert(k.clone(), months);
         }
+        // a row an earlier walk booked from a statement, whose own row the feed now
+        // states, is withdrawn before anything else: the movement stands once
+        let withdrawn = withdraw_stated_by_the_feed(book, adapter, connection, keys, &kept, &own, &mapping_source, now)?;
+        let unbooked;
+        let differing = if withdrawn > 0 {
+            done.withdrawn += withdrawn;
+            unbooked = book.transactions()?;
+            own = unbooked.iter().filter(|t| t.account == *account).collect();
+            let d = self::differing(book, &unbooked, *account, account_closed)?;
+            if d.is_empty() {
+                continue;
+            }
+            d
+        } else {
+            differing
+        };
         // a row an earlier walk booked and then withdrew, which the feed does not
         // hold now, is booked again before this walk reads on
         let restored = restore_withdrawn(book, adapter, connection, keys, &kept, closed, &own, &mapping_source, now)?;
@@ -739,6 +755,59 @@ fn take_back_2_10_9(book: &Book, adapter: &dyn BrokerAdapter, source: &SourceNam
         book.withdraw(id, feed, now)?;
         book.note_taken_back(id, "2.10.9", now)?;
         n += 1;
+    }
+    Ok(n)
+}
+
+/// Each row an earlier walk booked from a statement that no statement row needs
+/// any more, withdrawn: every kept row paired with the account's transactions in
+/// the span the kept months cover, by the walk's own pairing (`match_rows`, the
+/// feed's first), and a booking left unpaired stands for a movement another
+/// transaction states. Over every kept month, whether any reconciles or not. A
+/// booking a row still needs (two movements alike, the feed stating one) stays. The walk's own withdrawal (`reconcile`) runs only in a
+/// month it proves from a base, and a movement standing twice leaves no month to
+/// prove (brief 77, 7.2: a USD sub-account's conversions, booked from its
+/// statement as money moved out before the feed's records stated their side
+/// paid, stood twice for a year and a half).
+#[allow(clippy::too_many_arguments)]
+fn withdraw_stated_by_the_feed(
+    book: &Book,
+    adapter: &dyn BrokerAdapter,
+    connection: ConnectionId,
+    keys: &[String],
+    kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>,
+    own: &[&Transaction],
+    source: &SourceName,
+    now: jiff::Timestamp,
+) -> Result<usize> {
+    let currencies: BTreeSet<Currency> = keys.iter().flat_map(|k| kept[k].values().flatten().flatten().map(|r| r.currency)).collect();
+    let mut n = 0;
+    for currency in currencies {
+        let mut rows: Vec<(Place, &StatementRow)> = vec![];
+        for k in keys {
+            for (m, list) in &kept[k] {
+                for (i, r) in list.iter().flatten().enumerate().filter(|(_, r)| r.currency == currency && !r.cash.is_zero()) {
+                    rows.push(((k.clone(), *m, i), r));
+                }
+            }
+        }
+        // a transaction outside the kept months has no row of its own there to claim it
+        let months = || keys.iter().flat_map(|k| kept[k].keys().copied());
+        let (Some(first), Some(last)) = (months().min(), months().max().map(|m| m.last_of_month())) else { continue };
+        let txs: Vec<&Transaction> = own.iter().copied().filter(|t| t.cash.is_some_and(|c| c.currency == currency) && (first..=last).contains(&t.trade_date)).collect();
+        let paired: BTreeSet<usize> = match_rows(&rows, &txs, source).into_iter().map(|(_, t)| t).collect();
+        for (place, row) in &rows {
+            let Some((key, _)) = adapter.statement_record(&place.0, place.1, place.2, row) else { continue };
+            let Some(rec) = book.record_by_key(Some(connection), source, &key)? else { continue };
+            let booked: Vec<usize> = (0..txs.len()).filter(|&t| txs[t].id.record == rec).collect();
+            if booked.is_empty() || booked.iter().any(|t| paired.contains(t)) {
+                continue;
+            }
+            if book.record(rec)?.state == bagholder_core::record::RecordState::Live {
+                book.mark_removed(rec, now)?;
+                n += 1;
+            }
+        }
     }
     Ok(n)
 }

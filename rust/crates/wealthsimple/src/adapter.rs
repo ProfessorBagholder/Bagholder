@@ -102,6 +102,14 @@ impl<S: Source> Wealthsimple<S> {
         Wealthsimple { source, zones: bagholder_book::zones::Zones::default(), rows: vec![], securities: BTreeMap::new(), positions: BTreeMap::new(), moves: vec![], transfers: BTreeMap::new(), cards: BTreeMap::new(), statement_types: BTreeMap::new(), currencies: BTreeMap::new(), stated: BTreeSet::new(), read_from: BTreeMap::new(), read_again: BTreeMap::new(), given: BTreeSet::new(), failed: None }
     }
 
+    /// Each account's own currency, where no account list is read to state it:
+    /// the developer's walk of the statements a book keeps (`pull-broker
+    /// --statements-only`). A statement in lists per currency states its own.
+    pub fn with_currencies(mut self, currencies: BTreeMap<String, Currency>) -> Wealthsimple<S> {
+        self.currencies = currencies;
+        self
+    }
+
     fn day_of(&self, row: &Value) -> Option<jiff::civil::Date> {
         let at: jiff::Timestamp = Node::root(row).text("occurredAt").ok()?.parse().ok()?;
         self.zones.day(at, ZONE).ok()
