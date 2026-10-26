@@ -40,14 +40,19 @@ After 2.10.12's first sync the header should be empty. Never say "fixed" until t
 
 ### Brief 77, what is left, in order
 1. **#631 (§4, the gated rederive): merged** (730abe16), no release.
-2. **#632, head 16d7c70a, branch `statement-then-feed` (worktree `shape`).** The gate's pre-pass, `statements::restate_walk_records`, brings every record the walk makes from the book's own data to what the re-derived records leave unexplained: statement bookings no row needs are withdrawn, and side-paid records are restated offline. The principle is in `gated_rederive`'s doc.
-   - Version-split test: before the fix, refused with 414 records stale; after, the version applies and the book equals the direct pull.
-   - With the Architect for the verdict. No release.
-3. **#633 = (c), head 30ae5be8, branch `statement-fills` (worktree `fills`), stacked on #632. Version 2.10.13.**
-   - Fixes: the recorded contract form, `delivery()` for an assignment's shares, `STATED_FILL`, the take-back once per book, the stated-otherwise shapes in `SHAPES`, the golden test with `ASSIGNED`, and the developer's walk running the fills step too.
-   - Golden: header lines 23–31 per seed drop to 0, none new.
-   - The Mac gate (session `session_01TmzDktA2igdrKZvnJhPska`) is running: 2.10.12 against 30ae5be8.
-   - Next: the gate verdict, then the Architect (send the head with the verdict: identical, new or worse per line), then green, merge #632 then #633 (retargeted), then release 2.10.13.
+2. **#632: merged** (b9017f9c), no release; it ships with (c).
+3. **#633 = (c), head 30ae5be8, branch `statement-fills` (worktree `fills`), now based on master. Version 2.10.13. Do NOT merge or release.**
+   - **The gate on the owner's book FAILED** (2026-10-26 22:18).
+     - Gone: the USD 🚀 Trading line (the five duplicates withdrawn).
+     - New: CAD cash in 🚀 Trading (book well over stated), CAD cash in 📉 Ponzi (book over a stated 0), and a BTC sale in 📉 Ponzi selling more than held.
+     - The walk: fills 15, withdrawn 5.
+   - So some of the 15 statement fills are wrong for the owner's real rows, in shapes the stand-in lacks.
+   - Diagnosis running on the Mac (`session_018TzzyvtYqb12JGNVDoYvMD`, script at `scratchpad/diag/fills.py`): each STATED_FILL link (feed against statement), and the statement fills booked with no feed record. Real figures come to me only.
+   - Next:
+     - Find each wrong pairing's form and shape.
+     - Add it to the stand-in from the recorded form (brief 76/77), with a test that fails.
+     - Fix it, then re-bless and run the gate again.
+   - Tell the Architect the cause by form and shape, with no figures.
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
 ### Delegated
