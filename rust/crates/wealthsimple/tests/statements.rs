@@ -1257,6 +1257,33 @@ fn same_day_fills_of_one_amount_are_paired_by_their_nearest_units_and_another_co
 /// is proven and the walk's own withdrawal never reaches it. Before the walk, the
 /// statement's copy of a row the feed states is withdrawn: the movement stands once.
 #[test]
+fn a_movement_booked_from_a_statement_beside_one_alike_the_feed_states_stays() {
+    let mut w = World::new();
+    // April: two contributions alike on one day, the feed listing one
+    w.feed("lira-1", "2025-04-07", "deposit", "500");
+    let april = statement_in(&[("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "500.0", "500.00"), ("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "500.0", "1000.00")], &[]);
+    let months: [(&str, Option<Value>); 3] = [("2025-04-01", Some(april.clone())), ("2025-05-01", Some(statement_in(&[], &[]))), ("2025-06-01", Some(statement_in(&[], &[])))];
+    for (m, v) in months {
+        let read = w.book.broker_read(w.conn, "statement:lira-1", at(NOW)).unwrap();
+        w.book.keep_monthly_statement(w.conn, "lira-1", day(m), &v.as_ref().map_or("null".to_string(), |v| v.canonical()), &read).unwrap();
+        w.month("lira-1", m, v);
+    }
+    // the other booked from the statement by an earlier walk, as its first row
+    let row = statement::rows(&april, Currency::CAD).unwrap().remove(0);
+    let (key, payload) = (statement::key("lira-1", day("2025-04-01"), 0), statement::payload("lira-1", day("2025-04-01"), 0, &row).canonical());
+    let booked = w.book.store(&statement::StatementMapping, &Incoming { connection: Some(w.conn), source_key: &key, payload: &payload, refs: vec![] }, at(NOW)).unwrap().record;
+    let lira = w.lira;
+    // and a dollar more than the book holds, from July, which no statement covers
+    // yet: the walk reads
+    w.states_in(lira, &[("CAD", "1001")]);
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.withdrawn, w.book_cash_in(lira, "CAD")), (0, dec("1000")), "{done:?}");
+    assert_eq!(w.book.record(booked).unwrap().state, RecordState::Live);
+}
+
+#[test]
 fn a_movement_booked_from_a_statement_that_the_feed_now_states_is_withdrawn_and_stands_once() {
     let mut w = World::new();
     // the account behind two of the broker's ids: its own, and its USD sub-account's

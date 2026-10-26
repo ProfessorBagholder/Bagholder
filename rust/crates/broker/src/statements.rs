@@ -759,10 +759,12 @@ fn take_back_2_10_9(book: &Book, adapter: &dyn BrokerAdapter, source: &SourceNam
     Ok(n)
 }
 
-/// Each row an earlier walk booked from a statement whose own statement row a
-/// transaction of the feed's (or of an imported file's) now fits, by the walk's
-/// own pairing (`match_rows`), withdrawn: over every kept month, whether any
-/// reconciles or not. The walk's own withdrawal (`reconcile`) runs only in a
+/// Each row an earlier walk booked from a statement that no statement row needs
+/// any more, withdrawn: every kept row paired with the account's transactions in
+/// the span the kept months cover, by the walk's own pairing (`match_rows`, the
+/// feed's first), and a booking left unpaired stands for a movement another
+/// transaction states. Over every kept month, whether any reconciles or not. A
+/// booking a row still needs (two movements alike, the feed stating one) stays. The walk's own withdrawal (`reconcile`) runs only in a
 /// month it proves from a base, and a movement standing twice leaves no month to
 /// prove (brief 77, 7.2: a USD sub-account's conversions, booked from its
 /// statement as money moved out before the feed's records stated their side
@@ -789,11 +791,18 @@ fn withdraw_stated_by_the_feed(
                 }
             }
         }
-        let feed: Vec<&Transaction> = own.iter().copied().filter(|t| t.cash.is_some_and(|c| c.currency == currency) && source_of(t) != *source).collect();
-        for (r, _) in match_rows(&rows, &feed, source) {
-            let (place, row) = &rows[r];
+        // a transaction outside the kept months has no row of its own there to claim it
+        let months = || keys.iter().flat_map(|k| kept[k].keys().copied());
+        let (Some(first), Some(last)) = (months().min(), months().max().map(|m| m.last_of_month())) else { continue };
+        let txs: Vec<&Transaction> = own.iter().copied().filter(|t| t.cash.is_some_and(|c| c.currency == currency) && (first..=last).contains(&t.trade_date)).collect();
+        let paired: BTreeSet<usize> = match_rows(&rows, &txs, source).into_iter().map(|(_, t)| t).collect();
+        for (place, row) in &rows {
             let Some((key, _)) = adapter.statement_record(&place.0, place.1, place.2, row) else { continue };
             let Some(rec) = book.record_by_key(Some(connection), source, &key)? else { continue };
+            let booked: Vec<usize> = (0..txs.len()).filter(|&t| txs[t].id.record == rec).collect();
+            if booked.is_empty() || booked.iter().any(|t| paired.contains(t)) {
+                continue;
+            }
             if book.record(rec)?.state == bagholder_core::record::RecordState::Live {
                 book.mark_removed(rec, now)?;
                 n += 1;
