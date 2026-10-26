@@ -867,14 +867,15 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             // the broker's distribution of the holding (a buy, for a back-dated fill) in
             // the middle of its history, by day, in the account whose history is deep:
             // of the accounts with such a record, the one holding most of its rows, never
-            // another account that holds the listing too
+            // another account that holds the listing too. The activity feed's own record,
+            // stored again as the feed's: never one a statement booked in its place
             let kind = if op == Op::BackdatedFill { "buy" } else { "dividend" };
             let (record, day, account): (String, String, String) = {
                 let c = book.conn_for_tests();
                 let account: String = c
                     .query_row(
                         "SELECT t.account_id FROM transactions t WHERE t.instrument_id = ?1
-                           AND t.account_id IN (SELECT d.account_id FROM transactions d JOIN source_records r ON r.id = d.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE d.instrument_id = ?1 AND d.kind = ?2)
+                           AND t.account_id IN (SELECT d.account_id FROM transactions d JOIN source_records r ON r.id = d.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL AND r.source = 'wealthsimple' WHERE d.instrument_id = ?1 AND d.kind = ?2)
                          GROUP BY t.account_id ORDER BY count(*) DESC, t.account_id LIMIT 1",
                         [instrument.to_string(), kind.to_string()],
                         |r| r.get(0),
@@ -882,14 +883,14 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                     .map_err(err)?;
                 let n: i64 = c
                     .query_row(
-                        "SELECT count(*) FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE t.instrument_id = ?1 AND t.kind = ?2 AND t.account_id = ?3",
+                        "SELECT count(*) FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL AND r.source = 'wealthsimple' WHERE t.instrument_id = ?1 AND t.kind = ?2 AND t.account_id = ?3",
                         [instrument.to_string(), kind.to_string(), account.clone()],
                         |r| r.get(0),
                     )
                     .map_err(err)?;
                 let (record, day) = c
                     .query_row(
-                        "SELECT t.record_id, t.trade_date FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL
+                        "SELECT t.record_id, t.trade_date FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL AND r.source = 'wealthsimple'
                          WHERE t.instrument_id = ?1 AND t.kind = ?3 AND t.account_id = ?4 ORDER BY t.trade_date, t.record_id LIMIT 1 OFFSET ?2",
                         rusqlite::params![instrument.to_string(), n / 2, kind, account],
                         |r| Ok((r.get(0)?, r.get(1)?)),
@@ -1406,7 +1407,24 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert!(unlinked.iter().all(|t| t == "ASSET_MOVEMENT"), "{unlinked:?}");
-        assert_eq!(n("SELECT count(*) FROM instruments i WHERE NOT EXISTS (SELECT 1 FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id WHERE s.instrument_id = i.id AND r.source = 'wealthsimple')"), 0, "the import named an instrument the feed did not");
+        // every instrument is one the feed names, or a purchase the feed does not
+        // list, which a statement books, named as the broker describes the holding:
+        // the import names none
+        let unnamed: Vec<String> = c
+            .prepare(
+                "SELECT i.kind || ' named by ' || coalesce(group_concat(DISTINCT r.source), 'no record') FROM instruments i
+                   LEFT JOIN transactions t ON t.instrument_id = i.id LEFT JOIN source_records r ON r.id = t.record_id
+                  WHERE NOT EXISTS (SELECT 1 FROM instrument_sightings s JOIN source_records q ON q.id = s.record_id WHERE s.instrument_id = i.id AND q.source = 'wealthsimple')
+                    AND NOT (EXISTS (SELECT 1 FROM transactions x JOIN source_records q ON q.id = x.record_id WHERE x.instrument_id = i.id AND q.source = 'wealthsimple-statement')
+                         AND (EXISTS (SELECT 1 FROM instruments_described d WHERE d.instrument_id = i.id) OR EXISTS (SELECT 1 FROM option_terms o WHERE o.instrument_id = i.id)))
+                  GROUP BY i.id",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(unnamed.is_empty(), "the import named an instrument the feed did not: {unnamed:?}");
     }
 
     /// A pull reaches the figures in one write: its rows and the statements read

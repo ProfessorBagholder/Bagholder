@@ -103,8 +103,11 @@ impl Mapping for WealthsimpleMapping {
     ///    between the two accounts that day is not this one (brief 76's shapes,
     ///    an account retired with its USD moved on both sides and its CAD by
     ///    its arrival).
+    /// 17: a multi-leg order's fee is paid out of its first leg's cash, so its
+    ///    legs' cash comes to what the account paid, as a single fill's does
+    ///    (it stood beside the cash, and the book's cash was its fee high).
     fn version(&self) -> u32 {
-        16
+        17
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -567,8 +570,13 @@ fn multi_leg(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<()
             return Ok(());
         }
     }
+    // the fee is paid out of the first leg's cash, as a single fill's cash carries
+    // its fee: the legs' cash then comes to the row's amount, what the account paid
     if let (Some(f), Some(first)) = (fee, drafts.first_mut()) {
         let currency = first.cash.map(|c| c.currency).unwrap_or(Currency::USD);
+        if let Some(c) = first.cash.as_mut() {
+            c.amount = c.amount.checked_sub(f).map_err(|e| Problem::new("unreadable", e.to_string()))?;
+        }
         first.fee = Some(Money::new(f.abs(), currency));
     }
     out.legs.extend(drafts);
