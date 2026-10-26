@@ -34,13 +34,18 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        id: cache
         with:
           workspaces: rust
           shared-key: capacity
+      # on master, after a merge, the build alone, and only when master's cache lacks it: the
+      # pull request measured this code, and its run starts from master's compiled dependencies
       - name: The server, as released
+        if: github.event_name != 'push' || steps.cache.outputs.cache-hit != 'true'
         run: cargo build --locked --release --bin bagholder
         working-directory: rust
       - name: The cost budget
+        if: github.event_name != 'push'
         run: |
           set -o pipefail
           target/release/bagholder capacity run "$RUNNER_TEMP/capacity" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
