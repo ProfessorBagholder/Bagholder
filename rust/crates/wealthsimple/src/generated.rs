@@ -111,7 +111,7 @@ pub enum Shape {
 }
 
 /// Every shape.
-pub const SHAPES: [Shape; 6] = [Shape::ArrivalOnly, Shape::LinkedIds, Shape::Closed, Shape::LateRow, Shape::FundingIntent, Shape::Statements];
+pub const SHAPES: [Shape; 9] = [Shape::ArrivalOnly, Shape::LinkedIds, Shape::Closed, Shape::LateRow, Shape::FundingIntent, Shape::Statements, Shape::FeeFolded, Shape::FeedOmits, Shape::FxFunded];
 
 /// The fills a statement states otherwise than the feed, or alone, as 2.10.9 read
 /// them (`docs/decisions.md`, 2026-10-26): a book of them, read by 2.10.8 and then
