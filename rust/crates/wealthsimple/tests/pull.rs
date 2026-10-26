@@ -878,6 +878,15 @@ fn book_units(book: &Book, account: bagholder_core::AccountId) -> std::collectio
         };
         let e = out.entry(key).or_insert(Dec::ZERO);
         *e = e.checked_add(q).unwrap();
+        // an assignment delivers the underlying, its multiplier a contract: out
+        // of the account for a call written, into it for a put (the engine's delivery)
+        if t.kind == Kind::OptionAssignment {
+            let o = book.option_terms(i).unwrap().expect("an assignment's terms");
+            let shares = q.abs().checked_mul(o.multiplier.expect("an assigned contract's multiplier")).unwrap();
+            let delivered = if format!("{:?}", o.right).contains("Put") { shares } else { shares.neg() };
+            let e = out.entry(book.current_symbol(o.underlying).unwrap().unwrap_or_default()).or_insert(Dec::ZERO);
+            *e = e.checked_add(delivered).unwrap();
+        }
     }
     out.retain(|_, v| !v.is_zero());
     out
@@ -1166,6 +1175,30 @@ fn a_book_of_every_shape_is_pulled_whole_and_agrees_with_the_broker() {
         assert_eq!(report.statements.unreconciled, vec![], "seed {seed}: {:?}", report.statements);
         cash_agrees(&book, &ws.source);
         units_agree(&book, &ws.source);
+    }
+}
+
+/// Calls written on a US share held for them and assigned at expiry
+/// (`Shape::Assigned`), with every other shape: the pull fails nothing, the
+/// assignment is booked and adds no kind of problem to the book, and every account's
+/// cash and units, the shares delivered and the contracts closed among them,
+/// agree with the broker. Its statement months are not held to reconcile here.
+#[test]
+fn calls_written_and_assigned_are_pulled_and_the_units_agree_with_the_broker() {
+    let shapes: Vec<Shape> = SHAPES.iter().chain(bagholder_wealthsimple::generated::ASSIGNED.iter()).copied().collect();
+    let today: jiff::civil::Date = "2026-10-25".parse().unwrap();
+    for seed in [13, 1, 5] {
+        let (_h, book, ws, report) = shaped_by(Size { seed, ..SHAPED }, today, &shapes);
+        assert!(report.failures.is_empty(), "seed {seed}: {:?}", report.failures);
+        let assigned = ws.source.rows().iter().filter(|r| Node::root(r).text("type").ok() == Some("OPTIONS_ASSIGN")).count();
+        assert_eq!(assigned, 1, "seed {seed}: one assignment listed");
+        assert_eq!(book.transactions().unwrap().iter().filter(|t| t.kind == Kind::OptionAssignment).count(), 1, "seed {seed}: the assignment booked");
+        let (_h2, without, _, _) = shaped_by(Size { seed, ..SHAPED }, today, &SHAPES);
+        // the share bought for the calls may be funded by one more conversion, of a problem the book has without them
+        let kinds = |b: &Book| b.problems().unwrap().into_iter().map(|(_, p)| p.code).collect::<std::collections::BTreeSet<_>>();
+        assert!(kinds(&book).is_subset(&kinds(&without)), "seed {seed}: the assignment adds a kind of problem: {:?} beside {:?}", kinds(&book), kinds(&without));
+        units_agree(&book, &ws.source);
+        cash_agrees(&book, &ws.source);
     }
 }
 

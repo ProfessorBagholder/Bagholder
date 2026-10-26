@@ -119,6 +119,70 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" dist/bagholder-* --clobber
 
+  # The suites on macOS and Windows, run once, here, as a release's final step on the commit it is
+  # cut from: a pull request runs them on Linux alone (`tests.yml`). The release stays a
+  # prerelease, which no installed copy is offered, unless both pass. On master each compiles
+  # its suite and runs nothing, and only when master's cache lacks it, so a release's run starts
+  # from compiled dependencies (a tag reads master's caches).
+  suite-macos:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        id: cache
+        with:
+          workspaces: rust
+      - name: The suite, compiled
+        if: github.ref_type == 'branch' && github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        env:
+          CI: "true"
+        run: cargo test --workspace --locked --no-run
+        working-directory: rust
+      - name: The Rust suite
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        env:
+          CI: "true"
+        run: cargo test --workspace --locked -- --skip capacity::tests
+        working-directory: rust
+      # the test a sandboxed local run cannot hold: the notification applet, built with
+      # osacompile, which needs Apple Events (#[ignore]d with that reason)
+      - name: The notification applet, on macOS
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        env:
+          CI: "true"
+        run: cargo test --locked -p bagholder-server -- --ignored --exact notify::tests::test_the_mac_applet_is_built_once_under_bagholders_name_and_icon
+        working-directory: rust
+
+  # Windows has no system time zone database, so the model reads the copy built into
+  # jiff there: the model's tests (the zones and every shared case) run where that holds.
+  suite-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.inputs.tag || github.ref }}
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        id: cache
+        with:
+          workspaces: rust
+      - name: The model's suite, compiled
+        if: github.ref_type == 'branch' && github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        env:
+          CI: "true"
+        run: cargo test --locked -p bagholder-model --no-run
+        working-directory: rust
+      - name: The model's suite
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        env:
+          CI: "true"
+        run: cargo test --locked -p bagholder-model
+        working-directory: rust
+
   # the release's image, made from the Linux archives' own binaries
   docker:
     needs: rust
@@ -133,7 +197,7 @@ jobs:
   # platform's archive and the image are there, so no copy is ever offered a
   # release it cannot take.
   publish:
-    needs: [rust, docker]
+    needs: [rust, docker, suite-macos, suite-windows]
     if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     env:
