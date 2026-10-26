@@ -22,7 +22,7 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-26 ~21:00 UTC, written by the home-server CTO session)
+## 2. Where things stand (2026-10-26 ~23:10 UTC, written by the home-server CTO session before a compaction)
 
 ### Released, newest first (`gh release list` is the truth)
 - **v2.10.12** (#629, merge a446c1a2): a booking the statements walk made from a statement, which the feed now states, is withdrawn (`withdraw_stated_by_the_feed`, before `restore_withdrawn`). Every kept row is paired with all the account's transactions in the kept months' span, feed first, and only a booking left unpaired is withdrawn. The gate on a copy of the owner's book: the walk withdrew 5 bookings, and the USD line was gone with nothing new or worse. Published 20:04, Latest, 8 assets.
@@ -36,7 +36,9 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 - #628: `tests_figures_golden.rs` and `tests/golden/figures.json` (12 seeds, header lines sorted). `BAGHOLDER_BLESS=1` writes the file. Building and running it takes about 3 minutes here.
 
 ### The owner's book
-After 2.10.12's first sync the header should be empty. Never say "fixed" until the owner's screen or a gate shows it.
+- On 2.10.12 the book should have no header line once it syncs. But a gate copy taken at 22:18 still showed the USD line, so the owner hadn't synced 2.10.12 yet. They were told to update and sync.
+- Never say "fixed" until the owner's screen or a gate shows it.
+- **Privacy:** never name the owner's securities, coins or account nicknames in anything pushed (handoff, commits, PRs, issues). The owner said "forget about scrubbing history": never rewrite history or scrub old files.
 
 ### Brief 77, what is left, in order
 1. **#631 (§4, the gated rederive): merged** (730abe16), no release.
@@ -52,12 +54,25 @@ After 2.10.12's first sync the header should be empty. Never say "fixed" until t
      2. (c) = identity pairing as a MATCHING rule only, inside `match_rows`: a statement fill row pairs with the feed's fill of the same side, security and units on the row's day or within the posting window, whatever the cash. Nothing booked or superseded from it; a month closes by its balances as now. The golden should show header lines leaving with no figure moving.
      3. Guards: the fills step after the pre-pass and only for currencies still differing; a statement row booked only where the month then closes; a book rule, with its own test, that a record a take-back removed is never made live by a store under its key.
      4. Captures first, from recorded forms only: how the feed names a share security the statement calls by its symbol (`names_it` failed on two such), against the positions; and the coin fill forms.
-   - **Sequence:**
-     1. The captures (running: Mac session `session_015LhdFuMLzkaUUA2GYSesSj`, script `scratchpad/diag/capture.py`; real names and figures come to this session only).
-     2. The two shapes in the generator.
-     3. The twelve-seed sweep on 2.10.12's walk, showing the stops.
-     4. The matching rule, with the sweep clean and the golden diff all header lines.
-     5. The canary, then the release.
+   - **Captures done** (Mac, read-only; real names and figures came to this session only, never pushed):
+     - **Share shape:** a Canadian listing interlisted in the US. The feed's fill rows (DIY_BUY/DIY_SELL) and their `security.stock.symbol` say "SYM.TO", in CAD. The statement row says "SYM - NAME: Bought|Sold N shares (executed at D)" (also "… at $P per share"), in CAD, no FX rate. The book also holds the US listing under bare "SYM" in USD, so `names_it` matched the US one and the old rule booked every row there.
+     - **Share variant:** two CAD listings of one company, "SYM" (earlier) and "SYM.TO" (later).
+     - **Coins:** statement units at ten places equal the feed's `assetQuantity`. Cash in two forms: (a) with "Fee charged $F", equal to the feed's amount; (b) without fee text, the fill before the fee (smaller on a buy, larger on a sell).
+   - **The Architect said PROCEED (2026-10-26 ~23:05), with these precisions:**
+     - The matching pairs a statement fill row with the account's own FEED FILLS, never the instruments table.
+     - Pair on: same side and units, the row's day or the posting window, an instrument called the row's symbol or the symbol with ".TO", and cash in the row's currency. Where two CAD listings carry the names, the fill on the day decides. No row is ever booked under a listing.
+     - Record the ".TO" row form with its `security` object as the feed states it, AND the two coin sales' feed sides (form (a) rows that paired with nothing; not yet seen), before any rule claims them. A form not recorded is recorded first, never typed.
+     - The three guards go in with the rule, each with its test.
+     - The golden diff must be header lines only. If a figure moves, stop and say which.
+   - **Next, in order:**
+     1. Record the forms: the feed's "SYM.TO" row with its `security` object, made up, into `wealthsimple/tests/replies/wealthsimple/` beside the recorded feed kinds. Then a Mac capture of the two coin sales' feed sides; extend `scratchpad/diag/capture.py`, run it on a made-up book first, and print only the needed fields with id-bearing keys dropped.
+     2. Generator shapes from them: the ".TO" listing; `CoinFeeCharged` (a); `CoinBeforeFee` (b), replacing `FeeFolded`. Branch from master (#633's `statement-fills` is only for reference).
+     3. The twelve-seed sweep on 2.10.12's walk, to show the stops ("a buy only the statement states").
+     4. The matching rule inside `match_rows`. Guards: (i) the fills step after the pre-pass and only for currencies still differing; (ii) a statement row booked only where the month then closes; (iii) a book rule, with its own test, that a record a take-back removed is never made live by a store under its key.
+     5. Golden diff, header lines only.
+     6. Version bump, the canary on the owner's book (Mac gate; `pull-broker --statements-only` runs the walk AND the fills step), PR, Architect, release.
+   - Reusable from #633's branch: the recorded `contract_of` form, `delivery()` for an assignment's shares, the take-back once per book.
+   - Scripts: `scratchpad/diag/changed.py` (before/after diff of two copies), `capture.py`, `fills.py`. The gate prompt pattern is in the memory file `bagholder-delegation-playbook.md`.
    - **Never** name the owner's securities, coins or account nicknames in this file, a commit, a PR or an issue: the repository is public (a push naming two of them was caught and replaced on 2026-10-26).
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
