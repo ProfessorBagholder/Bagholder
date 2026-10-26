@@ -112,7 +112,8 @@
       "USD cash in Generated 2: Wealthsimple's April 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's June 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 2
   },
   "seed 02": {
     "accounts": {
@@ -223,7 +224,8 @@
       "USD cash in Generated 6: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 4
   },
   "seed 03": {
     "accounts": {
@@ -344,7 +346,8 @@
       "USD cash in Generated 6: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 3
   },
   "seed 04": {
     "accounts": {
@@ -464,7 +467,8 @@
       "USD cash in Generated 6: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's July 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's April 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 0
   },
   "seed 05": {
     "accounts": {
@@ -577,7 +581,8 @@
       "USD cash in Generated 6: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's March 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 2
   },
   "seed 06": {
     "accounts": {
@@ -688,7 +693,8 @@
       "USD cash in Generated 6: Wealthsimple's February 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's December 2025 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 4
   },
   "seed 07": {
     "accounts": {
@@ -806,7 +812,8 @@
       "USD cash in Generated 2: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 6: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 1
   },
   "seed 08": {
     "accounts": {
@@ -916,7 +923,8 @@
       "USD cash in Generated 6: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's April 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 2
   },
   "seed 09": {
     "accounts": {
@@ -1025,7 +1033,8 @@
       "USD cash in Generated 6: Wealthsimple's May 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's June 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's July 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 3
   },
   "seed 10": {
     "accounts": {
@@ -1140,7 +1149,8 @@
       "USD cash in Generated 6: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 3
   },
   "seed 11": {
     "accounts": {
@@ -1264,7 +1274,8 @@
       "USD cash in Generated 6: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's December 2025 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 8: Wealthsimple's July 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 3
   },
   "seed 12": {
     "accounts": {
@@ -1383,6 +1394,7 @@
       "USD cash in Generated 2: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 6: Wealthsimple's October 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
       "USD cash in Generated 7: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ]
+    ],
+    "withdrawn at opening, the book read a version before": 2
   }
 }

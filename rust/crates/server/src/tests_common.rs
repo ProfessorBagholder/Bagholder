@@ -122,3 +122,125 @@ pub fn order_accounts_in(a: &Arc<App>) {
     // what the margin account can borrow, as a balances read brings it to the figures
     f.broker_changed(margin).unwrap();
 }
+
+/// Wealthsimple's mapping a version back, reading a conversion whose detail
+/// states its side paid for the side received alone, as a person's book was
+/// read before rule set 16: the statements' walk then books the side paid from
+/// the statement, and the version after derives it from the record as well.
+pub struct PaidUnread;
+impl bagholder_book::mapping::Mapping for PaidUnread {
+    fn source(&self) -> bagholder_core::SourceName {
+        bagholder_wealthsimple::mapping::WealthsimpleMapping.source()
+    }
+    fn version(&self) -> u32 {
+        bagholder_wealthsimple::mapping::WealthsimpleMapping.version() - 1
+    }
+    fn map(&self, ctx: &bagholder_book::mapping::MapContext, payload: &str) -> bagholder_book::mapping::Mapped {
+        let mut m = bagholder_wealthsimple::mapping::WealthsimpleMapping.map(ctx, payload);
+        let paid = bagholder_core::Leg::parse("paid").unwrap();
+        m.legs.retain(|d| !(d.kind == bagholder_core::transaction::Kind::CurrencyConversion && d.leg == paid));
+        m
+    }
+}
+
+/// Wealthsimple as the made-up broker states it, its records derived by
+/// `PaidUnread`: everything else as the adapter does it.
+pub struct ReadBefore(pub bagholder_wealthsimple::adapter::Wealthsimple<bagholder_wealthsimple::generated::Generated>);
+impl bagholder_broker::BrokerAdapter for ReadBefore {
+    fn broker(&self) -> bagholder_core::Broker {
+        self.0.broker()
+    }
+    fn mapping(&self) -> &dyn bagholder_book::mapping::Mapping {
+        &PaidUnread
+    }
+    fn accounts(&mut self) -> bagholder_broker::Answer<Vec<bagholder_broker::AccountStated>> {
+        self.0.accounts()
+    }
+    fn activity(&mut self, account: &str, from: Option<bagholder_core::jiff::civil::Date>) -> bagholder_broker::Answer<bagholder_broker::Activity> {
+        self.0.activity(account, from)
+    }
+    fn prepare(&mut self, rows: &[&bagholder_broker::Row]) {
+        self.0.prepare(rows)
+    }
+    fn read_beside(&mut self) -> Vec<bagholder_broker::Row> {
+        self.0.read_beside()
+    }
+    fn record(&mut self, row: &bagholder_broker::Row, book: &mut dyn bagholder_broker::BookMoves) -> bagholder_broker::Answer<bagholder_core::json::Value> {
+        self.0.record(row, book)
+    }
+    fn holds(&self, payload: &bagholder_core::json::Value, row: &bagholder_broker::Row) -> bool {
+        self.0.holds(payload, row)
+    }
+    fn reads_positions(&self, payload: &bagholder_core::json::Value) -> bool {
+        self.0.reads_positions(payload)
+    }
+    fn unsettled(&self, payload: &bagholder_core::json::Value) -> Option<(String, Option<bagholder_core::jiff::civil::Date>)> {
+        self.0.unsettled(payload)
+    }
+    fn placed(&self, payload: &bagholder_core::json::Value) -> Option<(String, bagholder_core::jiff::civil::Date)> {
+        self.0.placed(payload)
+    }
+    fn refreshes(&self, payload: &bagholder_core::json::Value) -> bool {
+        self.0.refreshes(payload)
+    }
+    fn refresh(&mut self, payload: &bagholder_core::json::Value, book: &mut dyn bagholder_broker::BookMoves) -> Option<bagholder_broker::Answer<bagholder_core::json::Value>> {
+        self.0.refresh(payload, book)
+    }
+    fn watches(&self, payload: &bagholder_core::json::Value) -> Option<String> {
+        self.0.watches(payload)
+    }
+    fn amend(&self, payload: &bagholder_core::json::Value, row: &bagholder_broker::Row) -> Option<bagholder_core::json::Value> {
+        self.0.amend(payload, row)
+    }
+    fn day(&self, at: bagholder_core::jiff::Timestamp) -> bagholder_core::jiff::civil::Date {
+        self.0.day(at)
+    }
+    fn cash(&mut self, accounts: &[String]) -> bagholder_broker::Answer<std::collections::BTreeMap<String, std::collections::BTreeMap<bagholder_core::Currency, bagholder_core::Dec>>> {
+        self.0.cash(accounts)
+    }
+    fn buying_power(&mut self, accounts: &[String]) -> bagholder_broker::Answer<std::collections::BTreeMap<String, Result<bagholder_core::Dec, String>>> {
+        self.0.buying_power(accounts)
+    }
+    fn margin_rates(&mut self, account: &str) -> bagholder_broker::Answer<Option<std::collections::BTreeMap<bagholder_core::Currency, bagholder_core::Dec>>> {
+        self.0.margin_rates(account)
+    }
+    fn units(&mut self, account: &str, day: bagholder_core::jiff::civil::Date) -> bagholder_broker::Answer<Vec<bagholder_broker::Units>> {
+        self.0.units(account, day)
+    }
+    fn cash_on(&mut self, account: &str, day: bagholder_core::jiff::civil::Date) -> bagholder_broker::Answer<Option<std::collections::BTreeMap<bagholder_core::Currency, bagholder_core::Dec>>> {
+        self.0.cash_on(account, day)
+    }
+    fn outside_accounts(&mut self) -> bagholder_broker::Answer<Option<Vec<bagholder_book::debts::OutsideDebt>>> {
+        self.0.outside_accounts()
+    }
+    fn outside_days(&mut self, entity: &bagholder_book::debts::OutsideDebt, start: bagholder_core::jiff::civil::Date, end: bagholder_core::jiff::civil::Date) -> bagholder_broker::Answer<Option<Vec<bagholder_book::debts::OutsideDay>>> {
+        self.0.outside_days(entity, start, end)
+    }
+    fn instruments(&mut self, refs: &[bagholder_core::instrument::Reference], day: bagholder_core::jiff::civil::Date) -> Vec<(bagholder_core::instrument::Reference, bagholder_broker::Answer<bagholder_book::mapping::InstrumentDraft>)> {
+        self.0.instruments(refs, day)
+    }
+    fn history(&mut self, account: &str, from: Option<bagholder_core::jiff::civil::Date>) -> bagholder_broker::Answer<Vec<bagholder_broker::DayValue>> {
+        self.0.history(account, from)
+    }
+    fn statement(&mut self, account: &str, month: bagholder_core::jiff::civil::Date) -> bagholder_broker::Answer<bagholder_broker::StatementRead> {
+        self.0.statement(account, month)
+    }
+    fn statement_rows(&self, account: &str, payload: &bagholder_core::json::Value) -> bagholder_broker::Answer<Vec<bagholder_broker::StatementRow>> {
+        self.0.statement_rows(account, payload)
+    }
+    fn statement_mapping(&self) -> Option<&dyn bagholder_book::mapping::Mapping> {
+        self.0.statement_mapping()
+    }
+    fn statement_record(&self, account: &str, month: bagholder_core::jiff::civil::Date, position: usize, row: &bagholder_broker::StatementRow) -> Option<(String, bagholder_core::json::Value)> {
+        self.0.statement_record(account, month, position, row)
+    }
+    fn statement_gap_record(&self, gap: &bagholder_broker::statements::Gap) -> Option<(String, bagholder_core::json::Value)> {
+        self.0.statement_gap_record(gap)
+    }
+    fn conversion_paid_record(&self, paid: &bagholder_broker::statements::Paid) -> Option<(String, bagholder_core::json::Value)> {
+        self.0.conversion_paid_record(paid)
+    }
+    fn fill_record(&self, fill: &bagholder_broker::statements::Fill) -> Option<(String, bagholder_core::json::Value)> {
+        self.0.fill_record(fill)
+    }
+}

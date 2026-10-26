@@ -371,6 +371,34 @@ impl<S: Source> Wealthsimple<S> {
     }
 }
 
+/// A kept statement's rows, for the broker's account it is of, in that
+/// account's own currency as the account list states it (a statement in lists
+/// per currency states each list's own).
+fn kept_rows(currencies: &BTreeMap<String, Currency>, account: &str, payload: &Value) -> Answer<Vec<StatementRow>> {
+    let currency = *currencies.get(account).ok_or_else(|| Failure::Mismatch(format!("{account}: no currency stated for the account a statement is of")))?;
+    crate::statement::rows(payload, currency).map_err(|m| Failure::Mismatch(format!("FetchMonthlyStatementWithTransactions: {m}")))
+}
+
+/// The statements a book keeps, read as the adapter reads them with nothing
+/// asked of Wealthsimple: for the server's gate on a new mapping version, where
+/// no pull runs. `currencies` is each account's own currency, from what the
+/// broker last stated its cash in (`Wealthsimple::with_currencies` likewise).
+pub struct KeptStatements {
+    pub currencies: BTreeMap<String, Currency>,
+}
+
+impl bagholder_broker::StatementKeys for KeptStatements {
+    fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>> {
+        kept_rows(&self.currencies, account, payload)
+    }
+    fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)> {
+        Some((crate::statement::key(account, month, position), crate::statement::payload(account, month, position, row)))
+    }
+    fn statement_mapping(&self) -> Option<&dyn Mapping> {
+        Some(&crate::statement::StatementMapping)
+    }
+}
+
 impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn broker(&self) -> Broker {
         broker()
@@ -679,8 +707,7 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         }
     }
     fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>> {
-        let currency = *self.currencies.get(account).ok_or_else(|| Failure::Mismatch(format!("{account}: no currency stated for the account a statement is of")))?;
-        crate::statement::rows(payload, currency).map_err(|m| Failure::Mismatch(format!("FetchMonthlyStatementWithTransactions: {m}")))
+        kept_rows(&self.currencies, account, payload)
     }
     fn statement_mapping(&self) -> Option<&dyn Mapping> {
         Some(&crate::statement::StatementMapping)

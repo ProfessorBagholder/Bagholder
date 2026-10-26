@@ -340,3 +340,26 @@ pub trait BrokerAdapter {
         None
     }
 }
+
+/// What reading the statements a book keeps needs of a broker, with nothing
+/// asked of it: a kept statement's rows, the record a row is booked as, and the
+/// mapping that derives those records. Every adapter reads them this way; the
+/// server's gate on a new mapping version (`statements::withdraw_stated`) reads
+/// them with no adapter at all.
+pub trait StatementKeys {
+    fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>>;
+    fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)>;
+    fn statement_mapping(&self) -> Option<&dyn Mapping>;
+}
+
+impl<T: BrokerAdapter + ?Sized> StatementKeys for T {
+    fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>> {
+        BrokerAdapter::statement_rows(self, account, payload)
+    }
+    fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)> {
+        BrokerAdapter::statement_record(self, account, month, position, row)
+    }
+    fn statement_mapping(&self) -> Option<&dyn Mapping> {
+        BrokerAdapter::statement_mapping(self)
+    }
+}

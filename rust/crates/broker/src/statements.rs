@@ -169,27 +169,10 @@ pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         }
         // the months kept, and those read now, per broker account: a month
         // the broker answered it has not issued is kept as none
-        let mut kept: BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>> = BTreeMap::new();
-        for k in keys {
-            let mut months = BTreeMap::new();
-            for (m, payload) in book.monthly_statements(connection, k)? {
-                let v = bagholder_core::json::parse(&payload).map_err(|e| bagholder_book::BookError::Refused(format!("a kept statement of {k} for {m} is not JSON: {e}")))?;
-                if matches!(v, bagholder_core::json::Value::Null) {
-                    months.insert(m, None);
-                    continue;
-                }
-                match adapter.statement_rows(k, &v) {
-                    Ok(rows) => {
-                        months.insert(m, Some(rows));
-                    }
-                    Err(f) => failures.push((format!("statement:{k}:{m}"), f)),
-                }
-            }
-            kept.insert(k.clone(), months);
-        }
+        let mut kept = kept_months(book, &*adapter, connection, keys, failures)?;
         // a row an earlier walk booked from a statement, whose own row the feed now
         // states, is withdrawn before anything else: the movement stands once
-        let withdrawn = withdraw_stated_by_the_feed(book, adapter, connection, keys, &kept, &own, &mapping_source, now)?;
+        let withdrawn = withdraw_stated_by_the_feed(book, &*adapter, connection, keys, &kept, &own, &mapping_source, now)?;
         let unbooked;
         let differing = if withdrawn > 0 {
             done.withdrawn += withdrawn;
@@ -770,9 +753,9 @@ fn take_back_2_10_9(book: &Book, adapter: &dyn BrokerAdapter, source: &SourceNam
 /// statement as money moved out before the feed's records stated their side
 /// paid, stood twice for a year and a half).
 #[allow(clippy::too_many_arguments)]
-fn withdraw_stated_by_the_feed(
+fn withdraw_stated_by_the_feed<K: crate::StatementKeys + ?Sized>(
     book: &Book,
-    adapter: &dyn BrokerAdapter,
+    adapter: &K,
     connection: ConnectionId,
     keys: &[String],
     kept: &BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>,
@@ -808,6 +791,67 @@ fn withdraw_stated_by_the_feed(
                 n += 1;
             }
         }
+    }
+    Ok(n)
+}
+
+/// The months a book keeps of each of the broker's accounts, each read again:
+/// a month the broker answered it has not issued is kept as none; one that does
+/// not read is a failure, and left out.
+fn kept_months<K: crate::StatementKeys + ?Sized>(
+    book: &Book,
+    adapter: &K,
+    connection: ConnectionId,
+    keys: &[String],
+    failures: &mut Vec<(String, Failure)>,
+) -> Result<BTreeMap<String, BTreeMap<jiff::civil::Date, Option<Vec<StatementRow>>>>> {
+    let mut kept = BTreeMap::new();
+    for k in keys {
+        let mut months = BTreeMap::new();
+        for (m, payload) in book.monthly_statements(connection, k)? {
+            let v = bagholder_core::json::parse(&payload).map_err(|e| bagholder_book::BookError::Refused(format!("a kept statement of {k} for {m} is not JSON: {e}")))?;
+            if matches!(v, bagholder_core::json::Value::Null) {
+                months.insert(m, None);
+                continue;
+            }
+            match adapter.statement_rows(k, &v) {
+                Ok(rows) => {
+                    months.insert(m, Some(rows));
+                }
+                Err(f) => failures.push((format!("statement:{k}:{m}"), f)),
+            }
+        }
+        kept.insert(k.clone(), months);
+    }
+    Ok(kept)
+}
+
+/// The walk's pre-pass alone, where no pull walks: for each account whose cash
+/// differs from what the broker last stated, the bookings from its kept
+/// statements that no row needs any more, withdrawn (`withdraw_stated_by_the_feed`).
+/// The server's gate on a new mapping version runs it after deriving the records
+/// again: a version that states what a statement's booking stood for leaves that
+/// booking unneeded, and a pull would withdraw it only once the feed stated the
+/// movement anew. A kept month that does not read is left out. It says how many.
+pub fn withdraw_stated<K: crate::StatementKeys + ?Sized>(
+    book: &Book,
+    adapter: &K,
+    connection: ConnectionId,
+    keys_of: &BTreeMap<AccountId, Vec<String>>,
+    closed: &BTreeSet<String>,
+    now: jiff::Timestamp,
+) -> Result<usize> {
+    let Some(source) = adapter.statement_mapping().map(|m| m.source()) else { return Ok(0) };
+    let txs = book.transactions()?;
+    let mut n = 0;
+    for (account, keys) in keys_of {
+        let account_closed = !keys.is_empty() && keys.iter().all(|k| closed.contains(k));
+        if differing(book, &txs, *account, account_closed)?.is_empty() {
+            continue;
+        }
+        let own: Vec<&Transaction> = txs.iter().filter(|t| t.account == *account).collect();
+        let kept = kept_months(book, adapter, connection, keys, &mut Vec::new())?;
+        n += withdraw_stated_by_the_feed(book, adapter, connection, keys, &kept, &own, &source, now)?;
     }
     Ok(n)
 }

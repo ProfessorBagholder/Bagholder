@@ -81,23 +81,9 @@ fn walk(home: &std::path::Path, now: Timestamp) -> Result<String, String> {
     let replay = Replay::read(&empty).map_err(|e| e.to_string());
     std::fs::remove_dir(&empty).map_err(|e| format!("{}: {e}", empty.display()))?;
     let (book, _) = Book::open_in(home, crate::app::APP_VERSION, now).map_err(|e| e.to_string())?;
-    let wealthsimple = Broker::named("wealthsimple");
-    let Some(connection) = book.connections().map_err(|e| e.to_string())?.into_iter().find(|c| c.broker == wealthsimple).map(|c| c.id) else {
+    let Some(crate::figures::BrokerKeys { connection, keys_of, closed, currencies }) = crate::figures::wealthsimple_keys(&book).map_err(|e| e.to_string())? else {
         return Err("the book has no Wealthsimple connection".into());
     };
-    let mut keys_of = std::collections::BTreeMap::new();
-    let mut closed = std::collections::BTreeSet::new();
-    let mut currencies = std::collections::BTreeMap::new();
-    for a in book.accounts().map_err(|e| e.to_string())?.into_iter().filter(|a| a.connection == connection) {
-        let keys: Vec<String> = book.account_refs(a.id).map_err(|e| e.to_string())?.into_iter().filter(|r| r.broker == wealthsimple).map(|r| r.value).collect();
-        if a.status == bagholder_core::account::AccountStatus::Closed {
-            closed.extend(keys.iter().cloned());
-        }
-        let stated: Vec<bagholder_core::Currency> = book.stated_latest(a.id).map_err(|e| e.to_string())?.cash.map(|(_, c)| c.into_keys().collect()).unwrap_or_default();
-        let currency = if let [one] = stated.as_slice() { *one } else { bagholder_core::Currency::CAD };
-        currencies.extend(keys.iter().map(|k| (k.clone(), currency)));
-        keys_of.insert(a.id, keys);
-    }
     let mut adapter = Wealthsimple::new(replay?).with_currencies(currencies);
     let mut failures = Vec::new();
     let today = adapter.day(now);
