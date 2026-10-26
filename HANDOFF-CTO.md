@@ -22,51 +22,57 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-26 ~18:00 UTC, written by the home-server CTO session before a compaction)
+## 2. Where things stand (2026-10-26 ~19:55 UTC, written by the home-server CTO session)
 
 ### Released, newest first (`gh release list` is the truth)
-- **v2.10.11** (#624, merge 5976075c): a card spend not yet final (`SPEND`/`PREPAID`) holds the amount it states, and once final is the purchase. Mapping version 18. Cleared the owner's CAD 💰Cash header line (it clears at the next balances read online). Release run 40369572042; confirm 8 assets and Latest.
-- **v2.10.10** (#622): takes back 2.10.9, which damaged the real book (it booked an assignment's "Sold N shares" as a sale, among other fill matching built on invented wording). `take_back_2_10_9` runs at the start of the statements walk.
-- 2.10.7 to 2.10.9: brief 76's shapes and fixes; 2.10.9 is the one taken back.
+- **v2.10.12** (#629, merge a446c1a2): a booking the statements walk made from a statement, which the feed now states, is withdrawn (`withdraw_stated_by_the_feed`, before `restore_withdrawn`). Every kept row is paired with all the account's transactions in the kept months' span, feed first, and only a booking left unpaired is withdrawn. The gate on a copy of the owner's book: the walk withdrew 5 bookings, and the USD 🚀 Trading line was gone with nothing new or worse. Release run started ~19:50; confirm 8 assets and Latest.
+- **v2.10.11** (#624): a pending card spend (`SPEND`/`PREPAID`) holds its amount. The owner's CAD 💰Cash line cleared.
+- **v2.10.10** (#622): takes back 2.10.9.
 
-### The owner's book now
-- One header line is left: USD cash in 🚀 Trading. Diagnosed: five currency conversions each stand twice, once as the feed's `FUNDS_CONVERSION` paid leg and once as a statement's "Money transfer out" booked from the statement before the feed stated it. Fixed by (b) below. The amounts are real figures: never in the repo, a PR or a message to the Architect.
-- Never claim a line is fixed before the gate on a read-only copy of their book shows it gone.
+### Merged today without a release
+- #625: the made-up broker states only recorded statement forms; `Shape::Assigned`.
+- #626: suites run once (PR on Linux; macOS and Windows on the release tag).
+- #627: the PR jobs read master's shared caches (`suite`, `demo-server`) without saving; `suite-cache.yml` builds them on a master push on a miss; capacity is not re-measured on master.
+- #628: `tests_figures_golden.rs` and `tests/golden/figures.json` (12 seeds, header lines sorted). `BAGHOLDER_BLESS=1` writes the file. Building and running it takes about 3 minutes here.
 
-### Brief 77 (`briefs/77-how-a-reading-change-is-proven.md`), the order of work
-Each step is its own PR and release, tests first, with the golden diff. One reading change per release.
-1. **#625 recorded forms**: OPEN, head 3ea937b8, branch `recorded-statement-forms`, built by a cloud session. The generator states only the recorded statement forms (`wealthsimple/tests/replies/wealthsimple-statements/forms-*.json`); `Shape::Assigned` and `ASSIGNED`; `tests/forms.rs`. Next: after #626 merges, merge master in, push, read its one run, merge. No release (tests and generator only).
-2. **§3 golden figures**: branch `golden-figures` 364ed227 (worktree `gold`), pushed, no PR. `server/src/tests_figures_golden.rs` pins every figure and header line over 12 seeds to `server/tests/golden/figures.json` (`BAGHOLDER_BLESS=1` writes it). Next: merge master after #625, re-bless, open the PR, send the head to the Architect, merge on green.
-3. **§4 gated rederive**: branch `rederive-gated` 3248b66d (worktree `gate4`), pushed, no PR. `figures.rs` `gated_rederive`: a mapping version that leaves the book disagreeing with the broker on anything new is refused and rolled back, noted in setting `rederive.refused`; `retry_refused` runs after each broker read. The owner's decision on showing a refusal is pending with the Architect; nothing is shown now. Next: merge master, PR, Architect, merge.
-4. **(b) withdraw a statement row the feed now states**: branch `statement-copy-withdrawn` 29e84d06 (worktree `dup`), pushed, no PR. `statements.rs` `withdraw_stated_by_the_feed`, before `restore_withdrawn`. Test `a_movement_booked_from_a_statement_that_the_feed_now_states_is_withdrawn_and_stands_once` fails on the old code. Next: merge master, re-bless golden (show the diff), bump to 2.10.12, run the gate on a read-only copy of the owner's book (servers started with `BAGHOLDER_EXIT_WITH`; only "identical / new / worse" per line to the Architect), PR, Architect, merge, release. Clears the USD line.
-5. **(c)**: #620's identity matching rebuilt on the recorded forms. An assignment's "Sold N shares" pairs with its ASSIGN row and is never booked as a sale; the `STATED_OTHERWISE` shapes join `SHAPES`. Gated, with the golden diff.
-- After those three changes: the agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must carry in-app setup, and the owner checks one real connection per agent before release.
+### The owner's book
+After 2.10.12's first sync the header should be empty. Never say "fixed" until the owner's screen or a gate shows it.
 
-### CI (#626, branch `ci-faster`, worktree `ci`, head ac763ee3)
-- Each suite runs once: `tests.yml` on pull requests only (Linux), capacity cases in their own job beside the suite, macOS and Windows suites moved to `release.yml` on the release tag (publishing waits for them), dependencies built at opt-level 2.
-- Before: #624's run was 33 min wall (rust 22, rust-macos 33, browser 12, capacity 11). Next: when run 40370045564 is green, put the measured timings in the PR body and merge (no release).
-- Open question to raise with the Architect with the timings: with no master runs of `tests.yml`, no master-scoped cache exists, so each new PR's first run builds dependencies cold (this run is that case). Also `capacity.yml` still re-measures on every master push. Decide both from the measurement.
-- Architect's follow-ups, each its own PR: platform suites on PRs that touch platform code (paths filter); measure own crates opt 1 and dependencies opt 3; the browser job is the long pole.
+### Brief 77, what is left, in order
+1. **§4, the gated rederive**: branch `rederive-gated` (worktree `gate4`). Master merged in; next, run its tests, open the PR and send it to the Architect. The owner's decision on showing a refusal is pending; nothing is shown.
+2. **The generator gains the shape "booked from a statement, then stated by the feed"** (the Architect, before (c)). Then re-bless the golden file; its diff names (b)'s withdrawals.
+3. **(c)**: #620's identity matching rebuilt on the recorded forms. The ASSIGN sequence's "Sold N shares" is paired with the assignment and never booked as a sale, and the `STATED_OTHERWISE` shapes join `SHAPES`. Gated, with the golden diff and a canary.
+4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
-### Other follow-ups, in order
-- `take_back_2_10_9`: make its SQL filter one query; remove it at the next stop release.
+### Delegated
+- **PR A** (the Architect's hardening list: `plain_number` exponent cap, `take_frame` checked length, four clippy denies, the gate command with `standin`): cloud session `session_01PqGc6DaSzd5oe2D7FsbARQ`, branch `hardening-a`. Read its result with `list_events`; it cannot message back. The first attempt was refused at `git switch -c`.
+- **PR B** (the wider lints): after brief 77.
+
+### Other follow-ups
+- The header's lines come in a different order from one opening to the next (#628 sorts them in the golden file only). This needs an owner decision before anything visible changes.
+- `take_back_2_10_9`: make its SQL filter one query, and remove it at the next stop release.
 - The version-36 carry with a superseded coin fill.
-- Older items, not rechecked: the `install-check` branch, the short-interest bug (options sent to FINRA), PR #589, the open dependabot PRs. Check each before acting.
+- Older items, not rechecked: the `install-check` branch, the short-interest bug (options sent to FINRA), PR #589, and the open dependabot PRs.
+
+### Delegation, learned today
+- Cloud sessions cannot message back. Never tell one to `send_message`; say "ask for no permission"; read its transcript. Start one on a branch pushed beforehand (`source_revision` + `outcome_branch`), because its classifier refuses `git switch -c`.
+- Never archive a session before its report reaches me.
+- **The Mac gate.** Run it from a bridge named `air:Bagholder:…`; look it up with `list_environments`. Then:
+  - Back up a read-only copy with `sqlite3 -readonly .backup`.
+  - Build both versions from a clone. For a walk fix, the candidate gets `--features pull-broker`, and `pull-broker <copy> --statements-only` runs before it opens.
+  - Run each server inside one polling shell with `BAGHOLDER_EXIT_WITH=$$`; never use `kill`.
+  - Offline the app never reports ready, so stop polling once `error` has been unchanged for 60 s.
+  - Report the walk's whole output.
+- **Merging.** A merge whose commit writes a new workflow file blob is refused (the token has no `workflow` scope). Merge master into the branch first and push; git pushes are allowed.
+
+### Workspace
+- Worktrees in this session's scratchpad: `gate4` (§4), `aa` (agents), `g558` (paused, the owner's call), `ho` (this file).
+- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. Its dependencies are built at opt-level 0, so pass `--config 'profile.dev.package."*".opt-level=0'` or they all rebuild. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, and only the named tests a change touches. The server crate is a bin: `-p bagholder-server --bin bagholder <filter>`.
 
 ### How a release goes (all delegated: Architect clearance + green checks = merge and release)
 - The version bump goes inside the fix PR, so CI runs once: `rust/Cargo.toml` `version`, `rust/crates/server/src/app.rs` `APP_VERSION`, `rust/crates/server/tests/golden/routes.json` `"version"`, then `cargo update --workspace --offline`.
 - Merge with `gh api -X PUT repos/ProfessorBagholder/Bagholder/pulls/N/merge -f merge_method=merge -f sha=<cleared head>`.
 - Then `gh release create vX.Y.Z --target <merge sha> --prerelease --title vX.Y.Z --notes "…"`. release.yml builds 8 assets and marks it Latest; confirm with `gh release view` and `gh api repos/ProfessorBagholder/Bagholder/releases/latest` before telling the owner it is out.
-
-### Delegation, learned this segment
-- Cloud sessions cannot message back: never tell one to `send_message`; say "ask for no permission"; read the result from its transcript with `list_events`. Telling one to message back made it ask for trust, and the owner got a sign-in prompt.
-- Never archive a session before its report has reached me.
-- The Mac bridge (look its name up with `list_environments`) cannot read `~/.bagholder-rust/book.db` unattended, even read-only with a stated go-ahead, and cannot `kill`. A gate there starts every server with `BAGHOLDER_EXIT_WITH=<its shell pid>`.
-
-### Workspace
-- Worktrees in this session's scratchpad: `aa`, `ci`, `dup`, `gate4`, `gold`, `ho` (this file), `g558` (paused, the owner's call; uncommitted edits). Remove each once its PR merges, with its local and remote branch.
-- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, only the named tests a change touches; the server crate is a bin (`-p bagholder-server --bin bagholder <filter>`).
-- Read CI yourself (`gh run view`) when the result is needed; never tell the owner you are waiting without having just checked.
 
 ## 3. How the owner wants to be worked with
 
