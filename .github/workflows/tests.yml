@@ -4,9 +4,10 @@
 # step"). The suites on Windows and macOS are that final step, run on the commit a release is cut
 # from (`release.yml`), and nothing is published without them. Nothing ran on a pull request before this: a branch was only ever as
 # tested as whoever remembered to run it. The server and the page are one product -- the page is
-# built into the server -- so a pull request is green only when both are. The tests read three
-# markdown files (SPEC.md for its rule ids, docs/spec-ids.md, and docs/architecture.md for the cost
-# budget), so a change to one of them runs everything; any other documentation runs nothing.
+# built into the server -- so a pull request is green only when both are. The tests read the
+# markdown files the paths below name (SPEC.md for its rule ids, docs/spec-ids.md, docs/architecture.md
+# for the cost budget, the recorded statement forms' README), so a change to one of them runs
+# everything; any other documentation runs nothing.
 name: Tests
 
 on:
@@ -18,6 +19,7 @@ on:
       - 'docs/spec-ids.md'
       - 'docs/architecture.md'
       - 'CLAUDE.md'
+      - 'rust/crates/wealthsimple/tests/replies/wealthsimple-statements/README.md'
   workflow_dispatch:
 
 permissions:
