@@ -69,7 +69,7 @@ Delegate only when all three hold: the task separates cleanly with a clear contr
 
 ## Verifying a change
 
-- **Rust**, from `rust/`: `RUSTFLAGS="-D warnings" cargo test --workspace`, and `cargo clippy --workspace --lib --bins` clean (the workspace denies a discarded failure). A behaviour change comes with a test. A pushed book migration is never edited; a change is a new migration.
+- **Rust**, from `rust/`: `RUSTFLAGS="-D warnings" cargo test --workspace`, and `cargo clippy --workspace --lib --bins --features bagholder-ws/standin` clean (the workspace denies a discarded failure; the feature brings in `standin.rs`, which builds only under it). A behaviour change comes with a test. A pushed book migration is never edited; a change is a new migration.
 - **The page**, from `web/`: `npm run check` (svelte-check), `npm test` (Vitest), `npm run e2e` (builds the page, then Playwright against the real server on a made-up book: offline, dry orders, its own temporary home, port 8791; `E2E_PORT=<n>` gives a second run its own server). A behaviour in `SPEC.md` is not done until a browser test drives it.
 - **The wire** is typed in `rust/crates/model/src/wire.rs`; `cargo test -p bagholder-model --test types` regenerates `web/src/lib/generated/wire.ts`, and the page takes its types from there.
 - **Timers:** a timer anywhere is replaced by waiting for the thing itself, or argued for in `TIMED_WAITS` (`rust/crates/server/src/tests_misc.rs`), the one list of timers that remain; `test_no_wait_on_a_clock_that_is_not_accounted_for` holds the code to it.
