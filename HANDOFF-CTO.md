@@ -47,12 +47,17 @@ After 2.10.12's first sync the header should be empty. Never say "fixed" until t
      - New: CAD cash in 🚀 Trading (book well over stated), CAD cash in 📉 Ponzi (book over a stated 0), and a BTC sale in 📉 Ponzi selling more than held.
      - The walk: fills 15, withdrawn 5.
    - So some of the 15 statement fills are wrong for the owner's real rows, in shapes the stand-in lacks.
-   - Diagnosis running on the Mac (`session_018TzzyvtYqb12JGNVDoYvMD`, script at `scratchpad/diag/fills.py`): each STATED_FILL link (feed against statement), and the statement fills booked with no feed record. Real figures come to me only.
-   - Next:
-     - Find each wrong pairing's form and shape.
-     - Add it to the stand-in from the recorded form (brief 76/77), with a test that fails.
-     - Fix it, then re-bless and run the gate again.
-   - Tell the Architect the cause by form and shape, with no figures.
+   - **Diagnosed** (before/after diff of a copy, script `scratchpad/diag/changed.py`; 174 records changed):
+     1. The supersede takes the statement's cash for coin fills, but the statement's coin cash is before Wealthsimple's fee and the feed's amount is what moved. 13 fills in Ponzi; Ponzi agreed before.
+     2. The omitted-fill booking takes fills the feed does list but under a security not called by the statement's symbol: ~140 QNC/CLS fills in Trading, plus 2 BTC sales in Ponzi whose units and cash differ.
+     3. `book.store` under 2.10.9's `fill_key` restores the records 2.10.10 took back (156 came back live).
+     4. In the walk, `fills_of` runs before (b)'s pre-pass and changes a currency that agreed.
+   - **Proposed to the Architect:** shelve #633 and redesign (c):
+     - the fills step never changes a currency an account agrees in;
+     - a statement fill is taken only where it makes the walk's month close;
+     - a taken-back record is never restored by a store;
+     - the new shapes come from recorded forms (a capture of the feed's own form of the QNC security is needed first).
+   - Awaiting their call. The owner stays on 2.10.12, which (c) isn't needed for.
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
 ### Delegated
