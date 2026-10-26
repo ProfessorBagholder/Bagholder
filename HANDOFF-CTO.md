@@ -25,8 +25,8 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 ## 2. Where things stand (2026-10-26 ~21:00 UTC, written by the home-server CTO session)
 
 ### Released, newest first (`gh release list` is the truth)
-- **v2.10.12** (#629, merge a446c1a2): a booking the statements walk made from a statement, which the feed now states, is withdrawn (`withdraw_stated_by_the_feed`, before `restore_withdrawn`). Every kept row is paired with all the account's transactions in the kept months' span, feed first, and only a booking left unpaired is withdrawn. The gate on a copy of the owner's book: the walk withdrew 5 bookings, and the USD 🚀 Trading line was gone with nothing new or worse. Published 20:04, Latest, 8 assets.
-- **v2.10.11** (#624): a pending card spend (`SPEND`/`PREPAID`) holds its amount. The owner's CAD 💰Cash line cleared.
+- **v2.10.12** (#629, merge a446c1a2): a booking the statements walk made from a statement, which the feed now states, is withdrawn (`withdraw_stated_by_the_feed`, before `restore_withdrawn`). Every kept row is paired with all the account's transactions in the kept months' span, feed first, and only a booking left unpaired is withdrawn. The gate on a copy of the owner's book: the walk withdrew 5 bookings, and the USD line was gone with nothing new or worse. Published 20:04, Latest, 8 assets.
+- **v2.10.11** (#624): a pending card spend (`SPEND`/`PREPAID`) holds its amount. The owner's CAD line cleared.
 - **v2.10.10** (#622): takes back 2.10.9.
 
 ### Merged today without a release
@@ -41,23 +41,24 @@ After 2.10.12's first sync the header should be empty. Never say "fixed" until t
 ### Brief 77, what is left, in order
 1. **#631 (§4, the gated rederive): merged** (730abe16), no release.
 2. **#632: merged** (b9017f9c), no release; it ships with (c).
-3. **#633 = (c), head 30ae5be8, branch `statement-fills` (worktree `fills`), now based on master. Version 2.10.13. Do NOT merge or release.**
-   - **The gate on the owner's book FAILED** (2026-10-26 22:18).
-     - Gone: the USD 🚀 Trading line (the five duplicates withdrawn).
-     - New: CAD cash in 🚀 Trading (book well over stated), CAD cash in 📉 Ponzi (book over a stated 0), and a BTC sale in 📉 Ponzi selling more than held.
-     - The walk: fills 15, withdrawn 5.
-   - So some of the 15 statement fills are wrong for the owner's real rows, in shapes the stand-in lacks.
-   - **Diagnosed** (before/after diff of a copy, script `scratchpad/diag/changed.py`; 174 records changed):
-     1. The supersede takes the statement's cash for coin fills, but the statement's coin cash is before Wealthsimple's fee and the feed's amount is what moved. 13 fills in Ponzi; Ponzi agreed before.
-     2. The omitted-fill booking takes fills the feed does list but under a security not called by the statement's symbol: ~140 QNC/CLS fills in Trading, plus 2 BTC sales in Ponzi whose units and cash differ.
-     3. `book.store` under 2.10.9's `fill_key` restores the records 2.10.10 took back (156 came back live).
-     4. In the walk, `fills_of` runs before (b)'s pre-pass and changes a currency that agreed.
-   - **Proposed to the Architect:** shelve #633 and redesign (c):
-     - the fills step never changes a currency an account agrees in;
-     - a statement fill is taken only where it makes the walk's month close;
-     - a taken-back record is never restored by a store;
-     - the new shapes come from recorded forms (a capture of the feed's own form of the QNC security is needed first).
-   - Awaiting their call. The owner stays on 2.10.12, which (c) isn't needed for.
+3. **#633 = (c): CLOSED unmerged.** The canary on the owner's book held it; the closing comment states the four causes by rule, with no figures. Branch `statement-fills` kept on origin for reference (`delivery()`, the recorded `contract_of`, the take-back run once); worktree `fills`.
+   - **The causes, by rule** (from a before/after diff of a read-only copy; script `scratchpad/diag/changed.py`):
+     1. The supersede took the statement's cash for coin fills, but a coin fill's statement cash is before Wealthsimple's fee, and the feed's amount is the cash that moved.
+     2. The omitted-fill booking took fills the feed does list: where the feed's share security isn't called by the statement's symbol, and where a coin fill's units and cash both differ.
+     3. `book.store` under 2.10.9's `fill_key` restored the records 2.10.10 took back.
+     4. In the walk, `fills_of` ran before (b)'s pre-pass and changed a currency that agreed.
+   - **The Architect's redesign (2026-10-26):**
+     1. The statement's cash never supersedes the feed's. `FeeFolded` (invented) goes, replaced by the recorded coin forms (the fill before the fee, with "Fee charged $F" where written). 2.10.8's units supersede stays.
+     2. (c) = identity pairing as a MATCHING rule only, inside `match_rows`: a statement fill row pairs with the feed's fill of the same side, security and units on the row's day or within the posting window, whatever the cash. Nothing booked or superseded from it; a month closes by its balances as now. The golden should show header lines leaving with no figure moving.
+     3. Guards: the fills step after the pre-pass and only for currencies still differing; a statement row booked only where the month then closes; a book rule, with its own test, that a record a take-back removed is never made live by a store under its key.
+     4. Captures first, from recorded forms only: how the feed names a share security the statement calls by its symbol (`names_it` failed on two such), against the positions; and the coin fill forms.
+   - **Sequence:**
+     1. The captures (running: Mac session `session_015LhdFuMLzkaUUA2GYSesSj`, script `scratchpad/diag/capture.py`; real names and figures come to this session only).
+     2. The two shapes in the generator.
+     3. The twelve-seed sweep on 2.10.12's walk, showing the stops.
+     4. The matching rule, with the sweep clean and the golden diff all header lines.
+     5. The canary, then the release.
+   - **Never** name the owner's securities, coins or account nicknames in this file, a commit, a PR or an issue: the repository is public (a push naming two of them was caught and replaced on 2026-10-26).
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
 ### Delegated
