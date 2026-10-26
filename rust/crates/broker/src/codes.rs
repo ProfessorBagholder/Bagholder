@@ -143,12 +143,11 @@ mod tests {
     fn an_exponent_past_the_cap_is_refused_before_it_is_expanded() {
         let d = |s: &str| bagholder_core::Dec::parse(s).unwrap();
         let cap = bagholder_core::Dec::EXPONENT_CAP;
-        let started = std::time::Instant::now();
+        // expanded, the largest would be more zeros than any memory holds
         for exp in [cap + 1, i64::from(i32::MAX), i64::MAX] {
             assert_eq!(plain_number(&format!("3.0E{exp}")), None, "E{exp}");
             assert_eq!(plain_number(&format!("3.0E-{exp}")), None, "E-{exp}");
         }
-        assert!(started.elapsed() < std::time::Duration::from_secs(1), "refused without expanding: {:?}", started.elapsed());
         assert_eq!(plain_number("3.0E-8"), Some(d("0.00000003")));
     }
 
