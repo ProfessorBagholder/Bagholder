@@ -61,6 +61,8 @@ fn figures(seed: u64) -> Value {
         header.extend(crate::status::unreconciled(e, &report.statements.unreconciled));
         header.extend(crate::status::feed_only(e, &report.statements.feed_only));
         header.extend(crate::status::unread_rows(inputs));
+        // the lines, not their order, which differs from one opening to the next
+        header.sort();
         json!({"accounts": accounts, "header": header})
     })
     .unwrap()
