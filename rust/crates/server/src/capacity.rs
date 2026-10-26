@@ -1407,7 +1407,24 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert!(unlinked.iter().all(|t| t == "ASSET_MOVEMENT"), "{unlinked:?}");
-        assert_eq!(n("SELECT count(*) FROM instruments i WHERE NOT EXISTS (SELECT 1 FROM instrument_sightings s JOIN source_records r ON r.id = s.record_id WHERE s.instrument_id = i.id AND r.source = 'wealthsimple')"), 0, "the import named an instrument the feed did not");
+        // every instrument is one the feed names, or a purchase the feed does not
+        // list, which a statement books, named as the broker describes the holding:
+        // the import names none
+        let unnamed: Vec<String> = c
+            .prepare(
+                "SELECT i.kind || ' named by ' || coalesce(group_concat(DISTINCT r.source), 'no record') FROM instruments i
+                   LEFT JOIN transactions t ON t.instrument_id = i.id LEFT JOIN source_records r ON r.id = t.record_id
+                  WHERE NOT EXISTS (SELECT 1 FROM instrument_sightings s JOIN source_records q ON q.id = s.record_id WHERE s.instrument_id = i.id AND q.source = 'wealthsimple')
+                    AND NOT (EXISTS (SELECT 1 FROM transactions x JOIN source_records q ON q.id = x.record_id WHERE x.instrument_id = i.id AND q.source = 'wealthsimple-statement')
+                         AND (EXISTS (SELECT 1 FROM instruments_described d WHERE d.instrument_id = i.id) OR EXISTS (SELECT 1 FROM option_terms o WHERE o.instrument_id = i.id)))
+                  GROUP BY i.id",
+            )
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(unnamed.is_empty(), "the import named an instrument the feed did not: {unnamed:?}");
     }
 
     /// A pull reaches the figures in one write: its rows and the statements read
