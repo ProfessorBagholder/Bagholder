@@ -2,6 +2,7 @@
 // then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.
 
 import type { ImportReport } from './model_api'
+import type { AgentsStatus } from './agents'
 
 export type NotifySettings = { fills: boolean, problems: boolean, connection: boolean, updates: boolean, releasesHeld: boolean, releasesWatched: boolean, releasesAll: boolean, disclosuresHeld: boolean, disclosuresWatched: boolean, disclosuresAll: boolean, };
 
@@ -57,7 +58,12 @@ imported: Imported | null,
 /**
  * The language model's file while it downloads, and how far it has come.
  */
-modelDownload: ModelDownload | null, };
+modelDownload: ModelDownload | null, 
+/**
+ * The agents' address: on or off, its tunnel, the sign-ins waiting on the
+ * person, and every agent that may read (`http::agents`).
+ */
+agents: AgentsStatus, };
 
 export type StatusAnswer = { 
 /**
@@ -81,4 +87,9 @@ imported: Imported | null,
 /**
  * The language model's file while it downloads, and how far it has come.
  */
-modelDownload: ModelDownload | null, };
+modelDownload: ModelDownload | null, 
+/**
+ * The agents' address: on or off, its tunnel, the sign-ins waiting on the
+ * person, and every agent that may read (`http::agents`).
+ */
+agents: AgentsStatus, };

@@ -15,6 +15,7 @@
 //! machine; a body is never cut at a size. Routes that answer once are given
 //! `ROUTE_TIMEOUT`; the three that stream are not.
 
+pub(crate) mod agents;
 pub(crate) mod assets;
 mod error;
 mod extract;
@@ -257,6 +258,7 @@ pub fn route_table() -> Vec<RouteEntry> {
     t.extend(orders::routes().table);
     t.extend(markets::routes().table);
     t.extend(model::routes().table);
+    t.extend(agents::routes().table);
     t
 }
 
@@ -284,6 +286,7 @@ pub fn router(state: AppState) -> Router {
         .merge(orders::routes().router)
         .merge(session::routes().router)
         .merge(notifications::routes().router)
+        .merge(agents::routes().router)
         .route("/api/events/watch", post(stream::watch))
         .route("/api/events/resync", post(stream::resync))
         .layer(axum::middleware::from_fn(conditional))

@@ -5,6 +5,7 @@
 //! takes, what runs in the background, and how it stops. The HTTP server is
 //! `http`.
 
+mod agents;
 mod app;
 mod capacity;
 mod logfile;
@@ -270,6 +271,9 @@ fn serve() -> i32 {
     };
     *a.port.lock().unwrap() = port;
     app::note_home_port(port);
+    // the agents' address, on again when the person left it on: its reads go to
+    // this server's own port, known from here (docs/plans/agents-from-anywhere.md)
+    http::agents::open(&a, runtime.handle());
     // started and answering: the copies a migration kept of the stores are only for
     // putting a failed update back, which the updater does inside its window, so with
     // no update waiting on this start they go (brief 19, change 11)
@@ -339,6 +343,8 @@ fn serve() -> i32 {
     if let Err(e) = runtime.block_on(http::serve(listener, http::AppState { app: a.clone() })) {
         log(&format!("bagholder: the server stopped: {}", e));
     }
+    // the agents' address closes and its tunnel stops with the server
+    a.agents.switch_off();
     // a producer thread still writing to a stream that has gone is not waited for
     runtime.shutdown_background();
     a.exit_code.load(std::sync::atomic::Ordering::SeqCst)
@@ -403,6 +409,11 @@ fn main() {
                 std::process::exit(1);
             }
         }
+    }
+    // an agents' tunnel, run as this guard's child and ended with the server that
+    // started it (docs/plans/agents-from-anywhere.md, §4.4)
+    if args.first().map(String::as_str) == Some("tunnel-guard") {
+        std::process::exit(agents::tunnel::guard(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("source-health") {
         std::process::exit(read_sources::cli_health(&args[1..]));

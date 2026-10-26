@@ -25,11 +25,14 @@ pub struct Clearing {
     /// The watched listings and the tile row, and the notifications, what their
     /// streams met, and their settings.
     pub following: bool,
+    /// The agents reaching the book from elsewhere: their clients, sign-ins,
+    /// grants, keys and log, and the agents' settings.
+    pub agents: bool,
 }
 
 impl Clearing {
     pub fn all() -> Clearing {
-        Clearing { broker: true, entries: true, journal: true, market: true, orders: true, following: true }
+        Clearing { broker: true, entries: true, journal: true, market: true, orders: true, following: true, agents: true }
     }
 }
 
@@ -55,6 +58,8 @@ pub enum Holds {
     /// The record's change log (migration 028): what a clear deletes is logged
     /// like any write, and the build after it drops what it built from.
     Changes,
+    /// Who may read through the agents-only address, and what each read (migration 41).
+    Agents,
 }
 
 /// Every table of the book and what it holds. A table missing here fails a test.
@@ -130,6 +135,12 @@ pub const TABLES: &[(&str, Holds)] = &[
     // for (`push.vapid`, a setting): the browser's tie to this copy, not data the
     // person sees, kept through every clear as the browser keeps its side of it
     ("push_subscriptions", Holds::Settings),
+    ("agent_clients", Holds::Agents),
+    ("agent_requests", Holds::Agents),
+    ("agent_grants", Holds::Agents),
+    ("agent_tokens", Holds::Agents),
+    ("agent_keys", Holds::Agents),
+    ("agent_reads", Holds::Agents),
     ("schema_migrations", Holds::Schema),
     ("ledger_changes", Holds::Changes),
     // the sightings whose names are due to be settled: empty after every commit
@@ -225,6 +236,12 @@ impl Book {
                     "DELETE FROM watched; DELETE FROM tiles; DELETE FROM settings WHERE key = 'tiles.chosen';
                      DELETE FROM notifications; DELETE FROM told; DELETE FROM settings WHERE key LIKE 'notify.%';",
                 )?;
+            }
+            if what.agents {
+                for t in crate::agents::TABLES {
+                    c.execute(&format!("DELETE FROM {t}"), [])?;
+                }
+                c.execute("DELETE FROM settings WHERE key LIKE 'agents.%'", [])?;
             }
             self.clear_unnamed()?;
             // what the records left state of their ids

@@ -734,6 +734,37 @@ fn send(
     send_into(method, url, headers, body, timeout, lenient, once, None).map(|(r, _)| r)
 }
 
+/// One `GET` of an https `url` from the address `to` alone: the name is never
+/// resolved again, so a second answer for it cannot move the request elsewhere; it
+/// is checked for TLS and sent as `Host`. Nothing is pooled, no proxy is used, and
+/// no redirect is followed (the redirect is the answer). The body is at most
+/// `ceiling` bytes. For a fetch whose address was checked before it was made: an
+/// agent's metadata document, and the agents' address asked from outside
+/// (`docs/plans/agents-from-anywhere.md`, §2.1 and §4.4).
+pub fn get_at(to: std::net::SocketAddr, url: &str, headers: &[(&str, &str)], timeout: Duration, ceiling: u64) -> Result<Response, Error> {
+    let u = parse_url(url)?;
+    if !u.tls {
+        return Err(Error::Transport(format!("{url} is not https")));
+    }
+    leaving("GET", &u)?;
+    let tcp = TcpStream::connect_timeout(&to, timeout).map_err(transport)?;
+    tcp.set_read_timeout(Some(timeout)).map_err(transport)?;
+    tcp.set_write_timeout(Some(timeout)).map_err(transport)?;
+    let tls = connector()?.connect(&u.host, tcp).map_err(|e| Error::Transport(e.to_string()))?;
+    let mut c = Conn::Tls(Box::new(tls));
+    let host_header = if u.port == 443 { u.host.clone() } else { format!("{}:{}", u.host, u.port) };
+    let mut req = format!("GET {} HTTP/1.1\r\nHost: {}\r\nAccept-Encoding: identity\r\nConnection: close\r\n", u.path, host_header);
+    for (k, v) in headers {
+        req.push_str(&format!("{k}: {v}\r\n"));
+    }
+    req.push_str("\r\n");
+    c.write_all(req.as_bytes()).and_then(|_| c.flush()).map_err(transport)?;
+    let head = read_head(&mut c).and_then(|(raw, _)| parse_head(&raw))?;
+    let mut raw: Vec<u8> = Vec::new();
+    read_body(&mut c, &head, &mut Capped::new(&mut raw, ceiling))?;
+    Ok(Response { status: head.status, body: decoded(raw, &head.headers)?, headers: head.headers.clone() })
+}
+
 /// Where a download's body goes: the file, how large it may be, and the hosts it
 /// may come from, asked of every hop of a redirect.
 struct ToFile<'a> {

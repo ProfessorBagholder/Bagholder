@@ -52,6 +52,9 @@ pub struct Status {
     pub imported: Option<crate::csv_import::Imported>,
     /// The language model's file while it downloads, and how far it has come.
     pub model_download: Option<ModelDownload>,
+    /// The agents' address: on or off, its tunnel, the sign-ins waiting on the
+    /// person, and every agent that may read (`http::agents`).
+    pub agents: crate::http::agents::AgentsStatus,
 }
 
 /// The language model's file downloading: the bytes written of its pinned size.
@@ -170,6 +173,7 @@ pub fn status(app: &Arc<App>) -> Status {
         imported: st.imported.clone(),
         model_download: bagholder_market::localmodel::downloading().map(|(received, size)| ModelDownload { received, size }),
         notify: notify_status,
+        agents: crate::http::agents::status(app),
     }
 }
 

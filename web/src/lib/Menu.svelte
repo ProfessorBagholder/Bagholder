@@ -2,7 +2,7 @@
   import { status as statusSlot } from './subs.svelte'
   import { ICONS } from './icons'
   import { THEMES, theme, applyTheme } from './theme.svelte'
-  import { ui, syncNow, refreshSession, connect, disconnect, openTradeModal, importCsv, openFolder, exportCsv, openData } from './ui.svelte'
+  import { ui, syncNow, refreshSession, connect, disconnect, openTradeModal, importCsv, openFolder, exportCsv, openData, openAgents } from './ui.svelte'
   import { channel, notifyDead, notifyOn, notifySubscribed, notifyTest, notifyToggle, turnOn } from './notes/channel.svelte'
 
   const status = $derived(statusSlot.data)
@@ -31,6 +31,7 @@
     channel() === 'unavailable' ? 'Unavailable' : channel() === 'denied' ? 'Blocked' : NOTIFY_KINDS.concat(NOTIFY_SCOPES, NOTIFY_RELEASE_SCOPES).some((k) => notifyOn(k[0])) ? 'On' : 'Off',
   )
   const themeWord = $derived((THEMES.find((t) => t[0] === theme.name) || THEMES[0])[1])
+  const agentsWord = $derived(!status?.agents?.on ? 'Off' : status.agents.waiting.length ? 'Asking' : status.agents.ready?.state === 'ready' ? 'Ready' : 'On')
 </script>
 
 <div class="menu elev-md">
@@ -80,6 +81,7 @@
       </div>
     {/if}
   </div>
+  <button onclick={openAgents}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.link} /></svg>Agents<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">{agentsWord}</span><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.5"><path d={ICONS.caret} /></svg></button>
   <div class="sep"></div>
   <button style={status?.connected || status?.email ? 'color:var(--neg)' : undefined} disabled={!status?.connected && !status?.email} onclick={disconnect}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.signout} /></svg>Disconnect</button>
 </div>

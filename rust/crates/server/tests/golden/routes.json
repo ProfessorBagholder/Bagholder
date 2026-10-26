@@ -47,6 +47,40 @@
       "importing": null,
       "imported": null,
       "modelDownload": null,
+      "agents": {
+        "on": false,
+        "port": null,
+        "setup": null,
+        "address": "",
+        "programs": [
+          {
+            "provider": "tailscale",
+            "path": "<this machine's>"
+          },
+          {
+            "provider": "cloudflare",
+            "path": "<this machine's>"
+          },
+          {
+            "provider": "ngrok",
+            "path": "<this machine's>"
+          },
+          {
+            "provider": "zrok",
+            "path": "<this machine's>"
+          }
+        ],
+        "tunnel": {
+          "running": null,
+          "command": [],
+          "lines": [],
+          "exited": null
+        },
+        "ready": null,
+        "waiting": [],
+        "connected": [],
+        "error": ""
+      },
       "dataVersion": "exposures:0|filings:0|news:0|universes:0|<today>",
       "coreVersion": "exposures:0|filings:0|news:0|universes:0|<today>"
     }

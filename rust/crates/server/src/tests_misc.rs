@@ -862,9 +862,9 @@ fn every_copy_the_repository_starts_on_another_folder_ends_with_its_starter() {
         let lines: Vec<&str> = text.lines().collect();
         let mut out = Vec::new();
         for (n, l) in lines.iter().enumerate() {
-            if l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"") {
+            if l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"") || l.contains("\"tunnel-guard\".into()") {
                 let window = lines[n.saturating_sub(12)..(n + 13).min(lines.len())].join("\n");
-                if !window.contains("BAGHOLDER_EXIT_WITH") {
+                if !window.contains("BAGHOLDER_EXIT_WITH") && !window.contains("exit_with::VAR") {
                     out.push(format!("{}: {}", n + 1, l.trim()));
                 }
             }
@@ -875,7 +875,8 @@ fn every_copy_the_repository_starts_on_another_folder_ends_with_its_starter() {
     assert_eq!(missing("BAGHOLDER_HOME=/tmp/x target/release/bagholder").len(), 1);
     assert!(missing("BAGHOLDER_EXIT_WITH=$PPID BAGHOLDER_HOME=/tmp/x target/release/bagholder").is_empty());
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let mut files = vec![root.join("CLAUDE.md"), root.join("rust/crates/server/src/capacity.rs")];
+    // and an agents' tunnel, through its guard (docs/plans/agents-from-anywhere.md, §4.4)
+    let mut files = vec![root.join("CLAUDE.md"), root.join("rust/crates/server/src/capacity.rs"), root.join("rust/crates/server/src/agents/tunnel.rs")];
     for dir in ["web/e2e", ".github/workflows"] {
         for e in std::fs::read_dir(root.join(dir)).unwrap() {
             let p = e.unwrap().path();
@@ -887,10 +888,10 @@ fn every_copy_the_repository_starts_on_another_folder_ends_with_its_starter() {
     let mut starts = 0;
     for f in &files {
         let text = std::fs::read_to_string(f).unwrap();
-        starts += text.lines().filter(|l| l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"")).count();
+        starts += text.lines().filter(|l| l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"") || l.contains("\"tunnel-guard\".into()")).count();
         let m = missing(&text);
         assert!(m.is_empty(), "{} starts a copy that names no BAGHOLDER_EXIT_WITH: {m:?}", f.display());
     }
-    assert!(starts >= 3, "the scratch command, the browser tests' server and the capacity probes: {starts}");
+    assert!(starts >= 4, "the scratch command, the browser tests' server, the capacity probes and the tunnel's guard: {starts}");
 }
 

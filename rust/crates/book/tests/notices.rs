@@ -24,7 +24,7 @@ fn clearing_what_the_person_follows_empties_the_notices() {
         .unwrap();
     f.book.set_setting(SETTINGS, Some("{\"fills\":true}"), t0()).unwrap();
     f.book.set_setting(&format!("{SEEN}news:QNC@TSX"), Some("2026-09-02|a"), t0()).unwrap();
-    f.book.clear(&Clearing { broker: true, entries: true, journal: true, market: true, orders: true, following: false }).unwrap();
+    f.book.clear(&Clearing { broker: true, entries: true, journal: true, market: true, orders: true, following: false, agents: false }).unwrap();
     assert_eq!(count(&f.book, "notifications"), 2, "only Settings clears them");
     f.book.clear(&Clearing { following: true, ..Clearing::default() }).unwrap();
     for t in ["notifications", "told"] {

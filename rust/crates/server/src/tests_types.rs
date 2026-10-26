@@ -160,7 +160,7 @@ fn status_declarations() -> String {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
     let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::PushStatus, crate::notify::NotifyStatus, crate::csv_import::Importing, crate::csv_import::Imported, crate::status::ModelDownload, crate::status::Status, crate::status::StatusAnswer];
-    let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\nimport type { ImportReport } from './model_api'\n\n");
+    let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\nimport type { ImportReport } from './model_api'\nimport type { AgentsStatus } from './agents'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -179,6 +179,38 @@ fn test_the_pages_status_types_are_the_servers() {
     }
     let have = std::fs::read_to_string(&path).unwrap_or_default();
     assert!(have == want, "web/src/lib/generated/status.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
+}
+
+/// The Agents panel's types, generated to `web/src/lib/generated/agents.ts`
+/// (`docs/plans/agents-from-anywhere.md`, §4).
+fn agents_declarations() -> String {
+    use crate::agents::approve::*;
+    use crate::agents::tunnel::*;
+    use crate::http::agents::*;
+    let config = ts_rs::Config::new().with_large_int("number");
+    macro_rules! decls {
+        ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
+    }
+    let decls: Vec<String> = decls![Provider, Setup, TunnelState, Ready, Waiting, Connected, ProgramFound, AgentsStatus, SwitchAsked, AgentId, KeyAsked, MadeKey, LogAsked, LogLine, AgentLog];
+    let mut out = String::from("// Generated from the server's agents module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_agents_types`.\n\n");
+    for d in decls {
+        out.push_str("export ");
+        out.push_str(d.trim());
+        out.push_str("\n\n");
+    }
+    out.trim_end().to_string() + "\n"
+}
+
+#[test]
+fn test_the_pages_agents_types_are_the_servers() {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../../web/src/lib/generated/agents.ts");
+    let want = agents_declarations();
+    if std::env::var("BAGHOLDER_BLESS").map_or(false, |v| v == "1") {
+        std::fs::write(&path, &want).unwrap();
+        return;
+    }
+    let have = std::fs::read_to_string(&path).unwrap_or_default();
+    assert!(have == want, "web/src/lib/generated/agents.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
 }
 
 /// The notification list's own types, generated to `web/src/lib/generated/notifications.ts`
@@ -331,6 +363,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "HistoryAnswer" | "HistoryQuery" => "chart",
         "TradesDoc" | "Detail" | "Details" => "figures",
         "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" => "model_api",
+        "SwitchAsked" | "Setup" | "AgentId" | "KeyAsked" | "MadeKey" | "LogAsked" | "AgentLog" => "agents",
         other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
     }
 }

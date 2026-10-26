@@ -33,6 +33,9 @@ pub enum Kind {
     Settings,
     /// The saved Wealthsimple login (`session.json`).
     Login,
+    /// The agents reaching the book from elsewhere: who may read, their keys and
+    /// their log, and the agents' settings. The agents' address closes with them.
+    Agents,
 }
 
 /// A table of the market cache, and what it holds.
@@ -116,7 +119,7 @@ impl std::fmt::Display for Refused {
 
 /// The book's part of the kinds ticked.
 pub fn book_clearing(kinds: &[Kind]) -> Clearing {
-    Clearing { broker: kinds.contains(&Kind::Broker), entries: kinds.contains(&Kind::Entries), journal: kinds.contains(&Kind::Journal), market: kinds.contains(&Kind::Market), orders: kinds.contains(&Kind::Orders), following: kinds.contains(&Kind::Settings) }
+    Clearing { broker: kinds.contains(&Kind::Broker), entries: kinds.contains(&Kind::Entries), journal: kinds.contains(&Kind::Journal), market: kinds.contains(&Kind::Market), orders: kinds.contains(&Kind::Orders), following: kinds.contains(&Kind::Settings), agents: kinds.contains(&Kind::Agents) }
 }
 
 /// Empty the market cache's tables and `meta` keys of `kinds`, in one transaction.
@@ -172,6 +175,10 @@ pub fn clear(app: &Arc<App>, f: &Figures, kinds: &[Kind], now: bagholder_core::j
     if kinds.contains(&Kind::Login) {
         crate::session::delete_session(app).map_err(Refused::Failed)?;
     }
+    if kinds.contains(&Kind::Agents) {
+        // the address closes and its tunnel stops: nothing is left to answer an agent
+        app.agents.switch_off();
+    }
     if kinds.contains(&Kind::Broker) {
         let mut st = app.state.lock().unwrap();
         st.last_sync.clear();
@@ -192,7 +199,7 @@ mod tests {
     use bagholder_book::clear::{Holds, TABLES};
     use std::collections::BTreeMap;
 
-    const ALL: [Kind; 7] = [Kind::Broker, Kind::Entries, Kind::Journal, Kind::Market, Kind::Orders, Kind::Settings, Kind::Login];
+    const ALL: [Kind; 8] = [Kind::Broker, Kind::Entries, Kind::Journal, Kind::Market, Kind::Orders, Kind::Settings, Kind::Login, Kind::Agents];
 
     fn now() -> bagholder_core::jiff::Timestamp {
         "2025-11-19T21:30:00Z".parse().unwrap()
@@ -282,6 +289,19 @@ mod tests {
         let read = book.broker_read(book.connections().unwrap()[0].id, "margin-rates", t).unwrap();
         book.store_margin_rates(account, t, &[(bagholder_core::Currency::CAD, bagholder_core::Dec::parse("0.0495").unwrap())].into(), &read).unwrap();
         book.set_setting("watch.folder", Some("/somewhere"), t).unwrap();
+        // an agent signed in, a key made, and a read of each, made up
+        {
+            let a = f.book().unwrap().agents();
+            let client = bagholder_book::agents::Client { id: "https://agent.example/client.json".into(), metadata: true, name: "An agent".into(), redirect_uris: vec!["https://agent.example/cb".into()], made_at: t, approved: false };
+            a.keep_client(&client, 20).unwrap();
+            let r = bagholder_book::agents::NewRequest { id: "req-1", code: "ABCDEF", client_id: &client.id, who: "agent.example", redirect_uri: "https://agent.example/cb", state: None, challenge: "c", resource: "https://example.ts.net/mcp", };
+            assert!(a.add_request(&r, t, 5).unwrap());
+            a.add_grant("grant-1", &client.id, "An agent", "agent.example", "https://example.ts.net/mcp", t).unwrap();
+            a.add_token(&[1; 32], false, "grant-1", t).unwrap();
+            a.add_key("key-1", "Grok Bot", "mcp", &[2; 32], t).unwrap();
+            a.log(&bagholder_book::agents::Read { agent: "key-1".into(), at: t, tool: Some("trades".into()), arguments: Some("{}".into()), refusal: None }).unwrap();
+            a.set_setting("agents.on", Some("1"), t).unwrap();
+        }
         // a browser subscribed to this copy's pushes
         book.keep_push_subscription("https://push.example/sub", "BAAA", "AAAA", t).unwrap();
         // a debt the broker's net worth feature states, and the person's word on a payee
@@ -475,6 +495,7 @@ mod tests {
                     Holds::Broker => kind == Kind::Broker,
                     Holds::Journal => kind == Kind::Journal,
                     Holds::Market => kind == Kind::Market,
+                    Holds::Agents => kind == Kind::Agents,
                     _ => continue,
                 };
                 if own && *t == "trades" {

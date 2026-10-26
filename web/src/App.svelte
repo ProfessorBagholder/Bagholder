@@ -24,8 +24,9 @@
   import Menu from './lib/Menu.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import LoginView from './lib/LoginView.svelte'
-  import { cancelConnect, closeNotice, showing, tell, followConnect, loginInput, quiet, updateNow } from './lib/ui.svelte'
+  import { cancelConnect, closeNotice, showing, tell, followConnect, loginInput, quiet, updateNow, openAgents } from './lib/ui.svelte'
   import Modals from './lib/Modals.svelte'
+  import AgentsPanel from './lib/AgentsPanel.svelte'
   import { ui } from './lib/ui.svelte'
   import { resetFilters } from './lib/filters.svelte'
   import OrderTicket from './lib/ticket/OrderTicket.svelte'
@@ -457,6 +458,10 @@
           <a href={status.updateUrl || '#'} target="_blank" rel="noopener" style="font-size:11px;margin-left:8px;color:var(--accent-300);text-decoration:none">{status.updateBy === 'image' ? status.latestVersion + ' image available' : 'Update available'}</a>
         {/if}
       {/if}
+      <!-- a sign-in waiting on the person, as an update on offer waits (docs/plans/agents-from-anywhere.md §3) -->
+      {#if status?.agents?.waiting?.length}
+        <button class="pill" style="font-size:11px;margin-left:8px;padding:1px 8px;width:auto;color:var(--accent-300)" onclick={openAgents}>An agent is asking · {status.agents.waiting[0].code}</button>
+      {/if}
     </div>
     <div style="margin-left:auto;display:flex;align-items:center;gap:12px;min-width:0">
       <!-- one line whatever it says: text past the room it has is cut, and read whole in the tip -->
@@ -577,4 +582,4 @@
   {#if ui.notesOpen}<NotesPanel onclose={() => (ui.notesOpen = false)} />{/if}
   {#if ui.loginView}<LoginView />{/if}
   {#if ui.confirm}<ConfirmDialog />{/if}
-  {#if ui.modal}<Modals />{/if}
+  {#if ui.modal === 'agents'}<AgentsPanel />{:else if ui.modal}<Modals />{/if}

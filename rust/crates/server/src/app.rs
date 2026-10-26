@@ -304,6 +304,8 @@ pub struct App {
     /// row), which the book keeps: the Markets tab's documents read it
     /// (`following`).
     following: std::sync::atomic::AtomicU64,
+    /// The agents' address: off, or its listener and tunnel (`agents`).
+    pub agents: crate::agents::Agents,
 }
 
 impl App {
@@ -360,6 +362,7 @@ impl App {
             pull_asked: AtomicBool::new(false),
             fill_waits: Mutex::new(std::collections::BTreeMap::new()),
             following: std::sync::atomic::AtomicU64::new(0),
+            agents: crate::agents::Agents::default(),
         })
     }
 

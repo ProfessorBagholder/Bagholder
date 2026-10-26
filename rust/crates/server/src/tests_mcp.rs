@@ -15,14 +15,19 @@ use crate::mcp::{find, routes, Agents, Found, ReadOnly, TradesArgs};
 
 /// A server on `home`'s book, answering on loopback, holding the folder's lock as
 /// `app::hold_home` and `app::note_home_port` leave it.
-struct Served {
-    port: u16,
+pub(crate) struct Served {
+    pub(crate) port: u16,
     app: Arc<App>,
     _lock: std::fs::File,
     _rt: tokio::runtime::Runtime,
 }
 
 fn served(home: &Path) -> Served {
+    served_for(home)
+}
+
+/// A server on `home`'s book, for the agents' tests too.
+pub(crate) fn served_for(home: &Path) -> Served {
     crate::tests_common::home();
     let app = App::new(home.to_path_buf(), std::path::PathBuf::from("."), "127.0.0.1".into());
     app.set_figures(crate::figures::Figures::open(home, bagholder_core::jiff::Timestamp::now()).unwrap());

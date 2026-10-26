@@ -177,7 +177,7 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
                 // the person's entries cleared alone: the broker's sightings of the
                 // same listings stay, and the sequence goes on
                 11 if rng.below(3) == 0 => {
-                    f.book.clear(&Clearing { broker: false, entries: true, journal: false, market: false, orders: false, following: false }).unwrap();
+                    f.book.clear(&Clearing { broker: false, entries: true, journal: false, market: false, orders: false, following: false, agents: false }).unwrap();
                     if f.book.accounts().unwrap().len() < 2 {
                         // an account only the entries named went with them, and the
                         // connection with it: the sequence ends here
@@ -189,7 +189,7 @@ fn the_names_kept_equal_the_sightings_folded_after_any_writes() {
                 }
                 // the broker's records cleared, or everything
                 11 if n > 30 && rng.below(2) == 0 => {
-                    let what = if rng.below(2) == 0 { Clearing { broker: true, entries: false, journal: false, market: false, orders: false, following: false } } else { Clearing::all() };
+                    let what = if rng.below(2) == 0 { Clearing { broker: true, entries: false, journal: false, market: false, orders: false, following: false, agents: false } } else { Clearing::all() };
                     f.book.clear(&what).unwrap();
                     held(&f, &step);
                     steps_run += 1;
