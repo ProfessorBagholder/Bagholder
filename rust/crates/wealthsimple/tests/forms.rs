@@ -333,7 +333,9 @@ fn each_code_the_made_up_broker_states_now_is_placed_as_the_one_it_replaced() {
 /// The README in the statements' folder lists every recorded form, and only them.
 #[test]
 fn the_readme_lists_every_recorded_form() {
-    let readme = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/replies/wealthsimple-statements/README.md")).unwrap();
+    // by its path from the repository's root, as `tests.yml` names it
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
+    let readme = std::fs::read_to_string(root.join("rust/crates/wealthsimple/tests/replies/wealthsimple-statements/README.md")).unwrap();
     let (_, listed) = readme.split_once("typename | code | form | unit style\n").expect("the README's list");
     let listed: BTreeSet<String> = listed.lines().take_while(|l| !l.starts_with("```")).map(str::to_string).collect();
     let known: BTreeSet<String> = RECORDED.iter().flat_map(|n| forms(&recorded(n))).map(|(t, c, f, u)| format!("{t} | {c} | {f} | {u}")).collect();
