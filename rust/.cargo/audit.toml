@@ -1,0 +1,18 @@
+# Advisories `cargo audit` lets pass, each with why, and when it leaves.
+[advisories]
+ignore = [
+    # zstd 0.13.3, zstd-safe 7.3.0: wreq-util =3.0.0-rc.14's own copy (its `emulation`
+    # feature), used only to compress and decompress TLS certificates
+    # (emulate/compress.rs, stream::Encoder::new and stream::Decoder::new). Every
+    # release of that line takes zstd 0.13; the fixed zstd 0.14.3 is on wreq-util's
+    # next line (0.2, on wreq 0.16; Dependabot PR #130 upstream), and these three
+    # leave with the move to it, a change of its own (2026-10-26).
+    # Data from an abandoned stream on a reused context: only `with_context` reuses one, never called.
+    "RUSTSEC-2026-0391",
+    # `Seekable::decompress`: never called.
+    "RUSTSEC-2026-0398",
+    # Uninitialized memory when streaming decompression of a legacy frame fails: reachable
+    # only by a server the app connects to (a fixed set of hosts) offering a
+    # zstd-compressed certificate in a legacy frame that fails to decode.
+    "RUSTSEC-2026-0403",
+]
