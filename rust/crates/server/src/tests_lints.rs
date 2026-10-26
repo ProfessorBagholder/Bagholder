@@ -5,6 +5,8 @@
 //! that may drop one says why in an `#[expect(.., reason = "..")]` beside it. Clippy
 //! has no lint for the other two forms, so they are scanned for here: an
 //! `if let Ok(..)` on an I/O call with no `else`, and a `_ = ..;` statement.
+//! The same lints refuse an `unsafe` block with no `SAFETY:` comment saying why it
+//! is sound, and a `dbg!`, `todo!` or `unimplemented!` left in.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -14,28 +16,39 @@ fn crates() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("..")
 }
 
-#[test]
-fn test_clippy_refuses_each_form_of_a_discarded_failure() {
+/// Each refusal clippy makes on the fixture crate built with `feature`, by the
+/// lint that made it, in the order the fixture holds them.
+fn refused_by_clippy(feature: &str) -> Vec<String> {
     // the fixture crate, built with its violations, under the workspace's lints; a
     // target folder of its own, so the suite's own build is not waited on
     let target = tempfile::tempdir().unwrap();
     let cargo = std::env::var_os("CARGO").unwrap_or_else(|| "cargo".into());
     let out = Command::new(cargo)
         .current_dir(crates().join(".."))
-        .args(["clippy", "-q", "-p", "bagholder-lint-fixture", "--features", "violations", "--message-format=json", "--target-dir"])
+        .args(["clippy", "-q", "-p", "bagholder-lint-fixture", "--features", feature, "--message-format=json", "--target-dir"])
         .arg(target.path())
         .output()
         .expect("cargo runs");
     let said = String::from_utf8_lossy(&out.stdout);
-    assert!(!out.status.success(), "clippy passed the fixture's violations: the lints are off\n{}", String::from_utf8_lossy(&out.stderr));
-    // each refusal, by the lint that made it
-    let refused: Vec<String> = said
-        .lines()
+    assert!(!out.status.success(), "clippy passed the fixture's {feature}: the lints are off\n{}", String::from_utf8_lossy(&out.stderr));
+    said.lines()
         .filter_map(|l| serde_json::from_str::<serde_json::Value>(l).ok())
         .filter(|m| m["reason"] == "compiler-message" && m["message"]["level"] == "error")
         .filter_map(|m| m["message"]["code"]["code"].as_str().map(str::to_string))
-        .collect();
-    assert_eq!(refused, ["clippy::let_underscore_must_use", "clippy::unused_result_ok", "clippy::disallowed_methods"], "{said}");
+        .collect()
+}
+
+#[test]
+fn test_clippy_refuses_each_form_of_a_discarded_failure() {
+    assert_eq!(refused_by_clippy("violations"), ["clippy::let_underscore_must_use", "clippy::unused_result_ok", "clippy::disallowed_methods"]);
+}
+
+#[test]
+fn test_clippy_refuses_unsafe_without_its_reason_and_code_left_unfinished() {
+    assert_eq!(
+        refused_by_clippy("unfinished"),
+        ["clippy::undocumented_unsafe_blocks", "clippy::dbg_macro", "clippy::todo", "clippy::unimplemented"]
+    );
 }
 
 /// An `if let Ok` whose scrutinee is one of these reaches the disk, the store, a

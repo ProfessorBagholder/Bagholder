@@ -36,6 +36,7 @@ pub struct Fixture {
 impl Drop for Fixture {
     fn drop(&mut self) {
         std::env::remove_var("BAGHOLDER_WS_BASE");
+        #[expect(clippy::let_underscore_must_use, reason = "a test's own folder under the temp folder; one left behind is named for its process and run")]
         let _ = std::fs::remove_dir_all(&self.home.dir);
     }
 }
@@ -83,6 +84,7 @@ fn read_request(stream: &mut std::net::TcpStream) -> Option<Req> {
 pub fn fixture(handler: Box<Handler>) -> Fixture {
     let guard = ENV.lock().unwrap_or_else(|e| e.into_inner());
     let dir: PathBuf = std::env::temp_dir().join(format!("bh-ws-http-{}-{}", std::process::id(), SEQ.fetch_add(1, Ordering::SeqCst)));
+    #[expect(clippy::let_underscore_must_use, reason = "a folder an earlier run left, mostly not there; the create after it fails on what matters")]
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
     let home = Home::new(&dir);
@@ -103,9 +105,8 @@ pub fn fixture(handler: Box<Handler>) -> Fixture {
                     head.push_str(&format!("{}: {}\r\n", k, v));
                 }
                 head.push_str("\r\n");
-                let _ = stream.write_all(head.as_bytes());
-                let _ = stream.write_all(&body);
-                let _ = stream.flush();
+                #[expect(clippy::let_underscore_must_use, reason = "a client gone before its reply has no one to tell; the test reads what it got")]
+                let _ = stream.write_all(head.as_bytes()).and_then(|()| stream.write_all(&body)).and_then(|()| stream.flush());
                 break;
             }
         }
