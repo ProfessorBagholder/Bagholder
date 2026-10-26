@@ -77,11 +77,7 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
 ### Delegated
-- **PR A is #630**, head af63cb12, green, sent to the Architect.
-  - `take_frame` now returns `io::Result`.
-  - `standin.rs` has five `#[expect]` attributes.
-  - CI's clippy doesn't turn on `standin` yet; that's the Architect's call.
-  - Worktree `hard`.
+- **PR A (#630): merged** (cc28ea70), no release. It covers the exponent cap, `take_frame` returning `io::Result`, four clippy denies, and CI's clippy running with `--features bagholder-ws/standin` (the Architect's condition).
 - **PR B** (the wider lints): after brief 77.
 
 ### Other follow-ups
@@ -102,7 +98,7 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 - **Merging.** A merge whose commit writes a new workflow file blob is refused (the token has no `workflow` scope). Merge master into the branch first and push; git pushes are allowed.
 
 ### Workspace
-- Worktrees in this session's scratchpad: `shape` (#632), `hard` (#630), `aa` (agents), `g558` (paused, the owner's call), `ho` (this file).
+- Worktrees in this session's scratchpad: `fills` (closed #633, for reference), `aa` (agents), `g558` (paused, the owner's call), `ho` (this file). Scripts in `diag/`.
 - The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. It was removed at 196 GB on 2026-10-26 because the disk filled; the next build starts cold. Keep it under ~30 GB (`du -sh`), and remove it when the day's branches merge. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, and only the named tests a change touches. The server crate is a bin: `-p bagholder-server --bin bagholder <filter>`.
 
 ### How a release goes (all delegated: Architect clearance + green checks = merge and release)
