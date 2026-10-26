@@ -917,6 +917,15 @@ const WORSE: &str = "it leaves the book agreeing with the broker less than befor
 /// of the derivation before. It is tried again at the next open and after a pull
 /// stores what the broker states. Before a zone is known no figure is built, so
 /// there is nothing to compare, and the records are derived again as they are.
+///
+/// Its principle: it measures the book as the next pull's walk would leave it,
+/// without asking the broker. After the derivation, every record the walk makes
+/// from the book's own kept statements and stored cash is brought to what the
+/// derived records leave unexplained (`restate_walk_records`: today the
+/// statements' bookings and the sides paid), and only then is the book compared.
+/// Otherwise a version that states what the walk had booked in its stead counts
+/// as worse, and is refused at every opening and every pull, as the walk makes
+/// its records again only at a pull. A third kind of such record joins there.
 pub(crate) fn gated_rederive(book: &Book, cache: &MarketCache, at: Timestamp, mappings: &[&dyn bagholder_book::mapping::Mapping]) -> Result<(), String> {
     let zone = book.zone().map_err(err)?;
     let mut refused: Vec<String> = Vec::new();
@@ -931,9 +940,9 @@ pub(crate) fn gated_rederive(book: &Book, cache: &MarketCache, at: Timestamp, ma
         let outcome = book.atomically(|| {
             let before = disagreeing(book, cache, &z.zone, at).map_err(bagholder_book::BookError::Refused)?;
             let changes = book.rederive(*m, at)?;
-            // a statement's booking of what the records now state stands for
-            // nothing: withdrawn first, as a pull's walk withdraws it before it reads
-            let withdrawn = withdraw_stated(book, at)?;
+            // the walk's records brought to what the derived records leave
+            // unexplained, as the next pull's walk would leave them
+            let withdrawn = restate_walk_records(book, at)?;
             let after = disagreeing(book, cache, &z.zone, at).map_err(bagholder_book::BookError::Refused)?;
             let worse: Vec<String> = after.difference(&before).cloned().collect();
             if !worse.is_empty() {
@@ -942,7 +951,7 @@ pub(crate) fn gated_rederive(book: &Book, cache: &MarketCache, at: Timestamp, ma
             Ok((changes, withdrawn))
         });
         match outcome {
-            Ok((changes, withdrawn)) if !changes.is_empty() => crate::app::log(&format!("bagholder: {}'s records derived again under version {}, {withdrawn} statement bookings they now state withdrawn", m.source(), m.version())),
+            Ok((changes, withdrawn)) if !changes.is_empty() => crate::app::log(&format!("bagholder: {}'s records derived again under version {}, {withdrawn} of the walk's records they now state withdrawn", m.source(), m.version())),
             Ok(_) => {}
             Err(bagholder_book::BookError::Refused(why)) if why.starts_with(WORSE) => refused.push(format!("{} version {}: {why}", m.source(), m.version())),
             Err(e) => return Err(format!("{}'s records could not be derived again: {e}", m.source())),
@@ -992,12 +1001,12 @@ pub(crate) fn wealthsimple_keys(book: &Book) -> bagholder_book::Result<Option<Br
     Ok(Some(out))
 }
 
-/// The statements' pre-pass on the book as it stands (`statements::withdraw_stated`):
-/// Wealthsimple's kept statements' bookings that no row needs now, withdrawn.
-fn withdraw_stated(book: &Book, at: Timestamp) -> bagholder_book::Result<usize> {
+/// The walk's records on the book as it stands, brought to what its other records
+/// leave unexplained (`statements::restate_walk_records`), for Wealthsimple.
+fn restate_walk_records(book: &Book, at: Timestamp) -> bagholder_book::Result<usize> {
     let Some(k) = wealthsimple_keys(book)? else { return Ok(0) };
     let reader = bagholder_wealthsimple::adapter::KeptStatements { currencies: k.currencies };
-    bagholder_broker::statements::withdraw_stated(book, &reader, k.connection, &k.keys_of, &k.closed, at)
+    bagholder_broker::statements::restate_walk_records(book, &reader, k.connection, &k.keys_of, &k.closed, at)
 }
 
 /// What the broker check finds differing, by account and currency or instrument,
@@ -2019,9 +2028,16 @@ mod tests {
         Book::open_in(home, crate::app::APP_VERSION, now).unwrap().0
     }
 
+    /// The made-up broker of every shape, and today, after the newest statement,
+    /// two conversions in one account: one whose detail states the side received
+    /// alone, one stating both (which `PaidUnread` reads as the first), so the
+    /// walk's side paid of the day names one or both.
     fn generated(now: Timestamp) -> bagholder_wealthsimple::adapter::Wealthsimple<bagholder_wealthsimple::generated::Generated> {
         let size = bagholder_wealthsimple::generated::Size { accounts: 6, instruments: 12, trades: 40, months: 6, seed: 13, deep: 0 };
-        bagholder_wealthsimple::adapter::Wealthsimple::new(bagholder_wealthsimple::generated::Generated::shaped(size, now.to_zoned(TimeZone::UTC).date(), &bagholder_wealthsimple::generated::SHAPES))
+        let mut g = bagholder_wealthsimple::generated::Generated::shaped(size, now.to_zoned(TimeZone::UTC).date(), &bagholder_wealthsimple::generated::SHAPES);
+        g.convert_today("gen-account-0", 50_000);
+        g.convert_today_stated("gen-account-0", 70_000);
+        bagholder_wealthsimple::adapter::Wealthsimple::new(g)
     }
 
     /// Each account's cash by currency, the account named by the broker's ids

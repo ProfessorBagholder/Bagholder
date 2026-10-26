@@ -333,6 +333,11 @@ pub trait BrokerAdapter {
         let _ = paid;
         None
     }
+    /// A side paid's record (`conversion_paid_record`) read back from its payload.
+    fn paid_of(&self, payload: &Value) -> Option<crate::statements::Paid> {
+        let _ = payload;
+        None
+    }
     /// A fill as the statement states it, in the place of the feed's row for
     /// it: the key and the record.
     fn fill_record(&self, fill: &crate::statements::Fill) -> Option<(String, Value)> {
@@ -343,13 +348,16 @@ pub trait BrokerAdapter {
 
 /// What reading the statements a book keeps needs of a broker, with nothing
 /// asked of it: a kept statement's rows, the record a row is booked as, and the
-/// mapping that derives those records. Every adapter reads them this way; the
-/// server's gate on a new mapping version (`statements::withdraw_stated`) reads
-/// them with no adapter at all.
+/// mapping that derives those records, and the walk's side-paid records written
+/// and read back. Every adapter reads them this way; the server's gate on a new
+/// mapping version (`statements::restate_walk_records`) reads them with no
+/// adapter at all.
 pub trait StatementKeys {
     fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>>;
     fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)>;
     fn statement_mapping(&self) -> Option<&dyn Mapping>;
+    fn conversion_paid_record(&self, paid: &crate::statements::Paid) -> Option<(String, Value)>;
+    fn paid_of(&self, payload: &Value) -> Option<crate::statements::Paid>;
 }
 
 impl<T: BrokerAdapter + ?Sized> StatementKeys for T {
@@ -361,5 +369,11 @@ impl<T: BrokerAdapter + ?Sized> StatementKeys for T {
     }
     fn statement_mapping(&self) -> Option<&dyn Mapping> {
         BrokerAdapter::statement_mapping(self)
+    }
+    fn conversion_paid_record(&self, paid: &crate::statements::Paid) -> Option<(String, Value)> {
+        BrokerAdapter::conversion_paid_record(self, paid)
+    }
+    fn paid_of(&self, payload: &Value) -> Option<crate::statements::Paid> {
+        BrokerAdapter::paid_of(self, payload)
     }
 }

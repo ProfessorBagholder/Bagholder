@@ -1112,6 +1112,15 @@ impl Generated {
     /// made-up broker's rate, whose detail is a funding intent: the CAD deposited
     /// first, both rows listed.
     pub fn convert_today(&mut self, account: &str, usd: i64) {
+        self.convert_on_today(account, usd, true);
+    }
+
+    /// As `convert_today`, its detail an internal transfer stating both sides.
+    pub fn convert_today_stated(&mut self, account: &str, usd: i64) {
+        self.convert_on_today(account, usd, false);
+    }
+
+    fn convert_on_today(&mut self, account: &str, usd: i64, funding: bool) {
         let a = self.account_index(account).unwrap_or_else(|| panic!("no account {account}"));
         let (day, mut n) = (self.today, 20_000 + self.rows.len() as u32);
         let cad = usd * 135 / 100 + 1;
@@ -1122,7 +1131,7 @@ impl Generated {
         let (code, said) = self.deposit_line(a, day);
         self.move_cash(a, Cur::Cad, cad, day, code, said);
         self.net_deposit(a, cad, day);
-        self.conversion(a, day, &mut n, usd, cad, true);
+        self.conversion(a, day, &mut n, usd, cad, funding);
     }
 
     /// A deposit of `cents` CAD into `account` today, the cash there already, its

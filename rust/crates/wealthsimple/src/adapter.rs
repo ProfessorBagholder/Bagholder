@@ -397,6 +397,12 @@ impl bagholder_broker::StatementKeys for KeptStatements {
     fn statement_mapping(&self) -> Option<&dyn Mapping> {
         Some(&crate::statement::StatementMapping)
     }
+    fn conversion_paid_record(&self, paid: &bagholder_broker::statements::Paid) -> Option<(String, Value)> {
+        Some((crate::statement::paid_key(paid), crate::statement::paid_payload(paid)))
+    }
+    fn paid_of(&self, payload: &Value) -> Option<bagholder_broker::statements::Paid> {
+        crate::statement::paid_of(payload)
+    }
 }
 
 impl<S: Source> BrokerAdapter for Wealthsimple<S> {
@@ -720,6 +726,9 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     }
     fn conversion_paid_record(&self, paid: &bagholder_broker::statements::Paid) -> Option<(String, Value)> {
         Some((crate::statement::paid_key(paid), crate::statement::paid_payload(paid)))
+    }
+    fn paid_of(&self, payload: &Value) -> Option<bagholder_broker::statements::Paid> {
+        crate::statement::paid_of(payload)
     }
     fn fill_record(&self, fill: &bagholder_broker::statements::Fill) -> Option<(String, Value)> {
         Some((crate::statement::fill_key(fill), crate::statement::fill_payload(fill)))

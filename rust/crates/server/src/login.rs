@@ -307,11 +307,12 @@ impl Ws {
 
     /// One whole frame taken off the buffer once all of it has arrived: a read
     /// that runs out of time leaves a partly received frame where it is, so the
-    /// next read carries on from its first byte.
-    fn take_frame(&mut self) -> Option<(bool, u8, Vec<u8>)> {
+    /// next read carries on from its first byte. A length no buffer can hold is a
+    /// refused frame; nothing after it can be read as a frame, so the buffer goes.
+    fn take_frame(&mut self) -> std::io::Result<Option<(bool, u8, Vec<u8>)>> {
         let b = &self.buf;
         if b.len() < 2 {
-            return None;
+            return Ok(None);
         }
         let fin = b[0] & 0x80 != 0;
         let opcode = b[0] & 0x0f;
@@ -320,20 +321,23 @@ impl Ws {
         let mut len = (b[1] & 0x7f) as usize;
         if len == 126 {
             if b.len() < at + 2 {
-                return None;
+                return Ok(None);
             }
             len = u16::from_be_bytes([b[2], b[3]]) as usize;
             at += 2;
         } else if len == 127 {
             if b.len() < at + 8 {
-                return None;
+                return Ok(None);
             }
-            len = u64::from_be_bytes(b[2..10].try_into().unwrap()) as usize;
+            let Ok(long) = usize::try_from(u64::from_be_bytes([b[2], b[3], b[4], b[5], b[6], b[7], b[8], b[9]])) else {
+                return Err(self.refuse());
+            };
+            len = long;
             at += 8;
         }
         let mask = if masked {
             if b.len() < at + 4 {
-                return None;
+                return Ok(None);
             }
             let m = [b[at], b[at + 1], b[at + 2], b[at + 3]];
             at += 4;
@@ -341,17 +345,27 @@ impl Ws {
         } else {
             None
         };
-        if b.len() < at + len {
-            return None;
+        let Some(end) = at.checked_add(len).filter(|end| *end <= isize::MAX as usize) else {
+            return Err(self.refuse());
+        };
+        if b.len() < end {
+            return Ok(None);
         }
-        let mut payload = b[at..at + len].to_vec();
+        let mut payload = b[at..end].to_vec();
         if let Some(m) = mask {
             for (i, x) in payload.iter_mut().enumerate() {
                 *x ^= m[i % 4];
             }
         }
-        self.buf.drain(..at + len);
-        Some((fin, opcode, payload))
+        self.buf.drain(..end);
+        Ok(Some((fin, opcode, payload)))
+    }
+
+    /// A frame whose length no buffer can hold, refused: what is buffered is
+    /// dropped, as no frame boundary after it can be known.
+    fn refuse(&mut self) -> std::io::Error {
+        self.buf.clear();
+        std::io::Error::new(std::io::ErrorKind::InvalidData, "ws frame length past what a buffer holds")
     }
 
     /// One whole message: (opcode, payload); pings answered, pongs passed by.
@@ -360,7 +374,7 @@ impl Ws {
         let deadline = Instant::now() + timeout;
         loop {
             let (fin, opcode, payload) = loop {
-                if let Some(f) = self.take_frame() {
+                if let Some(f) = self.take_frame()? {
                     break f;
                 }
                 if !self.fill(deadline)? {
@@ -1255,6 +1269,36 @@ pub fn start_login_browser(app: &Arc<App>) -> StartLoginAnswer {
 mod tests {
     use super::*;
     use crate::tests_common::{app, guard};
+
+    /// A `Ws` over a connected local socket, its buffer holding `bytes`.
+    fn ws_holding(bytes: Vec<u8>) -> Ws {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let sock = TcpStream::connect(l.local_addr().unwrap()).unwrap();
+        Ws { sock, buf: bytes, next_id: 1, fragments: None }
+    }
+
+    #[test]
+    fn test_a_frame_length_past_any_buffer_is_refused_and_never_panics() {
+        for len in [u64::MAX, (usize::MAX - 1) as u64] {
+            for mask in [false, true] {
+                let mut head = vec![0x81, 127 | if mask { 0x80 } else { 0 }];
+                head.extend_from_slice(&len.to_be_bytes());
+                if mask {
+                    head.extend_from_slice(&[1, 2, 3, 4]);
+                }
+                head.extend_from_slice(b"rest");
+                let mut ws = ws_holding(head);
+                let refused = ws.take_frame();
+                assert_eq!(refused.as_ref().map_err(std::io::Error::kind).err(), Some(std::io::ErrorKind::InvalidData), "{len} {mask}");
+                assert!(ws.buf.is_empty(), "nothing after a refused frame is read as one");
+            }
+        }
+        // a whole frame is still taken, and one partly arrived waits for the rest
+        let mut ws = ws_holding(vec![0x81, 2, b'o', b'k', 0x81, 5, b'x']);
+        assert_eq!(ws.take_frame().unwrap(), Some((true, 1, b"ok".to_vec())));
+        assert_eq!(ws.take_frame().unwrap(), None);
+        assert_eq!(ws.buf, [0x81, 5, b'x']);
+    }
 
     fn cookie(name: &str, value: &str) -> Value {
         json!({"name": name, "value": value, "domain": format!(".{}", bagholder_wealthsimple::hosts::cookie_domain())})

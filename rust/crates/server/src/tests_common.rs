@@ -240,6 +240,9 @@ impl bagholder_broker::BrokerAdapter for ReadBefore {
     fn conversion_paid_record(&self, paid: &bagholder_broker::statements::Paid) -> Option<(String, bagholder_core::json::Value)> {
         self.0.conversion_paid_record(paid)
     }
+    fn paid_of(&self, payload: &bagholder_core::json::Value) -> Option<bagholder_broker::statements::Paid> {
+        self.0.paid_of(payload)
+    }
     fn fill_record(&self, fill: &bagholder_broker::statements::Fill) -> Option<(String, bagholder_core::json::Value)> {
         self.0.fill_record(fill)
     }
