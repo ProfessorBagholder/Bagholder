@@ -14,8 +14,10 @@
 //! off unless a test names it (`Shape`, `Generated::shaped`): a move listed by
 //! its arrival alone, an account under two ids Wealthsimple links, a closed
 //! account with history, a row listed in it after its one full read, a
-//! conversion whose detail states the side received alone, and the monthly
-//! statements.
+//! conversion whose detail states the side received alone, the monthly
+//! statements, each row in a form a recorded statement writes
+//! (`tests/replies/wealthsimple-statements`, held by `tests/forms.rs`), and calls
+//! written and assigned.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -100,6 +102,12 @@ pub enum Shape {
     /// out of CAD at the made-up broker's rate, with no conversion of its own: the
     /// feed states it in USD, the statement in CAD with the rate it was paid at.
     FxFunded,
+    /// Calls written on a US share held for them, assigned at expiry: the feed
+    /// states the contracts sold and their assignment, the statement the
+    /// contracts sold, their assignment at no cash, and the shares sold at the
+    /// strike a few days after (`ASSIGN`, then `SELL`), as the recorded forms
+    /// state them (`tests/replies/wealthsimple-statements`).
+    Assigned,
 }
 
 /// Every shape.
@@ -110,6 +118,22 @@ pub const SHAPES: [Shape; 6] = [Shape::ArrivalOnly, Shape::LinkedIds, Shape::Clo
 /// by 2.10.9, is the one its take-back is proven on. No reading of statements
 /// since 2.10.9 is proven to close their months.
 pub const STATED_OTHERWISE: [Shape; 3] = [Shape::FeeFolded, Shape::FeedOmits, Shape::FxFunded];
+
+/// An assignment as the feed and the statement each state it. No reading of
+/// statements is proven to close its months.
+pub const ASSIGNED: [Shape; 1] = [Shape::Assigned];
+
+/// The made-up broker's fee on a coin's fill, in thousandths of its cash, inside
+/// the cash both the feed and the statement state: made up, as every figure here.
+const COIN_FEE_PER_THOUSAND: i64 = 15;
+
+/// The made-up broker's fee a contract written, in cents, inside the cash both
+/// the feed and the statement state: made up.
+const CONTRACT_FEE_CENTS: i64 = 75;
+
+/// Shares a contract delivers on assignment, as every recorded contract states
+/// its multiplier (`optionDetails.multiplier`).
+const SHARES_A_CONTRACT: i64 = 100;
 
 /// The account types, in the order a book of more accounts adds them: the
 /// investment accounts first, then crypto, spending and a card.
@@ -276,6 +300,9 @@ struct Line {
     cents: i64,
     code: &'static str,
     description: String,
+    /// What the row's `unit` names where it is not the cash's currency: the
+    /// symbol of what moved.
+    unit: Option<String>,
 }
 
 /// One planned piece of activity, in the order it happens.
@@ -296,6 +323,10 @@ enum Plan {
     /// Every holding of `from` sold and its cash moved to `to`, `keep` cents of
     /// CAD left behind; `from` closed (`Shape::LinkedIds`, `Shape::Closed`).
     Retire { from: usize, to: usize, keep: i64 },
+    /// Calls sold to open on shares held for them (`Shape::Assigned`).
+    WriteCalls { account: usize, listing: usize, units: i64 },
+    /// The calls written assigned at expiry, the shares delivered.
+    Assign { account: usize, listing: usize },
     /// A purchase or sale at its own stated cash, never funded first: a book
     /// stated whole (`Generated::from_records`).
     #[cfg(feature = "demo")]
@@ -420,6 +451,8 @@ pub struct Generated {
     /// Purchases the feed does not list (`FeedOmits`): the account, the listing,
     /// the day and the row, listed after all if the same day sells the listing.
     omitted: Vec<(usize, usize, jiff::civil::Date, Value)>,
+    /// The share held for the calls written on it (`Assigned`), never moved.
+    written_on: Option<usize>,
 }
 
 struct Templates {
@@ -579,7 +612,7 @@ impl Generated {
         }
         let shapes: BTreeSet<Shape> = shapes.iter().copied().collect();
         assert!(!shapes.contains(&Shape::LateRow) || shapes.contains(&Shape::Closed), "a late row is in the closed account");
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new() };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None };
         let mut plans = g.plan(&mut r, size, start);
         let span = (today - start).get_days().max(2) as i64;
         let on = |n: i64| start.checked_add(jiff::Span::new().days(n)).expect("a day");
@@ -609,6 +642,25 @@ impl Generated {
             if keep > 0 {
                 g.late = Some((today, closing, to, keep));
             }
+        }
+        if g.shapes.contains(&Shape::Assigned) {
+            // a US share of its own, bought in the first investment account, which
+            // nothing else trades or moves, and calls written on all of it
+            let account = *invest.first().unwrap_or_else(|| panic!("Assigned needs an investment account"));
+            let symbol = name(g.listings.len());
+            let price = r.range(2_000, 9_000);
+            g.listings.push(Listing { id: format!("sec-s-{}", r.hex()), symbol: symbol.clone(), sort: Sort::Share, cur: Cur::Usd, price, contract: None, put: false, name: None, venue: None, status: "TRADING" });
+            let under = g.listings.len() - 1;
+            g.written_on = Some(under);
+            let (bought, expiry) = (on(span / 4), on(span / 4 + 30));
+            assert!(expiry < today.first_of_month(), "the calls are assigned in a month a statement covers");
+            let strike = (price / 100 + 1) * 100;
+            g.listings.push(Listing { id: format!("sec-o-{}", r.hex()), symbol, sort: Sort::Contract, cur: Cur::Usd, price: r.range(50, 400), contract: Some((g.listings[under].id.clone(), expiry, strike)), put: false, name: None, venue: None, status: "TRADING" });
+            let contract = g.listings.len() - 1;
+            let contracts = r.range(1, 3);
+            plans.entry(bought).or_default().push(Plan::Buy { account, listing: under, units: contracts * SHARES_A_CONTRACT });
+            plans.entry(on(span / 4 + 1)).or_default().push(Plan::WriteCalls { account, listing: contract, units: contracts });
+            plans.entry(expiry).or_default().push(Plan::Assign { account, listing: contract });
         }
         g.run(&mut r, plans);
         g
@@ -685,7 +737,7 @@ impl Generated {
             };
             plans.entry(*day).or_default().push(p);
         }
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new() };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None };
         // nothing stated whole is drawn
         g.run(&mut Rng(0), plans);
         g
@@ -869,11 +921,46 @@ impl Generated {
 
     /// Cash moved, and the line a statement lists it by: its code and description.
     fn move_cash(&mut self, a: usize, c: Cur, cents: i64, day: jiff::civil::Date, code: &'static str, description: String) {
+        self.cash_moved(a, c, cents, day);
+        self.accounts[a].ledger.push(Line { day, cur: c, cents, code, description, unit: None });
+    }
+
+    /// Cash moved on a day, with no line of its own.
+    fn cash_moved(&mut self, a: usize, c: Cur, cents: i64, day: jiff::civil::Date) {
         let acct = &mut self.accounts[a];
         let now = acct.cash.get(&c).copied().unwrap_or(0) + cents;
         acct.cash.insert(c, now);
         acct.timeline.entry(c.cash_id().to_string()).or_default().push((day, now));
-        acct.ledger.push(Line { day, cur: c, cents, code, description });
+    }
+
+    /// Whether a brokerage statement is issued for the account (an investment or
+    /// a crypto account's), whose forms its lines take; a spending account's take
+    /// a cash statement's.
+    fn brokerage(&self, a: usize) -> bool {
+        matches!(self.accounts[a].role, Role::Invest | Role::Crypto)
+    }
+
+    /// What a fill's line states besides its units: whether the account's
+    /// statement has lists per currency (a coin account's has none), the fee it
+    /// states (a contract's folded fee, a coin account's fee inside the cash
+    /// with the folded one), and the price a share paid from another currency.
+    fn said(&self, a: usize, l: &Listing, cents: i64, folded: i64, paid_at: Option<i64>) -> Said {
+        let lists = self.accounts[a].role != Role::Crypto;
+        let fee = match l.sort {
+            Sort::Contract => folded,
+            Sort::Coin if !lists => cents * COIN_FEE_PER_THOUSAND / 1000 + folded,
+            _ => 0,
+        };
+        Said { lists, fee, paid_at }
+    }
+
+    /// A deposit's line: a contribution in a brokerage account.
+    fn deposit_line(&self, a: usize, day: jiff::civil::Date) -> (&'static str, String) {
+        if self.brokerage(a) {
+            ("CONT", format!("Contribution (executed at {day})"))
+        } else {
+            ("EFT", "Deposit".into())
+        }
     }
 
     /// Whether the next move is listed on both sides: with
@@ -896,8 +983,10 @@ impl Generated {
             self.push(out);
         }
         self.push(inn);
-        self.move_cash(from, c, -cents, day, "TRFOUTTF", format!("Transfer out to {}", self.accounts[to].id));
-        self.move_cash(to, c, cents, day, "TRFINTF", "Transfer in".into());
+        let (out_code, out_said) = if self.brokerage(from) { ("TRFOUT", format!("Money transfer out of the account (executed at {day})")) } else { ("TRFOUTTF", "Transfer out".into()) };
+        let (in_code, in_said) = if self.brokerage(to) { ("TRFIN", format!("Money transfer into the account (executed at {day})")) } else { ("TRFINTF", "Transfer in".into()) };
+        self.move_cash(from, c, -cents, day, out_code, out_said);
+        self.move_cash(to, c, cents, day, in_code, in_said);
         let cad = if c == Cur::Usd { cents * 135 / 100 } else { cents };
         self.net_deposit(from, -cad, day);
         self.net_deposit(to, cad, day);
@@ -965,7 +1054,8 @@ impl Generated {
         let id = self.next_id("deposit");
         let row = set(self.row("DEPOSIT", "EFT", a, at(day, *n), &id), &[(&["amount"], text(money(cad))), (&["currency"], text("CAD")), (&["amountSign"], text("positive"))]);
         self.push(row);
-        self.move_cash(a, Cur::Cad, cad, day, "EFT", "Deposit".into());
+        let (code, said) = self.deposit_line(a, day);
+        self.move_cash(a, Cur::Cad, cad, day, code, said);
         self.net_deposit(a, cad, day);
         if c == Cur::Usd {
             // every other one a funding intent, whose detail states the side received alone
@@ -1012,10 +1102,10 @@ impl Generated {
         };
         self.conversions.insert(detail_id, detail);
         self.push(row);
-        // the description states the made-up broker's own rate, 135 cents a dollar
-        let said = format!("Convert CAD (executed at {day}) - $1USD = ${}CAD", money(135));
-        self.move_cash(a, Cur::Cad, -cad, day, "FXCONVERSION", said.clone());
-        self.move_cash(a, Cur::Usd, want, day, "FXCONVERSION", said);
+        // each list names its own currency, with the conversion's own amounts
+        let said = |c: Cur| format!("Convert {} (executed at {day}) - ${}USD = ${}CAD", c.code(), money(want), money(cad));
+        self.move_cash(a, Cur::Cad, -cad, day, "FXCONVERSION", said(Cur::Cad));
+        self.move_cash(a, Cur::Usd, want, day, "FXCONVERSION", said(Cur::Usd));
     }
 
     /// A conversion made today in `account`, `usd` cents received for CAD at the
@@ -1029,7 +1119,8 @@ impl Generated {
         let id = self.next_id("deposit");
         let row = set(self.row("DEPOSIT", "EFT", a, at(day, n), &id), &[(&["amount"], text(money(cad))), (&["currency"], text("CAD")), (&["amountSign"], text("positive"))]);
         self.push(row);
-        self.move_cash(a, Cur::Cad, cad, day, "EFT", "Deposit".into());
+        let (code, said) = self.deposit_line(a, day);
+        self.move_cash(a, Cur::Cad, cad, day, code, said);
         self.net_deposit(a, cad, day);
         self.conversion(a, day, &mut n, usd, cad, true);
     }
@@ -1042,7 +1133,8 @@ impl Generated {
         let id = format!("{}-later", self.next_id("deposit"));
         let row = set(self.row("DEPOSIT", "EFT", a, at(day, n), &id), &[(&["amount"], text(money(cents))), (&["currency"], text("CAD")), (&["amountSign"], text("positive"))]);
         self.held.push(row);
-        self.move_cash(a, Cur::Cad, cents, day, "EFT", "Deposit".into());
+        let (code, said) = self.deposit_line(a, day);
+        self.move_cash(a, Cur::Cad, cents, day, code, said);
         self.net_deposit(a, cents, day);
     }
 
@@ -1076,9 +1168,8 @@ impl Generated {
                 } else {
                     self.push(row);
                 }
-                let (code, said) = fill_line(&l, true, units, day);
-                // the rate as the statement writes it, from the made-up broker's 135 cents a dollar
-                let said = if fx_funded { format!("{said}, FX Rate: {}", Dec::new(13_500, 4).expect("a rate").to_text()) } else { said };
+                let said = self.said(account, &l, cost, fee, fx_funded.then_some(price));
+                let (code, said) = fill_line(&l, true, units, day, said);
                 self.move_cash(account, paid_in, -paid, day, code, said);
                 self.move_units(account, listing, units, day);
             }
@@ -1107,7 +1198,8 @@ impl Generated {
                 let row = self.row(ty, sub, account, at(day, *n), &id);
                 let row = set(self.with_security(row, listing), &[(&["amount"], text(money(proceeds))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
                 self.push(row);
-                let (code, said) = fill_line(&l, false, units, day);
+                let said = self.said(account, &l, proceeds, fee, None);
+                let (code, said) = fill_line(&l, false, units, day, said);
                 self.move_cash(account, l.cur, proceeds - fee, day, code, said);
                 self.move_units(account, listing, -units, day);
             }
@@ -1136,7 +1228,7 @@ impl Generated {
                 let row = self.row("DIVIDEND", "DIY_DIVIDEND", account, at(day, *n), &id);
                 let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["currency"], text(l.cur.code()))]);
                 self.push(row);
-                self.move_cash(account, l.cur, cents, day, "DIV", format!("{} - {}: Dividend", l.symbol, listing_name(&l)));
+                self.move_cash(account, l.cur, cents, day, "DIV", dividend_line(&l, day));
             }
             Plan::Staking { account, listing } => {
                 let held = self.accounts[account].held.get(&self.listings[listing].id).copied().unwrap_or(0);
@@ -1164,7 +1256,8 @@ impl Generated {
                     return;
                 }
                 // one share holding moved whole, on a day no other move touches these accounts
-                let Some((lid, units)) = self.accounts[from].held.iter().find(|(id, _)| id.starts_with("sec-s-")).map(|(i, u)| (i.clone(), *u)) else { return };
+                let written_on = self.written_on.map(|w| self.listings[w].id.clone());
+                let Some((lid, units)) = self.accounts[from].held.iter().find(|(id, _)| id.starts_with("sec-s-") && Some(*id) != written_on.as_ref()).map(|(i, u)| (i.clone(), *u)) else { return };
                 let listing = self.listings.iter().position(|l| l.id == lid).expect("a listing held");
                 let near = |d: jiff::civil::Date| self.rows.iter().any(|x| {
                     let r = Node::root(x);
@@ -1192,7 +1285,8 @@ impl Generated {
                 let id = self.next_id("deposit");
                 let row = set(self.row("DEPOSIT", "EFT", account, at(day, *n), &id), &[(&["amount"], text(money(cents))), (&["currency"], text("CAD")), (&["amountSign"], text("positive"))]);
                 self.push(row);
-                self.move_cash(account, Cur::Cad, cents, day, "EFT", "Deposit".into());
+                let (code, said) = self.deposit_line(account, day);
+                self.move_cash(account, Cur::Cad, cents, day, code, said);
                 self.net_deposit(account, cents, day);
             }
             Plan::Withdraw { account } => {
@@ -1204,7 +1298,8 @@ impl Generated {
                 let id = self.next_id("withdrawal");
                 let row = set(self.row("WITHDRAWAL", "EFT", account, at(day, *n), &id), &[(&["amount"], text(money(cents))), (&["currency"], text("CAD")), (&["amountSign"], text("negative"))]);
                 self.push(row);
-                self.move_cash(account, Cur::Cad, -cents, day, "EFTOUT", "Withdrawal".into());
+                let (code, said) = if self.brokerage(account) { ("WD", format!("Withdrawal (executed at {day})")) } else { ("EFTOUT", "Withdrawal".into()) };
+                self.move_cash(account, Cur::Cad, -cents, day, code, said);
                 self.net_deposit(account, -cents, day);
             }
             Plan::Interest { account } => {
@@ -1216,7 +1311,8 @@ impl Generated {
                 let id = self.next_id("interest");
                 let row = set(self.row("INTEREST", "", account, at(day, *n), &id), &[(&["amount"], text(money(cents))), (&["currency"], text("CAD")), (&["amountSign"], text("positive"))]);
                 self.push(row);
-                self.move_cash(account, Cur::Cad, cents, day, "INT", "Interest".into());
+                let (code, said) = if self.brokerage(account) { ("FPLINT", "Stock lending monthly interest payment".into()) } else { ("INT", "Interest earned".into()) };
+                self.move_cash(account, Cur::Cad, cents, day, code, said);
             }
             Plan::CardPurchase { account, cents } => {
                 *n += 1;
@@ -1242,7 +1338,8 @@ impl Generated {
                 let row = self.row(ty, sub, account, at(day, *n), &id);
                 let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
                 self.push(row);
-                let (code, said) = fill_line(&l, buy, units, day);
+                let said = self.said(account, &l, cents, 0, None);
+                let (code, said) = fill_line(&l, buy, units, day, said);
                 self.move_cash(account, l.cur, if buy { -cents } else { cents }, day, code, said);
                 self.move_units(account, listing, if buy { units } else { -units }, day);
             }
@@ -1254,7 +1351,7 @@ impl Generated {
                 let row = self.row("DIVIDEND", "DIY_DIVIDEND", account, at(day, *n), &id);
                 let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale())))]);
                 self.push(row);
-                self.move_cash(account, l.cur, cents, day, "DIV", format!("{} - {}: Dividend", l.symbol, listing_name(&l)));
+                self.move_cash(account, l.cur, cents, day, "DIV", dividend_line(&l, day));
             }
             #[cfg(feature = "demo")]
             Plan::StakingOf { account, listing, units } => {
@@ -1274,7 +1371,7 @@ impl Generated {
                     &[(&["amount"], text(money(cents))), (&["currency"], text(cur.code())), (&["amountSign"], text("negative")), (&["securityId"], text(cur.cash_id())), (&["security", "id"], text(cur.cash_id())), (&["security", "stock", "symbol"], text(cur.code())), (&["assetSymbol"], text(cur.code()))],
                 );
                 self.push(row);
-                self.move_cash(account, cur, -cents, day, "INTCHARGED", "Margin Interest Charges".into());
+                self.move_cash(account, cur, -cents, day, "INTCHARGED", "Margin Interest Charges for Example Period".into());
             }
             Plan::Retire { from, to, keep } => {
                 // every holding sold
@@ -1292,6 +1389,44 @@ impl Generated {
                     }
                 }
                 self.accounts[from].closed = Some(day);
+            }
+            Plan::WriteCalls { account, listing, units } => {
+                let l = self.listings[listing].clone();
+                let price = (l.price + r.range(-l.price / 20, l.price / 20)).max(1);
+                let fee = CONTRACT_FEE_CENTS * units;
+                let net = (l.cost(units, price) - fee).max(1);
+                *n += 1;
+                let id = self.next_id("sell");
+                let row = self.row("OPTIONS_SELL", "LIMIT_ORDER", account, at(day, *n), &id);
+                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(net))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
+                self.push(row);
+                let (_, said) = fill_line(&l, false, units, day, Said { lists: true, fee, paid_at: None });
+                self.move_cash(account, l.cur, net, day, "SELLTOOPEN", said);
+                self.move_units(account, listing, -units, day);
+            }
+            Plan::Assign { account, listing } => {
+                let l = self.listings[listing].clone();
+                let contracts = -self.accounts[account].held.get(&l.id).copied().unwrap_or(0);
+                let (Some((under, expiry, strike)), true) = (l.contract.clone(), contracts > 0) else { return };
+                let under = self.listings.iter().position(|x| x.id == under).expect("a contract's underlying");
+                let shares = contracts * SHARES_A_CONTRACT;
+                let cents = strike * shares;
+                *n += 1;
+                let id = self.next_id("assignment");
+                let row = self.row("OPTIONS_ASSIGN", "AUTO_ASSIGN", account, format!("{day}T21:30:00.000000+00:00"), &id);
+                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["amountSign"], text("positive")), (&["currency"], text("USD")), (&["assetQuantity"], text(contracts.to_string()))]);
+                self.push(row);
+                // the contracts and the shares leave at the assignment, the cash with them
+                self.move_units(account, listing, contracts, day);
+                self.move_units(account, under, -shares, day);
+                self.cash_moved(account, l.cur, cents, day);
+                // the statement: the contracts assigned at no cash, the shares sold at the strike days after
+                let symbol = l.symbol.clone();
+                let right = if l.put { "PUT" } else { "CALL" };
+                self.accounts[account].ledger.push(Line { day, cur: l.cur, cents: 0, code: "ASSIGN", description: format!("{symbol} {} USD {right} {expiry}: Assigned -{contracts} contract (executed at {day})", fixed(strike, 2)), unit: Some(symbol) });
+                let settled = day.checked_add(jiff::Span::new().days(r.range(1, 4))).expect("a day");
+                let (_, said) = fill_line(&self.listings[under], false, shares, day, Said { lists: true, fee: 0, paid_at: None });
+                self.accounts[account].ledger.push(Line { day: settled, cur: l.cur, cents, code: "SELL", description: said, unit: None });
             }
             Plan::CardPayment { card, from } => {
                 let owed = -self.cash(card, Cur::Cad);
@@ -1375,7 +1510,7 @@ impl Generated {
             fields.push((&["optionDetails", "strikePrice"], text(money(*strike))));
             let (right, letter) = if l.put { ("PUT", 'P') } else { ("CALL", 'C') };
             fields.push((&["optionDetails", "optionType"], text(right)));
-            fields.push((&["optionDetails", "multiplier"], Value::Number("100".into())));
+            fields.push((&["optionDetails", "multiplier"], Value::Number(SHARES_A_CONTRACT.to_string())));
             fields.push((&["optionDetails", "osiSymbol"], text(format!("{:<6}{}{letter}{:08}", l.symbol, expiry.strftime("%y%m%d"), strike * 10))));
             fields.push((&["optionDetails", "underlyingSecurity", "id"], text(under)));
         }
@@ -1488,23 +1623,54 @@ fn listing_name(l: &Listing) -> String {
     l.name.clone().unwrap_or_else(|| format!("{} Generated Listing", l.symbol))
 }
 
+/// A dividend's statement line, its record date a week before it is paid.
+fn dividend_line(l: &Listing, day: jiff::civil::Date) -> String {
+    let record = day.checked_sub(jiff::Span::new().days(7)).expect("a day");
+    format!("{} - {}: Cash dividend distribution, received on {day}, record date of {record}", l.symbol, listing_name(l))
+}
+
+/// `mantissa` with `places` decimals, every one written: a statement writes a
+/// share's units to 4, a contract's fee to 4 and a rate to 4, a coin's units to
+/// 10, a strike and a price to 2.
+fn fixed(mantissa: i64, places: u32) -> String {
+    let unit = 10_i64.pow(places);
+    let sign = if mantissa < 0 { "-" } else { "" };
+    let m = mantissa.abs();
+    format!("{sign}{}.{:0width$}", m / unit, m % unit, width = places as usize)
+}
+
+/// What a fill's line states besides its units (`Generated::said`).
+struct Said {
+    lists: bool,
+    fee: i64,
+    paid_at: Option<i64>,
+}
+
 /// A fill's statement line: its code and description, in the forms the
-/// recorded statements write (`broker/src/codes.rs`, `fill_of`).
-/// A fill's statement row, in Wealthsimple's own words (`broker::codes`, the
-/// recorded LIRA statement): `VFV - Vanguard S&P 500 Index ETF: Sold 343.0000
-/// shares (executed at 2025-06-25)`, `Purchase of 2442.5025927700 DOGE (executed
-/// at …)`, `BBAI 5.00 USD PUT 2026-01-16 - BigBear.ai: Bought 26 contract`, `Sold 2
-/// contracts`.
-fn fill_line(l: &Listing, buy: bool, units: i64, day: jiff::civil::Date) -> (&'static str, String) {
+/// recorded statements write (`tests/replies/wealthsimple-statements`, read by
+/// `broker::codes::fill_of`): `SYM - NAME: Bought 4.0000 shares (executed at
+/// D)`, with `at $P per share` and `, FX Rate: R` where it was paid from another
+/// currency; `Purchase of N SYM (executed at D), FX Rate: R`, with `, Fee charged
+/// $F` in a coin account; `SYM K USD CALL D: Sold 1 contract (executed at D)`,
+/// with `, Fee: $F` where it states one.
+fn fill_line(l: &Listing, buy: bool, units: i64, day: jiff::civil::Date, said: Said) -> (&'static str, String) {
     let verb = if buy { "Bought" } else { "Sold" };
     match l.sort {
-        Sort::Share => (if buy { "BUY" } else { "SELL" }, format!("{} - {}: {verb} {units}.0000 shares (executed at {day})", l.symbol, listing_name(l))),
-        // a coin's units to ten places, as the statement writes them
-        Sort::Coin => (if buy { "BUY" } else { "SELL" }, format!("{} of {} {} (executed at {day})", if buy { "Purchase" } else { "Sale" }, format!("{}.{:06}0000", units / 1_000_000, units % 1_000_000), l.symbol)),
+        Sort::Share => {
+            let at = said.paid_at.map(|p| format!(" at ${} per share", fixed(p, 2))).unwrap_or_default();
+            // the rate as the statement writes it, the made-up broker's 135 cents a dollar
+            let rate = if said.paid_at.is_some() { format!(", FX Rate: {}", fixed(13_500, 4)) } else { String::new() };
+            (if buy { "BUY" } else { "SELL" }, format!("{} - {}: {verb} {} shares{at} (executed at {day}){rate}", l.symbol, listing_name(l), fixed(units * 10_000, 4)))
+        }
+        // a coin's units to ten places; its rate is to CAD, which every made-up coin is priced in
+        Sort::Coin => {
+            let fee = if said.lists { String::new() } else { format!(", Fee charged ${}", fixed(said.fee, 2)) };
+            (if buy { "BUY" } else { "SELL" }, format!("{} of {} {} (executed at {day}), FX Rate: {}{fee}", if buy { "Purchase" } else { "Sale" }, fixed(units * 10_000, 10), l.symbol, fixed(10_000, 4)))
+        }
         Sort::Contract => {
             let (expiry, strike) = l.contract.as_ref().map(|(_, e, s)| (*e, *s)).expect("a contract's terms");
-            let what = if !buy && units > 1 { "contracts" } else { "contract" };
-            (if buy { "BUYTOOPEN" } else { "SELLTOCLOSE" }, format!("{} {} USD {} {expiry} - {}: {verb} {units} {what}", l.symbol, money(strike), if l.put { "PUT" } else { "CALL" }, listing_name(l)))
+            let fee = if said.fee > 0 { format!(", Fee: ${}", fixed(said.fee * 100, 4)) } else { String::new() };
+            (if buy { "BUYTOOPEN" } else { "SELLTOCLOSE" }, format!("{} {} USD {} {expiry}: {verb} {units} contract (executed at {day}){fee}", l.symbol, fixed(strike, 2), if l.put { "PUT" } else { "CALL" }))
         }
     }
 }
@@ -1689,6 +1855,8 @@ impl Source for Generated {
             return Ok(None);
         }
         let end = month.last_of_month();
+        // a coin account's statement states its rows in its own currency, with no lists per currency
+        let lists = acct.role != Role::Crypto;
         let row = |l: &Line, balance: i64| -> Value {
             Value::Object(
                 [
@@ -1697,14 +1865,20 @@ impl Source for Generated {
                     ("description".to_string(), text(&l.description)),
                     ("cashMovement".to_string(), text(money(l.cents))),
                     ("balance".to_string(), text(money(balance))),
-                    ("unit".to_string(), text(format!("${}", l.cur.code()))),
+                    // a coin account's statement names no unit; another's names the
+                    // currency for cash, and a symbol for a row of units at no cash
+                    ("unit".to_string(), match (&l.unit, lists) {
+                        (_, false) => Value::Null,
+                        (Some(symbol), true) => text(symbol),
+                        (None, true) => text(format!("${}", l.cur.code())),
+                    }),
                     ("__typename".to_string(), text("BrokerageMonthlyStatementTransactions")),
                 ]
                 .into(),
             )
         };
         // each currency's movements in the month, with the running balance
-        let mut lists: Vec<(Cur, Vec<Value>)> = Vec::new();
+        let mut per_currency: Vec<(Cur, Vec<Value>)> = Vec::new();
         for c in [Cur::Cad, Cur::Usd] {
             let mut balance = 0;
             let mut list = Vec::new();
@@ -1714,20 +1888,30 @@ impl Source for Generated {
                     list.push(row(l, balance));
                 }
             }
-            lists.push((c, list));
+            per_currency.push((c, list));
         }
-        let own = lists.iter().find(|(c, _)| *c == acct.currency).map(|(_, l)| l.clone()).unwrap_or_default();
-        let per: Vec<Value> = lists
-            .into_iter()
-            .map(|(c, list)| Value::Object([("currency".to_string(), text(c.code())), ("currentTransactions".to_string(), Value::Array(list)), ("__typename".to_string(), text("BrokerageMonthlyStatementActivitiesPerCurrency"))].into()))
-            .collect();
+        let own = per_currency.iter().find(|(c, _)| *c == acct.currency).map(|(_, l)| l.clone()).unwrap_or_default();
+        if !lists {
+            assert!(per_currency.iter().all(|(c, l)| *c == acct.currency || l.is_empty()), "a coin account moves its own currency alone");
+        }
+        let per = if lists {
+            Value::Array(
+                per_currency
+                    .into_iter()
+                    .map(|(c, list)| Value::Object([("currency".to_string(), text(c.code())), ("currentTransactions".to_string(), Value::Array(list)), ("__typename".to_string(), text("BrokerageMonthlyStatementActivitiesPerCurrency"))].into()))
+                    .collect(),
+            )
+        } else {
+            Value::Null
+        };
         Ok(Some(set(
             self.templates.statement.clone(),
             &[
                 (&["id"], text(format!("{}-{month}", acct.custodian))),
                 (&["data", "custodianAccountId"], text(&acct.custodian)),
+                (&["data", "isMultiCurrency"], Value::Bool(lists)),
                 (&["data", "currentTransactions"], Value::Array(own)),
-                (&["data", "activitiesPerCurrency"], Value::Array(per)),
+                (&["data", "activitiesPerCurrency"], per),
             ],
         )))
     }
