@@ -83,6 +83,19 @@ fn brokerage_statement(rows: &[(&str, &str, &str, &str, &str)]) -> Value {
     .unwrap()
 }
 
+/// A brokerage statement in the document's shape, of these rows in each currency's list.
+fn statement_in(cad: &[(&str, &str, &str, &str, &str)], usd: &[(&str, &str, &str, &str, &str)]) -> Value {
+    let list = |rows: &[(&str, &str, &str, &str, &str)], unit: &str| -> String {
+        rows.iter().map(|(d, code, desc, cash, bal)| format!(r#"{{"transactionDate":"{d}","transactionType":"{code}","description":"{desc}","cashMovement":"{cash}","balance":"{bal}","unit":"{unit}","__typename":"BrokerageMonthlyStatementTransactions"}}"#)).collect::<Vec<_>>().join(",")
+    };
+    let (c, u) = (list(cad, "$CAD"), list(usd, "$USD"));
+    let top = [c.as_str(), u.as_str()].iter().filter(|l| !l.is_empty()).copied().collect::<Vec<_>>().join(",");
+    json::parse(&format!(
+        r#"{{"id":"s","statementType":"brokerage_monthly_statement","data":{{"__typename":"BrokerageMonthlyStatementObject","custodianAccountId":"b","isMultiCurrency":true,"currentTransactions":[{top}],"activitiesPerCurrency":[{{"currency":"CAD","currentTransactions":[{c}],"__typename":"x"}},{{"currency":"USD","currentTransactions":[{u}],"__typename":"x"}}]}},"__typename":"Statement"}}"#
+    ))
+    .unwrap()
+}
+
 #[test]
 fn a_cash_statement_s_rows_are_in_the_account_s_own_currency() {
     let v = cash_statement(&[("2025-06-26", "TRFIN", "Transfer in", "35650.0", "35821.69")]);
@@ -1235,4 +1248,87 @@ fn same_day_fills_of_one_amount_are_paired_by_their_nearest_units_and_another_co
     // a fill taken from its row keeps it: the next read pairs nothing again
     assert_eq!(w.fills(&mut failures), 0);
     assert_eq!(w.units_of(w.lira, "BTC"), dec("0.0004532900"));
+}
+
+/// A conversion out of a USD sub-account, booked from its statement as "Money
+/// transfer out of the account" while the feed stated no side paid, and then the
+/// feed's record stating its side paid (the owner's 🚀 Trading, 2026-10-26: five
+/// such, the USD twice in the book). Every month after it disagrees, so no month
+/// is proven and the walk's own withdrawal never reaches it. Before the walk, the
+/// statement's copy of a row the feed states is withdrawn: the movement stands once.
+#[test]
+fn a_movement_booked_from_a_statement_beside_one_alike_the_feed_states_stays() {
+    let mut w = World::new();
+    // April: two contributions alike on one day, the feed listing one
+    w.feed("lira-1", "2025-04-07", "deposit", "500");
+    let april = statement_in(&[("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "500.0", "500.00"), ("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "500.0", "1000.00")], &[]);
+    let months: [(&str, Option<Value>); 3] = [("2025-04-01", Some(april.clone())), ("2025-05-01", Some(statement_in(&[], &[]))), ("2025-06-01", Some(statement_in(&[], &[])))];
+    for (m, v) in months {
+        let read = w.book.broker_read(w.conn, "statement:lira-1", at(NOW)).unwrap();
+        w.book.keep_monthly_statement(w.conn, "lira-1", day(m), &v.as_ref().map_or("null".to_string(), |v| v.canonical()), &read).unwrap();
+        w.month("lira-1", m, v);
+    }
+    // the other booked from the statement by an earlier walk, as its first row
+    let row = statement::rows(&april, Currency::CAD).unwrap().remove(0);
+    let (key, payload) = (statement::key("lira-1", day("2025-04-01"), 0), statement::payload("lira-1", day("2025-04-01"), 0, &row).canonical());
+    let booked = w.book.store(&statement::StatementMapping, &Incoming { connection: Some(w.conn), source_key: &key, payload: &payload, refs: vec![] }, at(NOW)).unwrap().record;
+    let lira = w.lira;
+    // and a dollar more than the book holds, from July, which no statement covers
+    // yet: the walk reads
+    w.states_in(lira, &[("CAD", "1001")]);
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.withdrawn, w.book_cash_in(lira, "CAD")), (0, dec("1000")), "{done:?}");
+    assert_eq!(w.book.record(booked).unwrap().state, RecordState::Live);
+}
+
+#[test]
+fn a_movement_booked_from_a_statement_that_the_feed_now_states_is_withdrawn_and_stands_once() {
+    let mut w = World::new();
+    // the account behind two of the broker's ids: its own, and its USD sub-account's
+    w.lira_keys = vec!["lira-1".into(), "lira-usd".into()];
+    w.book.add_account_ref(w.lira, &AccountRef::new(ws(), "lira-usd")).unwrap();
+    // April: USD deposited into the sub-account, CAD into the account
+    w.feed_in("lira-1", "2025-04-07", "deposit", "500", "USD");
+    w.feed("lira-1", "2025-04-07", "deposit", "1000");
+    let may_usd = statement_in(&[], &[("2025-05-12", "TRFOUT", "Money transfer out of the account (executed at 2025-05-12)", "-200.0", "300.00")]);
+    // May: 200 USD converted to 270 CAD, the feed stating the side received alone
+    w.feed("lira-1", "2025-05-12", "currency-conversion", "270");
+    w.feed("lira-1", "2025-06-03", "interest", "1");
+    // every month read and kept by the walks before: the sub-account's until it
+    // merged into the account, then none
+    let months: [(&str, &str, Option<Value>); 6] = [
+        ("lira-usd", "2025-04-01", Some(statement_in(&[], &[("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "500.0", "500.00")]))),
+        ("lira-1", "2025-04-01", Some(statement_in(&[("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "1000.0", "1000.00")], &[]))),
+        ("lira-usd", "2025-05-01", Some(may_usd.clone())),
+        ("lira-1", "2025-05-01", Some(statement_in(&[("2025-05-12", "TRFIN", "Money transfer into the account (executed at 2025-05-12)", "270.0", "1270.00")], &[]))),
+        ("lira-usd", "2025-06-01", None),
+        ("lira-1", "2025-06-01", Some(statement_in(&[("2025-06-03", "FPLINT", "Stock lending monthly interest payment", "1.0", "1271.00")], &[]))),
+    ];
+    for (k, m, v) in months {
+        let read = w.book.broker_read(w.conn, &format!("statement:{k}"), at(NOW)).unwrap();
+        w.book.keep_monthly_statement(w.conn, k, day(m), &v.as_ref().map_or("null".to_string(), |v| v.canonical()), &read).unwrap();
+        w.month(k, m, v);
+    }
+    // the side paid as an earlier walk booked it from the statement, when the feed's
+    // record stated none
+    let row = statement::rows(&may_usd, Currency::CAD).unwrap().remove(0);
+    let (key, payload) = (statement::key("lira-usd", day("2025-05-01"), 0), statement::payload("lira-usd", day("2025-05-01"), 0, &row).canonical());
+    let booked = w.book.store(&statement::StatementMapping, &Incoming { connection: Some(w.conn), source_key: &key, payload: &payload, refs: vec![] }, at(NOW)).unwrap().record;
+    let lira = w.lira;
+    w.states_in(lira, &[("CAD", "1271"), ("USD", "300")]);
+    assert_eq!(w.book_cash_in(lira, "USD"), dec("300"));
+    // the feed's record now states its side paid: the USD twice
+    w.feed_in("lira-1", "2025-05-12", "currency-conversion", "-200", "USD");
+    assert_eq!(w.book_cash_in(lira, "USD"), dec("100"), "twice");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(w.book_cash_in(lira, "USD"), dec("300"), "once: {done:?}");
+    assert_eq!(w.book.record(booked).unwrap().state, RecordState::Removed);
+    assert_eq!(w.book_cash_in(lira, "CAD"), dec("1271"));
+    // and the walk after books nothing again: the feed holds the row
+    let done = w.run(&mut failures);
+    assert_eq!((done.booked, w.book_cash_in(lira, "USD")), (0, dec("300")), "{done:?}");
 }
