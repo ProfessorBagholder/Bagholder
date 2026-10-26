@@ -826,14 +826,24 @@ fn kept_months<K: crate::StatementKeys + ?Sized>(
     Ok(kept)
 }
 
-/// The walk's pre-pass alone, where no pull walks: for each account whose cash
-/// differs from what the broker last stated, the bookings from its kept
-/// statements that no row needs any more, withdrawn (`withdraw_stated_by_the_feed`).
-/// The server's gate on a new mapping version runs it after deriving the records
-/// again: a version that states what a statement's booking stood for leaves that
-/// booking unneeded, and a pull would withdraw it only once the feed stated the
-/// movement anew. A kept month that does not read is left out. It says how many.
-pub fn withdraw_stated<K: crate::StatementKeys + ?Sized>(
+/// The records the walk makes from the book's own kept statements and stored
+/// cash, brought to what the book's other records leave unexplained, with
+/// nothing asked of the broker: the server's gate on a new mapping version runs
+/// it after deriving the records again, and only then compares the book with
+/// the broker. Its principle: the gate measures the book as the next pull's walk
+/// would leave it, or a version that states what the walk had booked in its
+/// stead (a side paid, a movement) is measured as worse and refused at every
+/// opening and every pull, as the walk's records are only made again at a pull.
+/// For each account whose cash differs from what the broker last stated:
+/// - the bookings from its kept statements that no row needs any more are
+///   withdrawn (`withdraw_stated_by_the_feed`, the walk's own pre-pass);
+/// - each side-paid record (`sides_paid`) loses the conversions whose records
+///   now state their side paid, and their paid cash: what the next pull's
+///   `sides_paid` makes of that day, the day's cash being what it was. Withdrawn
+///   where none remains, stored again under the rest otherwise.
+/// A third kind of record the walk makes from them joins here. A kept month that
+/// does not read is left out. It says how many records it withdrew.
+pub fn restate_walk_records<K: crate::StatementKeys + ?Sized>(
     book: &Book,
     adapter: &K,
     connection: ConnectionId,
@@ -852,6 +862,55 @@ pub fn withdraw_stated<K: crate::StatementKeys + ?Sized>(
         let own: Vec<&Transaction> = txs.iter().filter(|t| t.account == *account).collect();
         let kept = kept_months(book, adapter, connection, keys, &mut Vec::new())?;
         n += withdraw_stated_by_the_feed(book, adapter, connection, keys, &kept, &own, &source, now)?;
+        n += restate_sides_paid(book, adapter, connection, &own, &source, now)?;
+    }
+    Ok(n)
+}
+
+/// Each side-paid record among `own`, the account's transactions, brought to the
+/// conversions it names that still state the side received alone: those whose
+/// own records now state a side paid in its currency leave it, and their paid
+/// cash leaves its amount (the day's cash it was read from unchanged, what the
+/// next pull's `sides_paid` makes of it). Withdrawn where none remains or nothing
+/// is left unexplained, stored again under the rest otherwise. Says how many it
+/// withdrew.
+fn restate_sides_paid<K: crate::StatementKeys + ?Sized>(book: &Book, adapter: &K, connection: ConnectionId, own: &[&Transaction], source: &SourceName, now: jiff::Timestamp) -> Result<usize> {
+    let Some(mapping) = adapter.statement_mapping() else { return Ok(0) };
+    let records: BTreeSet<RecordId> = own.iter().filter(|t| source_of(t) == *source && t.id.leg == paid_leg()).map(|t| t.id.record).collect();
+    let mut n = 0;
+    for rec in records {
+        let Some(p) = book.revisions(rec)?.pop().and_then(|(_, _, payload)| bagholder_core::json::parse(&payload).ok()).and_then(|v| adapter.paid_of(&v)) else { continue };
+        // each conversion it names by its record's key, and what that record now pays in its currency
+        let mut stated = Dec::ZERO;
+        let mut rest: Vec<&str> = Vec::new();
+        for name in p.conversion.split('|') {
+            let mut paid = Dec::ZERO;
+            for t in own.iter().filter(|t| t.trade_date == p.day && t.kind == Kind::CurrencyConversion && source_of(t) != *source) {
+                if book.record(t.id.record)?.source_key == name {
+                    if let Some(c) = t.cash.filter(|c| c.currency == p.currency && c.amount.is_negative()) {
+                        paid = paid.checked_add(c.amount).map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
+                    }
+                }
+            }
+            if paid.is_zero() {
+                rest.push(name);
+            } else {
+                stated = stated.checked_add(paid).map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
+            }
+        }
+        if stated.is_zero() {
+            continue;
+        }
+        let cash = p.cash.checked_sub(stated).map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
+        if !rest.is_empty() && cash.is_negative() {
+            let q = Paid { conversion: rest.join("|"), cash, ..p.clone() };
+            if let Some((key, payload)) = adapter.conversion_paid_record(&q) {
+                let payload = payload.canonical();
+                book.store(mapping, &Incoming { connection: Some(connection), source_key: &key, payload: &payload, refs: vec![] }, now)?;
+            }
+        }
+        book.mark_removed(rec, now)?;
+        n += 1;
     }
     Ok(n)
 }
