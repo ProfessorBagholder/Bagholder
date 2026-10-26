@@ -48,7 +48,7 @@ jobs:
           cargo test --locked -p bagholder-wealthsimple --features demo --test generated --no-run
           cargo clippy --locked -p bagholder-server -p bagholder-wealthsimple --features bagholder-server/demo,bagholder-server/pull-broker --bins --lib
           cargo build --locked --bin bagholder
-          cargo clippy --locked --workspace --lib --bins
+          cargo clippy --locked --workspace --lib --bins --features bagholder-ws/standin
         working-directory: rust
       # what `tests.yml`'s browser and container jobs build
       - name: The server with the made-up book

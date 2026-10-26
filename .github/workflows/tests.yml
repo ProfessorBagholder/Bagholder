@@ -90,11 +90,13 @@ jobs:
           if [ -n "$hits" ]; then echo "$bin carries a developer's subcommand:"; echo "$hits" | sed -n 1,20p; exit 1; fi
         working-directory: rust
       # no failure discarded outside tests: the workspace's clippy lints (Cargo.toml),
-      # the tests' own code left out, where dropping a result is the test's business
+      # the tests' own code left out, where dropping a result is the test's business,
+      # and the stand-in Wealthsimple (`standin.rs`, built only under its feature) in:
+      # the gate CLAUDE.md names, run here so it is one
       - name: No discarded failure
         env:
           RUSTFLAGS: "-D warnings"
-        run: cargo clippy --locked --workspace --lib --bins
+        run: cargo clippy --locked --workspace --lib --bins --features bagholder-ws/standin
         working-directory: rust
 
   # The server's capacity cases, each building made-up books (`capacity::tests`), beside the
