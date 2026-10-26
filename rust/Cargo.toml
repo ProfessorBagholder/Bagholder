@@ -3,7 +3,7 @@ resolver = "2"
 members = ["crates/core", "crates/engine", "crates/book", "crates/sqlite", "crates/model", "crates/market", "crates/ws", "crates/server", "crates/browser", "crates/diff", "crates/diff-derive", "crates/sources", "crates/net", "crates/wealthsimple", "crates/broker", "crates/lint-fixture"]
 
 [workspace.package]
-version = "2.10.10"
+version = "2.10.11"
 edition = "2021"
 rust-version = "1.98"
 
@@ -17,6 +17,12 @@ all = { level = "allow", priority = -1 }
 let_underscore_must_use = "deny"
 unused_result_ok = "deny"
 disallowed_methods = "deny"
+
+# the dependencies optimized in a build for tests (sqlite's bundled C among them): the
+# suites spend most of their time in them, and the workspace's own crates stay quick to
+# compile (brief 77, §8)
+[profile.dev.package."*"]
+opt-level = 2
 
 [profile.release]
 # the toolchain's objcopy is not installed with the minimal profile
