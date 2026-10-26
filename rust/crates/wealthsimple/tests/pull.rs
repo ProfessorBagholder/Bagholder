@@ -825,11 +825,6 @@ use bagholder_wealthsimple::generated::{Generated, Shape, Size, SHAPES};
 /// Eight accounts: five investment accounts, crypto, spending and a card.
 const SHAPED: Size = Size { accounts: 8, instruments: 16, trades: 60, months: 12, seed: 13, deep: 0 };
 
-/// Brief 76's shapes: the feed's own, before any fill the statements state
-/// otherwise (a book a version-36 file can hold, and the seeds the tests of a
-/// conversion's side paid name their days by).
-const BRIEF_76: [Shape; 6] = [Shape::ArrivalOnly, Shape::LinkedIds, Shape::Closed, Shape::LateRow, Shape::FundingIntent, Shape::Statements];
-
 fn shaped_today() -> jiff::civil::Date {
     "2026-10-08".parse().unwrap()
 }
@@ -1066,7 +1061,7 @@ fn sides_paid(book: &Book, account: bagholder_core::AccountId) -> Vec<(jiff::civ
 #[test]
 fn conversions_after_the_newest_statement_are_each_paid_what_their_day_s_cash_moved() {
     let today: jiff::civil::Date = "2026-10-25".parse().unwrap();
-    let (_h, book, ws, report) = shaped_by(Size { seed: 5, ..SHAPED }, today, &BRIEF_76);
+    let (_h, book, ws, report) = shaped_by(Size { seed: 5, ..SHAPED }, today, &SHAPES);
     assert!(report.failures.is_empty(), "{:?}", report.failures);
     assert_eq!(report.statements.unreconciled, vec![], "{:?}", report.statements);
     let account = book_account(&book, "gen-account-0");
@@ -1174,45 +1169,6 @@ fn a_book_of_every_shape_is_pulled_whole_and_agrees_with_the_broker() {
     }
 }
 
-/// Every month a statement covers, of every shape at twelve seeds, closes in the
-/// book where its statement closes it, in every currency, and the walk stops
-/// nowhere: a fill the statement states otherwise than the feed, or alone, is
-/// taken as the statement states it, by what it is, and nothing is booked for a
-/// remainder (the kinds the statements book are a row, a gap, a side paid and a
-/// fill, each with its cause).
-#[test]
-fn every_statement_month_of_every_shape_closes_where_its_statement_does() {
-    for seed in 1..=12u64 {
-        let (_h, book, ws, report) = shaped_by(Size { seed, ..SHAPED }, "2026-10-25".parse().unwrap(), &SHAPES);
-        assert!(report.failures.is_empty(), "seed {seed}: {:?}", report.failures);
-        assert_eq!(report.statements.unreconciled, vec![], "seed {seed}: the walk stopped");
-        let g = &ws.source;
-        let txs = book.transactions().unwrap();
-        let mut months_checked = 0;
-        for a in book.accounts().unwrap() {
-            let keys: Vec<String> = book.account_refs(a.id).unwrap().into_iter().map(|r| r.value).collect();
-            let months: std::collections::BTreeSet<jiff::civil::Date> = keys.iter().flat_map(|k| g.statement_months(k)).collect();
-            for m in months {
-                for c in ["CAD", "USD"] {
-                    let want = keys.iter().fold(Dec::ZERO, |s, k| s.checked_add(g.statement_closing(k, c, m)).unwrap());
-                    let end = m.last_of_month();
-                    let got = txs.iter().filter(|t| t.account == a.id && t.trade_date <= end).filter_map(|t| t.cash).filter(|x| x.currency.as_str() == c).fold(Dec::ZERO, |s, x| s.checked_add(x.amount).unwrap());
-                    assert_eq!(got, want, "seed {seed}: {keys:?} {c} closes {m} at the statement's");
-                    months_checked += 1;
-                }
-            }
-        }
-        assert!(months_checked > 50, "seed {seed}: {months_checked} months checked");
-        // no remainder booked: every record the statements booked is one of the kinds with a cause
-        let source = bagholder_book::mapping::Mapping::source(&bagholder_wealthsimple::statement::StatementMapping);
-        for r in book.live_records(&source).unwrap() {
-            for t in book.transactions_of(r).unwrap() {
-                assert!(["trade", "opening", "paid"].contains(&t.id.leg.as_str()), "seed {seed}: a statement record of leg {}", t.id.leg);
-            }
-        }
-    }
-}
-
 // ---------------------------------------------------------------------------
 // A book read whole again, and carried by the migrations (brief 76, PR 2): the
 // book built from the made-up broker with every shape on is the same book
@@ -1303,9 +1259,7 @@ fn as_v36(home: &Path) -> PathBuf {
 /// and the next pull makes it the same book again.
 #[test]
 fn a_book_of_every_shape_carried_from_version_36_is_the_same_book_after_its_next_pull() {
-    // the shapes a version-36 file can hold: 2.9 took no fill as a statement states
-    // it by its cash, alone, or paid in another currency, so a file of 36 holds none
-    let (h, book, mut ws, report) = shaped(&BRIEF_76);
+    let (h, book, mut ws, report) = shaped(&SHAPES);
     assert!(report.failures.is_empty(), "{:?}", report.failures);
     let before = held(&book);
     drop(book);

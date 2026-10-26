@@ -103,7 +103,13 @@ pub enum Shape {
 }
 
 /// Every shape.
-pub const SHAPES: [Shape; 9] = [Shape::ArrivalOnly, Shape::LinkedIds, Shape::Closed, Shape::LateRow, Shape::FundingIntent, Shape::Statements, Shape::FeeFolded, Shape::FeedOmits, Shape::FxFunded];
+pub const SHAPES: [Shape; 6] = [Shape::ArrivalOnly, Shape::LinkedIds, Shape::Closed, Shape::LateRow, Shape::FundingIntent, Shape::Statements];
+
+/// The fills a statement states otherwise than the feed, or alone, as 2.10.9 read
+/// them (`docs/decisions.md`, 2026-10-26): a book of them, read by 2.10.8 and then
+/// by 2.10.9, is the one its take-back is proven on. No reading of statements
+/// since 2.10.9 is proven to close their months.
+pub const STATED_OTHERWISE: [Shape; 3] = [Shape::FeeFolded, Shape::FeedOmits, Shape::FxFunded];
 
 /// The account types, in the order a book of more accounts adds them: the
 /// investment accounts first, then crypto, spending and a card.
@@ -1484,14 +1490,21 @@ fn listing_name(l: &Listing) -> String {
 
 /// A fill's statement line: its code and description, in the forms the
 /// recorded statements write (`broker/src/codes.rs`, `fill_of`).
+/// A fill's statement row, in Wealthsimple's own words (`broker::codes`, the
+/// recorded LIRA statement): `VFV - Vanguard S&P 500 Index ETF: Sold 343.0000
+/// shares (executed at 2025-06-25)`, `Purchase of 2442.5025927700 DOGE (executed
+/// at …)`, `BBAI 5.00 USD PUT 2026-01-16 - BigBear.ai: Bought 26 contract`, `Sold 2
+/// contracts`.
 fn fill_line(l: &Listing, buy: bool, units: i64, day: jiff::civil::Date) -> (&'static str, String) {
     let verb = if buy { "Bought" } else { "Sold" };
     match l.sort {
         Sort::Share => (if buy { "BUY" } else { "SELL" }, format!("{} - {}: {verb} {units}.0000 shares (executed at {day})", l.symbol, listing_name(l))),
-        Sort::Coin => (if buy { "BUY" } else { "SELL" }, format!("{} of {} {} (executed at {day})", if buy { "Purchase" } else { "Sale" }, units_text(units, 6), l.symbol)),
+        // a coin's units to ten places, as the statement writes them
+        Sort::Coin => (if buy { "BUY" } else { "SELL" }, format!("{} of {} {} (executed at {day})", if buy { "Purchase" } else { "Sale" }, format!("{}.{:06}0000", units / 1_000_000, units % 1_000_000), l.symbol)),
         Sort::Contract => {
             let (expiry, strike) = l.contract.as_ref().map(|(_, e, s)| (*e, *s)).expect("a contract's terms");
-            (if buy { "BUYTOOPEN" } else { "SELLTOCLOSE" }, format!("{} {} USD {} {expiry} - {}: {verb} {units} contract", l.symbol, money(strike), if l.put { "PUT" } else { "CALL" }, listing_name(l)))
+            let what = if !buy && units > 1 { "contracts" } else { "contract" };
+            (if buy { "BUYTOOPEN" } else { "SELLTOCLOSE" }, format!("{} {} USD {} {expiry} - {}: {verb} {units} {what}", l.symbol, money(strike), if l.put { "PUT" } else { "CALL" }, listing_name(l)))
         }
     }
 }
