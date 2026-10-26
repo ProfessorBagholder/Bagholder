@@ -163,12 +163,10 @@ pub fn fill_payload(f: &bagholder_broker::statements::Fill) -> Value {
     let text = |s: &str| Value::String(s.to_string());
     let opt = |v: Option<String>| v.map(|s| Value::String(s)).unwrap_or(Value::Null);
     let money = |m: Option<Money>| (opt(m.map(|m| m.amount.to_text())), opt(m.map(|m| m.currency.as_str().to_string())));
-    let t = f.feed.as_ref();
-    let (price, price_currency) = money(f.price);
-    // the cash the statement states the fill moved, with what it pays beyond the
-    // fill's value as its fee
-    let (cash, cash_currency) = money(Some(Money::new(f.row.cash, f.row.currency)));
-    let (fee, fee_currency) = money(f.fee);
+    let t = &f.feed;
+    let (price, price_currency) = money(t.price);
+    let (cash, cash_currency) = money(t.cash);
+    let (fee, fee_currency) = money(t.fee);
     let Value::Object(mut row) = payload(&f.account, f.month, f.position, &f.row) else { unreachable!("a row is an object") };
     for (k, v) in [
         ("kind", text(FILL)),
@@ -176,19 +174,18 @@ pub fn fill_payload(f: &bagholder_broker::statements::Fill) -> Value {
         ("instrumentKind", text(f.kind.as_str())),
         ("instrumentCurrency", text(f.currency.as_str())),
         ("quantity", text(&f.quantity.to_text())),
-        ("side", text(f.side.as_str())),
-        ("effect", opt(f.effect.map(|e| e.as_str().to_string()))),
-        ("occurredAt", opt(t.and_then(|t| t.occurred_at).map(|a| a.to_string()))),
-        // a fill the feed lists is dated as the feed dates it; one it does not, as the statement does
-        ("tradeDate", text(&t.map_or(f.row.book_day(), |t| t.trade_date).to_string())),
-        ("settleDate", opt(t.map_or(f.row.executed.map(|_| f.row.day), |t| t.settle_date).map(|d| d.to_string()))),
+        ("side", text(t.kind.as_str())),
+        ("effect", opt(t.effect.map(|e| e.as_str().to_string()))),
+        ("occurredAt", opt(t.occurred_at.map(|a| a.to_string()))),
+        ("tradeDate", text(&t.trade_date.to_string())),
+        ("settleDate", opt(t.settle_date.map(|d| d.to_string()))),
         ("price", price),
         ("priceCurrency", price_currency),
         ("cash", cash),
         ("cashCurrency", cash_currency),
         ("fee", fee),
         ("feeCurrency", fee_currency),
-        ("fxRate", opt(f.fx_rate.map(|r| r.to_text()))),
+        ("fxRate", opt(t.fx_rate.map(|r| r.to_text()))),
     ] {
         row.insert(k.to_string(), v);
     }

@@ -41,48 +41,6 @@ pub fn fill_of(description: &str) -> Option<(String, bagholder_core::Dec)> {
     Some((symbol, plain_number(number)?))
 }
 
-/// An option contract a fill row's description names, and how many contracts
-/// (`BBAI 5.00 USD PUT 2026-01-16 - BigBear.ai: Bought 26 contract`): its
-/// underlying's symbol, strike, right and expiry. None for a description of
-/// another shape.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Contract {
-    pub underlying: String,
-    pub strike: bagholder_core::Dec,
-    pub put: bool,
-    pub expiry: jiff::civil::Date,
-}
-
-pub fn contract_of(description: &str) -> Option<(Contract, bagholder_core::Dec)> {
-    let (terms, rest) = description.trim().split_once(" - ")?;
-    let (_, what) = rest.split_once(": ")?;
-    let what = what.strip_prefix("Bought ").or_else(|| what.strip_prefix("Sold "))?;
-    let mut words = what.split_whitespace();
-    let n = plain_number(words.next()?)?;
-    if !words.next()?.starts_with("contract") {
-        return None;
-    }
-    let t: Vec<&str> = terms.split_whitespace().collect();
-    let [underlying, strike, _currency, right, expiry] = t.as_slice() else { return None };
-    let put = match *right {
-        "PUT" => true,
-        "CALL" => false,
-        _ => return None,
-    };
-    Some((Contract { underlying: underlying.to_uppercase(), strike: bagholder_core::Dec::parse(strike).ok()?, put, expiry: expiry.parse().ok()? }, n))
-}
-
-/// Whether a contract's fill opens or closes it, as its code says
-/// (`BUYTOOPEN`, `SELLTOCLOSE`, …); none for a code that does not say.
-pub fn effect_of(code: &str) -> Option<bagholder_core::transaction::Effect> {
-    use bagholder_core::transaction::Effect;
-    match code.trim().to_uppercase().as_str() {
-        "BUYTOOPEN" | "SELLTOOPEN" => Some(Effect::Open),
-        "BUYTOCLOSE" | "SELLTOCLOSE" => Some(Effect::Close),
-        _ => None,
-    }
-}
-
 /// A number as a statement writes it, `2442.50`, or with an exponent, `5.300E-7`.
 fn plain_number(text: &str) -> Option<bagholder_core::Dec> {
     let Some((mantissa, exp)) = text.split_once(['E', 'e']) else { return bagholder_core::Dec::parse(text).ok() };
@@ -165,17 +123,6 @@ mod tests {
         assert_eq!(fill_of("QNC - Quantum Emotion Corp: Sold 12.5 shares at $3.23 per share"), Some(("QNC".into(), d("12.5"))));
         assert_eq!(fill_of("BBAI 5.00 USD PUT 2026-01-16 - BigBear.ai: Bought 26 contract"), None);
         assert_eq!(fill_of("Fee for purchase of 1 BTC"), None);
-    }
-
-    #[test]
-    fn a_contract_row_states_its_contract_and_how_many() {
-        let d = |s: &str| bagholder_core::Dec::parse(s).unwrap();
-        let (c, n) = contract_of("BBAI 5.00 USD PUT 2026-01-16 - BigBear.ai: Bought 26 contract").unwrap();
-        assert_eq!((c.underlying.as_str(), c.strike, c.put, c.expiry.to_string(), n), ("BBAI", d("5.00"), true, "2026-01-16".to_string(), d("26")));
-        let (c, n) = contract_of("XYZ 12.50 USD CALL 2026-03-20 - XYZ Generated Listing: Sold 2 contracts").unwrap();
-        assert_eq!((c.put, n), (false, d("2")));
-        assert_eq!(contract_of("QNC - Quantum Emotion Corp: Bought 1000.0000 shares at $2.79 per share"), None);
-        assert_eq!(contract_of("Purchase of 1 BTC"), None);
     }
 
     #[test]
