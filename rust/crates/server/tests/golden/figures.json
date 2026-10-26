@@ -3,32 +3,28 @@
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "154346.59",
-          "USD": "66216.5"
+          "CAD": "119319.2",
+          "USD": "37126.23"
         },
         "units": {
-          "GA": "-52",
-          "GB": "63",
+          "GB": "190",
           "GC": "37",
-          "GD": "-225",
           "GE": "192",
           "GJ": "258",
           "GK": "126",
-          "GM": "135"
+          "GM": "135",
+          "GX": "200"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "101.1",
-          "USD": "19628.29"
+          "CAD": "12.34"
         },
-        "units": {
-          "GD": "-74"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "66275.43"
+          "CAD": "82941.62"
         },
         "units": {
           "GH": "2.940522",
@@ -49,100 +45,67 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "20956.16",
+          "CAD": "16197.06",
           "USD": "500"
         },
         "units": {
           "GA": "280",
           "GC": "104",
           "GF 26OCT26 273.00 CALL": "2",
-          "GK": "-49"
+          "GM": "80"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "70155.45",
-          "USD": "86023.23"
+          "CAD": "30421.42",
+          "USD": "80658.12"
         },
         "units": {
-          "GA": "96",
-          "GE": "-58",
+          "GA": "289",
+          "GC": "28",
           "GI": "193",
           "GK": "156"
         }
       },
       "Generated 8": {
         "cash": {
-          "CAD": "150186.47",
-          "USD": "13234.96"
+          "CAD": "46195.36",
+          "USD": "62691.82"
         },
         "units": {
-          "GA": "-69",
-          "GG": "200",
+          "GA": "72",
+          "GG": "300",
           "GM": "128"
         }
       }
     },
-    "header": [
-      "2 rows in Generated 0 could not be placed and count in no figure: a statement row of code \"BUY\", which is not booked, 2 rows, the first on 2026-02-20.",
-      "2 rows in Generated 0 could not be placed and count in no figure: a statement row of code \"BUY\", which is not booked, 2 rows, the first on 2026-02-20.",
-      "2 rows in Generated 0 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-06-01.",
-      "2 rows in Generated 0 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-06-01.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-01-31.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-01-31.",
-      "A sale of GA in Generated 0 on 2026-07-23 took 52 units more than the book held.",
-      "A sale of GA in Generated 8 on 2026-04-25 took 141 units more than the book held.",
-      "A sale of GD in Generated 0 on 2026-06-01 took 91 units more than the book held.",
-      "A sale of GD in Generated 0 on 2026-08-06 took 134 units more than the book held.",
-      "A sale of GD in Generated 2 on 2026-06-25 took 74 units more than the book held.",
-      "A sale of GE in Generated 7 on 2026-05-11 took 58 units more than the book held.",
-      "A sale of GK in Generated 6 on 2026-02-11 took 49 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's February 2026 statement closes at $500.00, the book at $30,769.01; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's December 2025 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "GA in Generated 7: Wealthsimple states 289 units, the book holds 96.",
-      "GB in Generated 0: Wealthsimple states 190 units, the book holds 63.",
-      "GC in Generated 7: Wealthsimple states 28 units, the book holds 0.",
-      "GG in Generated 8: Wealthsimple states 300 units, the book holds 200.",
-      "GM in Generated 6: Wealthsimple states 80 units, the book holds 0.",
-      "USD cash in Generated 0: Wealthsimple's June 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's April 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's June 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 2
+    "header": [],
+    "withdrawn at opening, the book read a version before": 8
   },
   "seed 02": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "99379.85",
-          "USD": "114839.19"
+          "CAD": "44190.98",
+          "USD": "101922.13"
         },
         "units": {
           "GE": "114",
           "GF": "77",
           "GG": "183",
-          "GK": "-149",
-          "GN": "-38",
-          "GO": "50"
+          "GO": "101",
+          "GX": "100"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "50669.02",
-          "USD": "-21855.38"
+          "CAD": "12.34"
         },
-        "units": {
-          "GD 30MAR26 325.00 CALL": "-2"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "637.78"
+          "CAD": "500"
         },
         "units": {
           "GP": "4.194639"
@@ -162,102 +125,67 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "168877.5",
-          "USD": "59066.51"
+          "CAD": "11085.91",
+          "USD": "98335.38"
         },
         "units": {
-          "GD": "-65",
+          "GC": "163",
           "GF": "51",
           "GI": "160"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "171120.38",
-          "USD": "6799.09"
+          "CAD": "500",
+          "USD": "66236.91"
         },
         "units": {
-          "GE": "55",
+          "GE": "82",
           "GI": "234",
-          "GJ": "112",
+          "GJ": "124",
           "GK": "264",
-          "GL": "-31",
-          "GO": "-40"
+          "GL": "2",
+          "GO": "85"
         }
       },
       "Generated 8": {
         "cash": {
-          "CAD": "63955.8",
-          "USD": "40859.32"
+          "CAD": "59262.46",
+          "USD": "48234.6"
         },
         "units": {
           "GL": "17"
         }
       }
     },
-    "header": [
-      "2 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-03-16.",
-      "2 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-03-16.",
-      "2 rows in Generated 8 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-01-10.",
-      "2 rows in Generated 8 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-01-10.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-02-18.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-02-18.",
-      "A sale of GD in Generated 6 on 2026-08-12 took 16 units more than the book held.",
-      "A sale of GD in Generated 6 on 2026-08-13 took 49 units more than the book held.",
-      "A sale of GK in Generated 0 on 2025-12-25 took 149 units more than the book held.",
-      "A sale of GL in Generated 7 on 2026-02-25 took 33 units more than the book held.",
-      "A sale of GN in Generated 0 on 2026-09-17 took 38 units more than the book held.",
-      "A sale of GO in Generated 7 on 2026-08-09 took 125 units more than the book held.",
-      "An expiry of GD 30MAR26 325.00 CALL in Generated 2 on 2026-03-30 took 2 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's April 2026 statement closes at $500.00, the book at $65,156.31; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "GC in Generated 6: Wealthsimple states 163 units, the book holds 0.",
-      "GE in Generated 7: Wealthsimple states 82 units, the book holds 55.",
-      "GJ in Generated 7: Wealthsimple states 124 units, the book holds 112.",
-      "GO in Generated 0: Wealthsimple states 101 units, the book holds 50.",
-      "USD cash in Generated 0: Wealthsimple's August 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 4
+    "header": [],
+    "withdrawn at opening, the book read a version before": 9
   },
   "seed 03": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "37544.1",
-          "USD": "75642.72"
+          "CAD": "15986.12",
+          "USD": "116350.55"
         },
         "units": {
           "GC": "76",
           "GE": "279",
-          "GN": "258"
+          "GN": "258",
+          "GY": "100"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "131936.61",
-          "USD": "-28631.55"
+          "CAD": "12.34"
         },
-        "units": {
-          "GB": "-36",
-          "GG": "-90"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "428552.5"
+          "CAD": "193697.07"
         },
-        "units": {
-          "GH": "-4.346984",
-          "GP": "-3.864521"
-        }
+        "units": {}
       },
       "Generated 4": {
         "cash": {
@@ -273,112 +201,65 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "215208.79",
-          "USD": "104618.66"
+          "CAD": "99690.47",
+          "USD": "89227.63"
         },
         "units": {
           "GB": "66",
-          "GG": "-98",
-          "GL": "187",
-          "GM": "-136",
-          "GN": "-152"
+          "GL": "187"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "206258.29",
-          "USD": "25182.66"
+          "CAD": "118871.57",
+          "USD": "35539.1"
         },
         "units": {
-          "GD": "38",
-          "GN": "138",
+          "GD": "115",
+          "GN": "228",
           "GO": "18"
         }
       },
       "Generated 8": {
         "cash": {
-          "CAD": "133371.32",
-          "USD": "-904.07"
+          "CAD": "109874.42",
+          "USD": "518.32"
         },
         "units": {
           "GB": "6",
-          "GI": "154",
-          "GL 31JAN26 247.00 CALL": "-1",
-          "GM": "-87"
+          "GI": "154"
         }
       }
     },
-    "header": [
-      "2 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-02-02.",
-      "2 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-02-02.",
-      "2 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2025-12-13.",
-      "2 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2025-12-13.",
-      "A row in Generated 2 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-31.",
-      "A row in Generated 2 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-31.",
-      "A row in Generated 6 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2026-02-06.",
-      "A row in Generated 6 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2026-02-06.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-05-14.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-05-14.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-01-20.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-01-20.",
-      "A sale of GG in Generated 2 on 2026-06-18 took 90 units more than the book held.",
-      "A sale of GG in Generated 6 on 2026-08-17 took 49 units more than the book held.",
-      "A sale of GG in Generated 6 on 2026-08-18 took 49 units more than the book held.",
-      "A sale of GH in Generated 3 on 2026-06-20 took 0.414283 units more than the book held.",
-      "A sale of GH in Generated 3 on 2026-06-21 took 0.426985 units more than the book held.",
-      "A sale of GH in Generated 3 on 2026-06-28 took 3.505716 units more than the book held.",
-      "A sale of GM in Generated 6 on 2026-07-18 took 136 units more than the book held.",
-      "A sale of GM in Generated 8 on 2026-03-16 took 87 units more than the book held.",
-      "A sale of GN in Generated 6 on 2026-05-27 took 152 units more than the book held.",
-      "A sale of GP in Generated 3 on 2026-08-17 took 3.864521 units more than the book held.",
-      "A transfer out of GB in Generated 2 on 2026-04-16 took 36 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's June 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's December 2025 statement closes at $500.00, the book at $10,121.83; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's December 2025 statement closes at $500.00, the book at $49,980.67; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "GD in Generated 7: Wealthsimple states 115 units, the book holds 38.",
-      "GL 31JAN26 247.00 CALL in Generated 8: Wealthsimple states none, the book holds −1.",
-      "GN in Generated 7: Wealthsimple states 228 units, the book holds 138.",
-      "USD cash in Generated 0: Wealthsimple's July 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 3
+    "header": [],
+    "withdrawn at opening, the book read a version before": 9
   },
   "seed 04": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "150144.85",
-          "USD": "117512.49"
+          "CAD": "111410.85",
+          "USD": "140061.74"
         },
         "units": {
           "GA": "285",
-          "GE": "-42",
+          "GE": "7",
           "GI": "32",
           "GL": "197",
-          "GL 14JUN26 8.00 CALL": "-3"
+          "GU": "300"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "26955.62",
-          "USD": "-17472.99"
+          "CAD": "12.34"
         },
-        "units": {
-          "GD": "-141"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "622535.38"
+          "CAD": "559413.78"
         },
         "units": {
-          "GH": "-2.548504",
           "GP": "1.614578"
         }
       },
@@ -396,108 +277,64 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "54911.14",
-          "USD": "44021.84"
+          "CAD": "3418.23",
+          "USD": "37871.95"
         },
         "units": {
+          "GK": "65",
           "GL": "3"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "248110.8",
-          "USD": "-39934.16"
+          "CAD": "505.04",
+          "USD": "6494.91"
         },
         "units": {
           "GB": "578",
           "GC": "93",
-          "GG": "13",
-          "GI": "-150",
+          "GG": "19",
+          "GN": "18",
           "GO": "105"
         }
       },
       "Generated 8": {
         "cash": {
-          "CAD": "61786.13",
-          "USD": "1066.41"
+          "CAD": "35736.72",
+          "USD": "674.03"
         },
         "units": {
-          "GD": "143",
-          "GD 23JUL26 119.00 CALL": "-1",
-          "GI": "-74",
-          "GL": "-133"
+          "GD": "143"
         }
       }
     },
-    "header": [
-      "2 rows in Generated 6 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2025-11-12.",
-      "2 rows in Generated 6 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2025-11-12.",
-      "3 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 3 rows, the first on 2026-05-03.",
-      "3 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 3 rows, the first on 2026-05-03.",
-      "A row in Generated 2 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-11-23.",
-      "A row in Generated 2 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-11-23.",
-      "A row in Generated 2 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2025-12-27.",
-      "A row in Generated 2 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2025-12-27.",
-      "A row in Generated 8 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-31.",
-      "A row in Generated 8 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-31.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-04-30.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-04-30.",
-      "A sale of GD in Generated 2 on 2026-03-07 took 70 units more than the book held.",
-      "A sale of GD in Generated 2 on 2026-03-08 took 71 units more than the book held.",
-      "A sale of GE in Generated 0 on 2025-12-18 took 21 units more than the book held.",
-      "A sale of GE in Generated 0 on 2025-12-19 took 21 units more than the book held.",
-      "A sale of GH in Generated 3 on 2026-07-24 took 2.548504 units more than the book held.",
-      "A sale of GI in Generated 7 on 2026-03-11 took 150 units more than the book held.",
-      "A sale of GI in Generated 8 on 2026-01-10 took 74 units more than the book held.",
-      "A sale of GL in Generated 8 on 2026-01-17 took 133 units more than the book held.",
-      "An expiry of GD 23JUL26 119.00 CALL in Generated 8 on 2026-07-23 took 1 unit more than the book held.",
-      "An expiry of GL 14JUN26 8.00 CALL in Generated 0 on 2026-06-14 took 3 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's October 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's December 2025 statement closes at $500.00, the book at $2,227.27; nothing from that month on is booked from the statements.",
-      "GE in Generated 0: Wealthsimple states 7 units, the book holds 0.",
-      "GG in Generated 7: Wealthsimple states 19 units, the book holds 13.",
-      "GK in Generated 6: Wealthsimple states 65 units, the book holds 0.",
-      "GN in Generated 7: Wealthsimple states 18 units, the book holds 0.",
-      "USD cash in Generated 0: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's March 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's July 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's April 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 0
+    "header": [],
+    "withdrawn at opening, the book read a version before": 7
   },
   "seed 05": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "159493.96",
-          "USD": "36938.44"
+          "CAD": "80552.31",
+          "USD": "42044.6"
         },
         "units": {
           "GF": "137",
           "GG": "126",
-          "GM": "-142"
+          "GX": "200"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "10676.29"
+          "CAD": "12.34"
         },
-        "units": {
-          "GL": "-7",
-          "GO": "-58"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "384567.17"
+          "CAD": "322986.21"
         },
         "units": {
-          "GH": "-2.745633",
           "GP": "7.651263"
         }
       },
@@ -515,11 +352,10 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "42314.61",
-          "USD": "9612.76"
+          "CAD": "22913.36",
+          "USD": "9127.34"
         },
         "units": {
-          "GA": "-98",
           "GB": "142",
           "GE": "165",
           "GG": "103",
@@ -528,93 +364,54 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "89364.72",
-          "USD": "31380.11"
+          "CAD": "22156.73",
+          "USD": "13480.93"
         },
         "units": {
           "GC": "421",
-          "GD": "-38",
           "GE": "127",
           "GF": "149",
-          "GI": "94",
-          "GL 19OCT26 229.00 CALL": "-5"
+          "GI": "94"
         }
       },
       "Generated 8": {
         "cash": {
-          "CAD": "150584.72",
-          "USD": "-56243.5"
+          "CAD": "31348.28",
+          "USD": "1312.98"
         },
         "units": {
           "GA": "163",
-          "GB": "-3",
-          "GD": "147",
-          "GJ 17JUL26 357.00 CALL": "-2"
+          "GD": "220"
         }
       }
     },
-    "header": [
-      "2 rows in Generated 6 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2025-11-24.",
-      "2 rows in Generated 6 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2025-11-24.",
-      "2 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-02-22.",
-      "2 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-02-22.",
-      "A row in Generated 0 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-10-11.",
-      "A row in Generated 0 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-10-11.",
-      "A row in Generated 2 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-02-24.",
-      "A row in Generated 2 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-02-24.",
-      "A sale of GA in Generated 6 on 2025-12-03 took 98 units more than the book held.",
-      "A sale of GB in Generated 8 on 2026-04-25 took 3 units more than the book held.",
-      "A sale of GD in Generated 7 on 2026-03-04 took 38 units more than the book held.",
-      "A sale of GH in Generated 3 on 2026-10-19 took 2.745633 units more than the book held.",
-      "A sale of GL in Generated 2 on 2026-06-25 took 7 units more than the book held.",
-      "A sale of GM in Generated 0 on 2026-09-01 took 142 units more than the book held.",
-      "A sale of GO in Generated 2 on 2026-06-25 took 58 units more than the book held.",
-      "An expiry of GJ 17JUL26 357.00 CALL in Generated 8 on 2026-07-17 took 2 units more than the book held.",
-      "An expiry of GL 19OCT26 229.00 CALL in Generated 7 on 2026-10-19 took 5 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's April 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's October 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "GD in Generated 8: Wealthsimple states 220 units, the book holds 147.",
-      "USD cash in Generated 6: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's March 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 2
+    "header": [],
+    "withdrawn at opening, the book read a version before": 7
   },
   "seed 06": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "129671.15",
-          "USD": "40459.36"
+          "CAD": "53757.67",
+          "USD": "6798.01"
         },
         "units": {
           "GA": "137",
-          "GC": "-48",
           "GD": "142",
-          "GG": "-180",
           "GI": "64",
-          "GN": "94",
-          "GN 08SEP26 60.00 CALL": "-1",
-          "GO": "-170"
+          "GN": "283",
+          "GW": "100"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "84963.97",
-          "USD": "-57728.07"
+          "CAD": "12.34"
         },
-        "units": {
-          "GD 07APR26 128.00 CALL": "-4",
-          "GM": "-123"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "205585.2"
+          "CAD": "186930.69"
         },
         "units": {
           "GP": "0.71538"
@@ -634,8 +431,8 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "117222",
-          "USD": "-5920.95"
+          "CAD": "76954.76",
+          "USD": "9976.04"
         },
         "units": {
           "GB": "7",
@@ -646,8 +443,8 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "78863.92",
-          "USD": "19680.4"
+          "CAD": "8833.33",
+          "USD": "38814.62"
         },
         "units": {
           "GE": "58"
@@ -655,81 +452,47 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "149115.02",
-          "USD": "74824.05"
+          "CAD": "790.96",
+          "USD": "149520.28"
         },
         "units": {
           "GB": "198",
-          "GF": "-116",
-          "GN 24DEC25 61.00 CALL": "-5",
           "GO": "201"
         }
       }
     },
-    "header": [
-      "6 rows in Generated 8 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 6 rows, the first on 2025-11-02.",
-      "6 rows in Generated 8 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 6 rows, the first on 2025-11-02.",
-      "A row in Generated 0 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-03-30.",
-      "A row in Generated 0 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-03-30.",
-      "A row in Generated 7 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2025-12-28.",
-      "A row in Generated 7 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2025-12-28.",
-      "A sale of GC in Generated 0 on 2026-06-22 took 48 units more than the book held.",
-      "A sale of GF in Generated 8 on 2026-04-25 took 116 units more than the book held.",
-      "A sale of GG in Generated 0 on 2026-07-06 took 180 units more than the book held.",
-      "A sale of GM in Generated 2 on 2026-03-29 took 119 units more than the book held.",
-      "A sale of GM in Generated 2 on 2026-06-25 took 4 units more than the book held.",
-      "A sale of GO in Generated 0 on 2026-09-13 took 170 units more than the book held.",
-      "An expiry of GN 08SEP26 60.00 CALL in Generated 0 on 2026-09-08 took 1 unit more than the book held.",
-      "An expiry of GN 24DEC25 61.00 CALL in Generated 8 on 2025-12-24 took 5 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's January 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's November 2025 statement closes at $500.00, the book at $9,429.85; nothing from that month on is booked from the statements.",
-      "GN in Generated 0: Wealthsimple states 283 units, the book holds 94.",
-      "USD cash in Generated 0: Wealthsimple's July 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's February 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's December 2025 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 4
+    "header": [],
+    "withdrawn at opening, the book read a version before": 9
   },
   "seed 07": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "194136.69",
-          "USD": "-132.65"
+          "CAD": "120298.79",
+          "USD": "500"
         },
         "units": {
           "GD": "237",
           "GF": "119",
           "GI": "37",
-          "GK": "-65",
           "GN": "98",
-          "GO": "200"
+          "GO": "200",
+          "GT": "200"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "15622.26",
-          "USD": "622.75"
+          "CAD": "12.34"
         },
-        "units": {
-          "GA": "-74",
-          "GD": "-188",
-          "GN": "-4"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "168255.55"
+          "CAD": "500"
         },
         "units": {
           "GH": "3.449909",
-          "GP": "3.758808"
+          "GP": "11.271901"
         }
       },
       "Generated 4": {
@@ -746,20 +509,22 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "168382.3",
-          "USD": "1212.92"
+          "CAD": "85815.1",
+          "USD": "500"
         },
         "units": {
-          "GK": "-181",
+          "GD": "156",
+          "GE": "126",
           "GN 02DEC26 243.00 CALL": "3"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "54902",
-          "USD": "118237.6"
+          "CAD": "1397.43",
+          "USD": "107268.8"
         },
         "units": {
+          "GA": "116",
           "GD": "199",
           "GE": "165",
           "GF": "7",
@@ -770,81 +535,46 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "169705.51",
-          "USD": "-9328.32"
+          "CAD": "101699.61",
+          "USD": "46720.5"
         },
         "units": {
           "GA": "116",
-          "GD": "-109",
           "GO": "83"
         }
       }
     },
-    "header": [
-      "2 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-03-16.",
-      "2 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-03-16.",
-      "3 rows in Generated 0 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 3 rows, the first on 2026-02-04.",
-      "3 rows in Generated 0 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 3 rows, the first on 2026-02-04.",
-      "A row in Generated 2 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2026-01-22.",
-      "A row in Generated 2 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2026-01-22.",
-      "A row in Generated 7 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-02-20.",
-      "A row in Generated 7 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-02-20.",
-      "A sale of GA in Generated 2 on 2025-12-22 took 74 units more than the book held.",
-      "A sale of GD in Generated 2 on 2026-05-31 took 10 units more than the book held.",
-      "A sale of GD in Generated 2 on 2026-06-25 took 178 units more than the book held.",
-      "A sale of GD in Generated 8 on 2026-03-25 took 109 units more than the book held.",
-      "A sale of GK in Generated 0 on 2026-09-30 took 65 units more than the book held.",
-      "A sale of GK in Generated 6 on 2026-05-26 took 181 units more than the book held.",
-      "A sale of GN in Generated 2 on 2026-03-04 took 4 units more than the book held.",
-      "A sale of GP in Generated 3 on 2026-02-09 took 0.915549 units more than the book held.",
-      "A sale of GP in Generated 3 on 2026-02-10 took 2.746649 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's January 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's February 2026 statement closes at $411.82, the book at $755.18; nothing from that month on is booked from the statements.",
-      "GA in Generated 7: Wealthsimple states 116 units, the book holds 0.",
-      "GD in Generated 6: Wealthsimple states 156 units, the book holds 0.",
-      "GE in Generated 6: Wealthsimple states 126 units, the book holds 0.",
-      "GP in Generated 3: Wealthsimple states 11.271901 units, the book holds 7.421006.",
-      "USD cash in Generated 0: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 1
+    "header": [],
+    "withdrawn at opening, the book read a version before": 6
   },
   "seed 08": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "111166.16",
-          "USD": "-4916.64"
+          "CAD": "97138.89",
+          "USD": "500"
         },
         "units": {
-          "GA": "-189",
           "GI": "215",
           "GJ": "202",
           "GK": "49",
-          "GL": "-142",
-          "GM": "161"
+          "GM": "161",
+          "GW": "200"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "834.78",
-          "USD": "-404.07"
+          "CAD": "12.34"
         },
         "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "629568.49"
+          "CAD": "176254.31"
         },
         "units": {
-          "GH": "-4.978485",
-          "GP": "-0.78238"
+          "GH": "2.500067",
+          "GP": "4.084903"
         }
       },
       "Generated 4": {
@@ -861,102 +591,63 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "85306.36",
-          "USD": "54899.74"
+          "CAD": "40860.99",
+          "USD": "65812.77"
         },
         "units": {
-          "GB": "-48",
-          "GM": "6",
-          "GN 14SEP26 74.00 CALL": "-2"
+          "GM": "19"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "45781.15",
-          "USD": "17049.67"
+          "CAD": "17551.61",
+          "USD": "19795.38"
         },
         "units": {
-          "GM": "47"
+          "GM": "114"
         }
       },
       "Generated 8": {
         "cash": {
-          "CAD": "43872.91",
-          "USD": "16479.01"
+          "CAD": "39476.42",
+          "USD": "12568.51"
         },
         "units": {
-          "GD 26MAR26 34.00 CALL": "-5",
           "GN": "63"
         }
       }
     },
-    "header": [
-      "2 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-02-01.",
-      "2 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-02-01.",
-      "A row in Generated 0 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-07.",
-      "A row in Generated 0 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-07.",
-      "A row in Generated 0 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-10-10.",
-      "A row in Generated 0 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-10-10.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-03-02.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-03-02.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-03-11.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-03-11.",
-      "A sale of GA in Generated 0 on 2026-08-14 took 25 units more than the book held.",
-      "A sale of GA in Generated 0 on 2026-08-15 took 164 units more than the book held.",
-      "A sale of GB in Generated 6 on 2026-09-27 took 48 units more than the book held.",
-      "A sale of GH in Generated 3 on 2026-02-12 took 7.478552 units more than the book held.",
-      "A sale of GL in Generated 0 on 2026-02-25 took 71 units more than the book held.",
-      "A sale of GL in Generated 0 on 2026-02-26 took 71 units more than the book held.",
-      "A sale of GP in Generated 3 on 2026-07-07 took 4.867283 units more than the book held.",
-      "A transfer out of GM in Generated 7 on 2026-02-20 took 67 units more than the book held.",
-      "An expiry of GD 26MAR26 34.00 CALL in Generated 8 on 2026-03-26 took 5 units more than the book held.",
-      "An expiry of GN 14SEP26 74.00 CALL in Generated 6 on 2026-09-14 took 2 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's December 2025 statement closes at $500.00, the book at $37,268.06; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's February 2026 statement closes at $500.00, the book at $1,117.06; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "GM in Generated 6: Wealthsimple states 19 units, the book holds 6.",
-      "USD cash in Generated 0: Wealthsimple's February 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's April 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 2
+    "header": [],
+    "withdrawn at opening, the book read a version before": 6
   },
   "seed 09": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "272480.39",
-          "USD": "22951.91"
+          "CAD": "150144.04",
+          "USD": "39374.88"
         },
         "units": {
-          "GA": "1",
+          "GA": "2",
           "GD": "152",
-          "GF": "255",
-          "GO": "128"
+          "GD 30NOV26 93.00 CALL": "3",
+          "GF": "288",
+          "GO": "128",
+          "GZ": "100"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "42038.55",
-          "USD": "24373.79"
+          "CAD": "12.34"
         },
-        "units": {
-          "GL": "-89",
-          "GM": "-121"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "9406.32"
+          "CAD": "500"
         },
         "units": {
-          "GH": "5.150579",
-          "GP": "-1.704496"
+          "GH": "5.303993"
         }
       },
       "Generated 4": {
@@ -973,99 +664,66 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "90288.96",
-          "USD": "77828.79"
+          "CAD": "52281.6",
+          "USD": "73249.21"
         },
         "units": {
           "GA": "196",
-          "GD": "93",
-          "GN": "-190"
+          "GD": "93"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "107717.82",
-          "USD": "40608.94"
+          "CAD": "789.29",
+          "USD": "43850.18"
         },
         "units": {
-          "GA": "360",
-          "GC": "-167"
+          "GA": "360"
         }
       },
       "Generated 8": {
         "cash": {
-          "CAD": "1586.37",
-          "USD": "4377.92"
+          "CAD": "1170.5",
+          "USD": "3366.39"
         },
         "units": {
-          "GI": "198",
-          "GJ": "-57"
+          "GI": "198"
         }
       }
     },
     "header": [
-      "3 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 3 rows, the first on 2026-06-26.",
-      "3 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 3 rows, the first on 2026-06-26.",
-      "A row in Generated 8 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-03.",
-      "A row in Generated 8 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-03.",
       "A row in Generated 8 was kept with a problem: the cost of sec-s-aeaf52febe706064c02d8a5e87afea62 moved in cannot be told apart from the account's own trades of it on the same days, on 2025-11-05.",
-      "A row in Generated 8 was kept with a problem: the cost of sec-s-aeaf52febe706064c02d8a5e87afea62 moved in cannot be told apart from the account's own trades of it on the same days, on 2025-11-05.",
-      "A sale of GC in Generated 7 on 2026-05-05 took 83 units more than the book held.",
-      "A sale of GC in Generated 7 on 2026-05-06 took 84 units more than the book held.",
-      "A sale of GF in Generated 0 on 2026-03-24 took 33 units more than the book held.",
-      "A sale of GJ in Generated 8 on 2026-02-07 took 57 units more than the book held.",
-      "A sale of GL in Generated 2 on 2026-05-23 took 89 units more than the book held.",
-      "A sale of GM in Generated 2 on 2026-06-08 took 30 units more than the book held.",
-      "A sale of GM in Generated 2 on 2026-06-09 took 91 units more than the book held.",
-      "A sale of GN in Generated 6 on 2026-07-17 took 190 units more than the book held.",
-      "A sale of GP in Generated 3 on 2026-03-07 took 1.704496 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's February 2026 statement closes at $500.00, the book at $6,022.05; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "GA in Generated 0: Wealthsimple states 2 units, the book holds 1.",
-      "GD 30NOV26 93.00 CALL in Generated 0: Wealthsimple states 3 units, the book holds 0.",
-      "GH in Generated 3: Wealthsimple states 5.303993 units, the book holds 5.150579.",
-      "USD cash in Generated 0: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's December 2025 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's May 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's June 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's July 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
+      "A row in Generated 8 was kept with a problem: the cost of sec-s-aeaf52febe706064c02d8a5e87afea62 moved in cannot be told apart from the account's own trades of it on the same days, on 2025-11-05."
     ],
-    "withdrawn at opening, the book read a version before": 3
+    "withdrawn at opening, the book read a version before": 6
   },
   "seed 10": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "101361.05",
-          "USD": "9302.62"
+          "CAD": "45602.7",
+          "USD": "35861.9"
         },
         "units": {
-          "GC": "-173",
-          "GD": "270",
+          "GD": "306",
           "GG": "114",
           "GJ": "233",
-          "GM": "53",
-          "GN": "10"
+          "GM": "160",
+          "GN": "157",
+          "GV": "200"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "53825.79",
-          "USD": "-9037.66"
+          "CAD": "12.34"
         },
         "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "543642.51"
+          "CAD": "426547.98"
         },
-        "units": {
-          "GP": "-1.134839"
-        }
+        "units": {}
       },
       "Generated 4": {
         "cash": {
@@ -1081,109 +739,67 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "145834.43",
-          "USD": "9491.92"
+          "CAD": "55697.38",
+          "USD": "10234.43"
         },
         "units": {
           "GG": "193",
-          "GK": "140"
+          "GK": "337"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "187424.36",
-          "USD": "23370.62"
+          "CAD": "53621.23",
+          "USD": "876.71"
         },
         "units": {
           "GA": "75",
-          "GB": "-135",
-          "GD": "-9",
-          "GE": "-77",
+          "GD": "17",
           "GL": "138",
           "GN": "422"
         }
       },
       "Generated 8": {
         "cash": {
-          "CAD": "62059.16",
-          "USD": "-34392.16"
+          "CAD": "1356.24",
+          "USD": "1385.84"
         },
         "units": {
-          "GB 01JUN26 143.00 CALL": "-4",
-          "GB 22MAR26 146.00 CALL": "-4",
           "GE": "13",
           "GM": "153",
           "GN": "200"
         }
       }
     },
-    "header": [
-      "2 rows in Generated 0 could not be placed and count in no figure: a statement row of code \"BUY\", which is not booked, 2 rows, the first on 2025-12-19.",
-      "2 rows in Generated 0 could not be placed and count in no figure: a statement row of code \"BUY\", which is not booked, 2 rows, the first on 2025-12-19.",
-      "2 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-06-13.",
-      "2 rows in Generated 7 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2026-06-13.",
-      "3 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 3 rows, the first on 2026-04-08.",
-      "3 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 3 rows, the first on 2026-04-08.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-03-07.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-03-07.",
-      "A sale of GB in Generated 7 on 2026-10-06 took 135 units more than the book held.",
-      "A sale of GC in Generated 0 on 2026-08-03 took 173 units more than the book held.",
-      "A sale of GD in Generated 0 on 2026-08-28 took 36 units more than the book held.",
-      "A sale of GD in Generated 7 on 2026-06-23 took 26 units more than the book held.",
-      "A sale of GE in Generated 7 on 2026-08-05 took 77 units more than the book held.",
-      "A sale of GN in Generated 0 on 2025-12-22 took 35 units more than the book held.",
-      "A sale of GN in Generated 0 on 2025-12-23 took 112 units more than the book held.",
-      "A sale of GP in Generated 3 on 2026-01-08 took 1.134839 units more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's December 2025 statement closes at $500.00, the book at $44,244.33; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's February 2026 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's April 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "GB 01JUN26 143.00 CALL in Generated 8: Wealthsimple states none, the book holds −4.",
-      "GB 22MAR26 146.00 CALL in Generated 8: Wealthsimple states none, the book holds −4.",
-      "GK in Generated 6: Wealthsimple states 337 units, the book holds 140.",
-      "GM in Generated 0: Wealthsimple states 160 units, the book holds 53.",
-      "USD cash in Generated 0: Wealthsimple's August 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's April 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's March 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 3
+    "header": [],
+    "withdrawn at opening, the book read a version before": 8
   },
   "seed 11": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "482369.6",
-          "USD": "6873.5"
+          "CAD": "399227.31",
+          "USD": "500"
         },
         "units": {
           "GB": "34",
-          "GD": "157",
-          "GE": "-308",
+          "GD": "199",
           "GI": "79",
-          "GK": "-107"
+          "GU": "300"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "8967.4",
-          "USD": "-431.02"
+          "CAD": "12.34"
         },
-        "units": {
-          "GI": "-74",
-          "GL": "-1"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "394713.6"
+          "CAD": "289233.45"
         },
         "units": {
-          "GH": "1.496788",
-          "GP": "-2.418054"
+          "GH": "1.496788"
         }
       },
       "Generated 4": {
@@ -1200,26 +816,24 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "83598.16",
-          "USD": "48845.66"
+          "CAD": "66355.54",
+          "USD": "1054.81"
         },
         "units": {
           "GC": "236",
-          "GF": "-105",
           "GJ": "186",
           "GK": "181",
           "GM": "228",
-          "GN": "58",
-          "GO": "-10"
+          "GN": "58"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "44389.98",
-          "USD": "105888.71"
+          "CAD": "13292.15",
+          "USD": "141399.17"
         },
         "units": {
-          "GC": "142",
+          "GC": "213",
           "GK": "187",
           "GL": "2",
           "GN 15NOV26 218.00 CALL": "1"
@@ -1227,84 +841,43 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "207310.73",
-          "USD": "-41337.05"
+          "CAD": "148689.8",
+          "USD": "1464.21"
         },
         "units": {
           "GD": "26",
-          "GF": "162",
-          "GL": "-112",
-          "GM": "-200"
+          "GF": "162"
         }
       }
     },
-    "header": [
-      "2 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2025-12-28.",
-      "2 rows in Generated 2 were kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, 2 rows, the first on 2025-12-28.",
-      "A row in Generated 0 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-09-27.",
-      "A row in Generated 0 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-09-27.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-06-18.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-06-18.",
-      "A row in Generated 8 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-07.",
-      "A row in Generated 8 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2025-12-07.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-01-03.",
-      "A row in Generated 8 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-01-03.",
-      "A sale of GD in Generated 0 on 2026-06-02 took 42 units more than the book held.",
-      "A sale of GE in Generated 0 on 2026-06-07 took 138 units more than the book held.",
-      "A sale of GE in Generated 0 on 2026-08-11 took 170 units more than the book held.",
-      "A sale of GF in Generated 6 on 2026-06-27 took 52 units more than the book held.",
-      "A sale of GF in Generated 6 on 2026-06-28 took 53 units more than the book held.",
-      "A sale of GI in Generated 2 on 2026-04-06 took 74 units more than the book held.",
-      "A sale of GK in Generated 0 on 2026-09-11 took 107 units more than the book held.",
-      "A sale of GL in Generated 8 on 2026-04-19 took 56 units more than the book held.",
-      "A sale of GL in Generated 8 on 2026-04-20 took 56 units more than the book held.",
-      "A sale of GM in Generated 8 on 2026-04-25 took 200 units more than the book held.",
-      "A sale of GO in Generated 6 on 2026-08-19 took 10 units more than the book held.",
-      "A sale of GP in Generated 3 on 2026-04-02 took 2.418054 units more than the book held.",
-      "A transfer out of GL in Generated 2 on 2026-03-01 took 1 unit more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's January 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's December 2025 statement closes at $557.95, the book at $36,706.85; nothing from that month on is booked from the statements.",
-      "GC in Generated 7: Wealthsimple states 213 units, the book holds 142.",
-      "USD cash in Generated 0: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's December 2025 statement: a sell only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 8: Wealthsimple's July 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 3
+    "header": [],
+    "withdrawn at opening, the book read a version before": 8
   },
   "seed 12": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "243398.99",
-          "USD": "500"
+          "CAD": "240865.87",
+          "USD": "2550.41"
         },
         "units": {
-          "GD": "149",
+          "GD": "193",
           "GJ": "224",
-          "GM": "25"
+          "GM": "25",
+          "GY": "100"
         }
       },
       "Generated 2": {
         "cash": {
-          "CAD": "64816.09",
-          "USD": "192.84"
+          "CAD": "12.34"
         },
-        "units": {
-          "GJ": "-158"
-        }
+        "units": {}
       },
       "Generated 3": {
         "cash": {
-          "CAD": "145158.89"
+          "CAD": "164309.44"
         },
         "units": {
-          "GH": "-1.637078",
           "GP": "6.695571"
         }
       },
@@ -1322,79 +895,39 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "68315.01",
-          "USD": "34302.79"
+          "CAD": "12549.43",
+          "USD": "35650.64"
         },
         "units": {
           "GA": "67",
-          "GB": "26",
-          "GK": "-91"
+          "GB": "26"
         }
       },
       "Generated 7": {
         "cash": {
-          "CAD": "79588.03",
-          "USD": "36858.66"
+          "CAD": "14859.58",
+          "USD": "38767.25"
         },
         "units": {
           "GD": "49",
           "GE": "337",
           "GF 04NOV26 271.00 CALL": "5",
-          "GI": "-2",
-          "GJ 01FEB26 240.00 CALL": "-1",
           "GL": "105"
         }
       },
       "Generated 8": {
         "cash": {
-          "CAD": "26106.63",
-          "USD": "11680.16"
+          "CAD": "4780.18",
+          "USD": "500"
         },
         "units": {
-          "GA": "-18",
           "GC": "188",
           "GK": "141",
-          "GL": "135",
-          "GM": "-57",
-          "GN": "-9",
-          "GO": "-28"
+          "GL": "135"
         }
       }
     },
-    "header": [
-      "A row in Generated 0 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2026-03-31.",
-      "A row in Generated 0 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2026-03-31.",
-      "A row in Generated 2 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2025-12-26.",
-      "A row in Generated 2 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2025-12-26.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-07-09.",
-      "A row in Generated 6 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-07-09.",
-      "A row in Generated 7 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-05-12.",
-      "A row in Generated 7 was kept with a problem: Wealthsimple states the side received of this conversion, not the amount paid, on 2026-05-12.",
-      "A row in Generated 8 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2026-05-23.",
-      "A row in Generated 8 could not be placed and counts in no figure: a statement row of code \"BUY\", which is not booked, on 2026-05-23.",
-      "A sale of GA in Generated 8 on 2026-08-11 took 18 units more than the book held.",
-      "A sale of GD in Generated 0 on 2026-04-10 took 44 units more than the book held.",
-      "A sale of GH in Generated 3 on 2026-05-06 took 1.637078 units more than the book held.",
-      "A sale of GI in Generated 7 on 2026-07-12 took 2 units more than the book held.",
-      "A sale of GJ in Generated 2 on 2026-02-24 took 158 units more than the book held.",
-      "A sale of GK in Generated 6 on 2026-09-12 took 45 units more than the book held.",
-      "A sale of GK in Generated 6 on 2026-09-13 took 46 units more than the book held.",
-      "A sale of GM in Generated 8 on 2026-04-25 took 10 units more than the book held.",
-      "A sale of GM in Generated 8 on 2026-09-01 took 23 units more than the book held.",
-      "A sale of GM in Generated 8 on 2026-09-02 took 24 units more than the book held.",
-      "A sale of GN in Generated 8 on 2026-06-11 took 9 units more than the book held.",
-      "A sale of GO in Generated 8 on 2026-04-15 took 28 units more than the book held.",
-      "An expiry of GJ 01FEB26 240.00 CALL in Generated 7 on 2026-02-01 took 1 unit more than the book held.",
-      "CAD cash in Generated 0: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 2: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 3: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 6: Wealthsimple's June 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 7: Wealthsimple's May 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "CAD cash in Generated 8: Wealthsimple's February 2026 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 2: Wealthsimple's December 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 6: Wealthsimple's October 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements.",
-      "USD cash in Generated 7: Wealthsimple's November 2025 statement: a buy only the statement states, which is not booked from it; nothing from that month on is booked from the statements."
-    ],
-    "withdrawn at opening, the book read a version before": 2
+    "header": [],
+    "withdrawn at opening, the book read a version before": 7
   }
 }
