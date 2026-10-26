@@ -1215,8 +1215,10 @@ fn calls_written_and_assigned_are_pulled_and_the_units_agree_with_the_broker() {
 /// fill, each with its cause).
 #[test]
 fn every_statement_month_of_every_shape_closes_where_its_statement_does() {
+    // with calls written and assigned: their shares' sale is the assignment's
+    let shapes: Vec<Shape> = SHAPES.iter().chain(bagholder_wealthsimple::generated::ASSIGNED.iter()).copied().collect();
     for seed in 1..=12u64 {
-        let (_h, book, ws, report) = shaped_by(Size { seed, ..SHAPED }, "2026-10-25".parse().unwrap(), &SHAPES);
+        let (_h, book, ws, report) = shaped_by(Size { seed, ..SHAPED }, "2026-10-25".parse().unwrap(), &shapes);
         assert!(report.failures.is_empty(), "seed {seed}: {:?}", report.failures);
         assert_eq!(report.statements.unreconciled, vec![], "seed {seed}: the walk stopped");
         let g = &ws.source;

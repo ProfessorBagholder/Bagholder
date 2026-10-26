@@ -154,7 +154,10 @@ fn previous(m: jiff::civil::Date) -> Option<jiff::civil::Date> {
 pub fn run(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys_of: &BTreeMap<AccountId, Vec<String>>, closed: &BTreeSet<String>, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(crate::Step), failures: &mut Vec<(String, Failure)>) -> Result<Done> {
     let mut done = Done::default();
     let Some(mapping_source) = adapter.statement_mapping().map(|m| m.source()) else { return Ok(done) };
-    done.withdrawn += take_back_2_10_9(book, adapter, &mapping_source, now, failures)?;
+    if book.setting(TAKEN_BACK_2_10_9)?.is_none() {
+        done.withdrawn += take_back_2_10_9(book, adapter, &mapping_source, now, failures)?;
+        book.set_setting(TAKEN_BACK_2_10_9, Some("2.10.13"), now)?;
+    }
     let txs = book.transactions()?;
     let Some(newest) = previous(month_of(today)) else { return Ok(done) };
     let mut booked_now: Vec<RecordId> = Vec::new();
@@ -661,6 +664,44 @@ fn names_it(book: &Book, named: &Named, i: bagholder_core::InstrumentId) -> Resu
     })
 }
 
+/// The assignment, of `assigned` and none of `taken`, whose shares a statement
+/// fill row is: the contract's underlying by the row's name, on the side its
+/// right delivers (a call written, the shares sold; a put written, bought), on
+/// the assignment's day or within the days a row posts after it, and its
+/// contracts times their multiplier the row's units. A contract whose multiplier
+/// no source has stated is matched on the rest: a delivery booked as a fill would
+/// sell the shares twice, as 2.10.9 did.
+fn delivery(book: &Book, row: &StatementRow, named: &Named, units: Dec, assigned: &[&Transaction], taken: &BTreeSet<usize>) -> Result<Option<usize>> {
+    if !matches!(named, Named::Symbol(_)) {
+        return Ok(None);
+    }
+    let side = crate::codes::kind(&row.code);
+    for (a, t) in assigned.iter().enumerate() {
+        if taken.contains(&a) || !(0..=POSTS_WITHIN_DAYS).contains(&((row.book_day() - t.trade_date).get_days() as i64)) {
+            continue;
+        }
+        let Some(terms) = t.instrument.map(|c| book.option_terms(c)).transpose()?.flatten() else { continue };
+        let delivers = match terms.right {
+            bagholder_core::instrument::OptionRight::Call => Kind::Sell,
+            bagholder_core::instrument::OptionRight::Put => Kind::Buy,
+        };
+        if side != Some(delivers) {
+            continue;
+        }
+        let shares = match (terms.multiplier, t.quantity) {
+            (Some(m), Some(n)) => n.abs().checked_mul(m).ok(),
+            _ => None,
+        };
+        if shares.is_some_and(|s| !s.checked_sub(units).is_ok_and(|d| d.is_zero())) {
+            continue;
+        }
+        if names_it(book, named, terms.underlying)? {
+            return Ok(Some(a));
+        }
+    }
+    Ok(None)
+}
+
 /// The fills of each account behind the book's, against its kept statements.
 pub fn fills(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys_of: &BTreeMap<AccountId, Vec<String>>, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<usize> {
     let txs = book.transactions()?;
@@ -703,6 +744,23 @@ fn fills_of(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
             }
         }
     }
+    // an assignment's delivery: the shares a contract the feed states assigned went
+    // for at its strike, which the statement states as a plain sale (a call) or
+    // purchase (a put) of them on the days after its `ASSIGN` row. The feed's
+    // assignment carries them (the ledger delivers them from it), so the row is
+    // never a fill, of the feed's or of its own: one row to one assignment
+    let assigned: Vec<&Transaction> = txs.iter().filter(|t| t.account == account && t.kind == Kind::OptionAssignment).collect();
+    let mut delivered = BTreeSet::new();
+    let mut fills = Vec::with_capacity(rows.len());
+    for row in rows {
+        match delivery(book, &row.1, &row.2, row.3, &assigned, &delivered)? {
+            Some(a) => {
+                delivered.insert(a);
+            }
+            None => fills.push(row),
+        }
+    }
+    let rows = fills;
     if rows.is_empty() {
         return Ok(0);
     }
@@ -824,7 +882,7 @@ fn fills_of(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
         let payload = payload.canonical();
         let incoming = Incoming { connection: Some(connection), source_key: &key, payload: &payload, refs: vec![] };
         let stored = match replaces {
-            Some(rec) => book.store_superseding(m, &incoming, &[rec], "the broker's statement states the fill otherwise", now)?,
+            Some(rec) => book.store_superseding(m, &incoming, &[rec], STATED_FILL, now)?,
             None => book.store(m, &incoming, now)?,
         };
         if stored.outcome != bagholder_book::records::Outcome::Unchanged {
@@ -872,8 +930,18 @@ fn resolve(book: &Book, adapter: &mut dyn BrokerAdapter, feed: &[&Transaction], 
 }
 
 /// The reason 2.10.9 gave each feed record a statement fill took the place of.
-/// 2.10.8 and this version give "…states the units the fill executed".
+/// 2.10.8 gave "…states the units the fill executed"; this version `STATED_FILL`.
 const RESTATED_IN_2_10_9: &str = "the broker's statement states the fill otherwise";
+
+/// The reason a feed record gives way to the statement's fill (`fills_of`): its
+/// own, so the take-back of 2.10.9's never meets one.
+const STATED_FILL: &str = "the broker's statement states the fill, at its cash and units";
+
+/// The setting that says the take-back of 2.10.9's fills has run on this book:
+/// it runs once. This version books what 2.10.9 did rightly (a fill the feed
+/// leaves out, with no feed record behind it), which the take-back would
+/// otherwise take back at every walk.
+const TAKEN_BACK_2_10_9: &str = "statements.taken-back-2.10.9";
 
 /// What 2.10.9 booked from the statements, taken back (`docs/decisions.md`,
 /// 2026-10-26). It took a statement fill in place of the feed's on a pairing that
@@ -885,7 +953,8 @@ const RESTATED_IN_2_10_9: &str = "the broker's statement states the fill otherwi
 /// feed record one took the place of is live again: the book is the feed's, as
 /// before 2.10.9, and this walk books again what the statements state. Each is
 /// noted taken back, so a walk does not book it again as a row it withdrew itself.
-/// Once done no such mark is left, and it is never done again.
+/// It runs at a book's first walk by a version that books fills from the
+/// statements again (`TAKEN_BACK_2_10_9`), and never again.
 fn take_back_2_10_9(book: &Book, adapter: &dyn BrokerAdapter, source: &SourceName, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<usize> {
     let records = book.live_records_written(source)?;
     let mut first = book.first_superseded_for(RESTATED_IN_2_10_9)?;

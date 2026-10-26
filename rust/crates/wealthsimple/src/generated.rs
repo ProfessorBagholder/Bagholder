@@ -110,17 +110,17 @@ pub enum Shape {
     Assigned,
 }
 
-/// Every shape.
+/// Every shape a book of the made-up broker is read with, the assignment
+/// (`ASSIGNED`) aside: a test of it turns it on beside them.
 pub const SHAPES: [Shape; 9] = [Shape::ArrivalOnly, Shape::LinkedIds, Shape::Closed, Shape::LateRow, Shape::FundingIntent, Shape::Statements, Shape::FeeFolded, Shape::FeedOmits, Shape::FxFunded];
 
-/// The fills a statement states otherwise than the feed, or alone, as 2.10.9 read
-/// them (`docs/decisions.md`, 2026-10-26): a book of them, read by 2.10.8 and then
-/// by 2.10.9, is the one its take-back is proven on. No reading of statements
-/// since 2.10.9 is proven to close their months.
+/// The fills a statement states otherwise than the feed, or alone, among
+/// `SHAPES` since 2.10.13: a book of them, read by 2.10.8 and then by 2.10.9, is
+/// also the one 2.10.9's take-back is proven on (`tests/take_back.rs`).
 pub const STATED_OTHERWISE: [Shape; 3] = [Shape::FeeFolded, Shape::FeedOmits, Shape::FxFunded];
 
-/// An assignment as the feed and the statement each state it. No reading of
-/// statements is proven to close its months.
+/// An assignment as the feed and the statement each state it: every month a
+/// statement covers closes with it on (`tests/pull.rs`).
 pub const ASSIGNED: [Shape; 1] = [Shape::Assigned];
 
 /// The made-up broker's fee on a coin's fill, in thousandths of its cash, inside

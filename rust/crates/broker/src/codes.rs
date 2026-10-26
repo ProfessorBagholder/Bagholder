@@ -44,9 +44,10 @@ pub fn fill_of(description: &str) -> Option<(String, bagholder_core::Dec)> {
 }
 
 /// An option contract a fill row's description names, and how many contracts
-/// (`BBAI 5.00 USD PUT 2026-01-16 - BigBear.ai: Bought 26 contract`): its
-/// underlying's symbol, strike, right and expiry. None for a description of
-/// another shape.
+/// (`XQA 72.00 USD CALL 2034-06-20: Bought 3 contract (executed at …), Fee: $…`,
+/// the recorded forms in `wealthsimple/tests/replies/wealthsimple-statements`):
+/// its underlying's symbol, strike, right and expiry. None for a description of
+/// another form: one not recorded is never read as a contract.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Contract {
     pub underlying: String,
@@ -56,8 +57,7 @@ pub struct Contract {
 }
 
 pub fn contract_of(description: &str) -> Option<(Contract, bagholder_core::Dec)> {
-    let (terms, rest) = description.trim().split_once(" - ")?;
-    let (_, what) = rest.split_once(": ")?;
+    let (terms, what) = description.trim().split_once(": ")?;
     let what = what.strip_prefix("Bought ").or_else(|| what.strip_prefix("Sold "))?;
     let mut words = what.split_whitespace();
     let n = plain_number(words.next()?)?;
@@ -180,12 +180,18 @@ mod tests {
     #[test]
     fn a_contract_row_states_its_contract_and_how_many() {
         let d = |s: &str| bagholder_core::Dec::parse(s).unwrap();
-        let (c, n) = contract_of("BBAI 5.00 USD PUT 2026-01-16 - BigBear.ai: Bought 26 contract").unwrap();
-        assert_eq!((c.underlying.as_str(), c.strike, c.put, c.expiry.to_string(), n), ("BBAI", d("5.00"), true, "2026-01-16".to_string(), d("26")));
-        let (c, n) = contract_of("XYZ 12.50 USD CALL 2026-03-20 - XYZ Generated Listing: Sold 2 contracts").unwrap();
-        assert_eq!((c.put, n), (false, d("2")));
-        assert_eq!(contract_of("QNC - Quantum Emotion Corp: Bought 1000.0000 shares at $2.79 per share"), None);
-        assert_eq!(contract_of("Purchase of 1 BTC"), None);
+        // the recorded forms, figures made up
+        let (c, n) = contract_of("XQA 72.00 USD PUT 2034-06-20: Bought 3 contract (executed at 2034-03-03), Fee: $2.7900").unwrap();
+        assert_eq!((c.underlying.as_str(), c.strike, c.put, c.expiry.to_string(), n), ("XQA", d("72.00"), true, "2034-06-20".to_string(), d("3")));
+        let (c, n) = contract_of("XQB 72.00 USD CALL 2034-06-20: Sold 1 contract (executed at 2034-03-03)").unwrap();
+        assert_eq!((c.put, n), (false, d("1")));
+        // an assignment or an expiry is no fill, and a share's row no contract
+        assert_eq!(contract_of("XQA 72.00 USD CALL 2034-06-20: Assigned -1 contract (executed at 2034-03-03)"), None);
+        assert_eq!(contract_of("XQH 72.00 USD CALL 2034-06-20: Expired -1 contract (executed at 2034-03-31)"), None);
+        assert_eq!(contract_of("XQJ - Examplia Wobbleworks Plc.: Bought 4.8200 shares at $3.00 per share (executed at 2034-03-06)"), None);
+        assert_eq!(contract_of("Purchase of 7.2177302134 XQC (executed at 2034-03-03)"), None);
+        // a form not recorded: a name between the terms and the fill
+        assert_eq!(contract_of("XQA 72.00 USD PUT 2034-06-20 - Examplia: Bought 3 contract"), None);
     }
 
     #[test]

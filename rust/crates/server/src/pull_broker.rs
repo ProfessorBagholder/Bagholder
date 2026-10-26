@@ -68,7 +68,8 @@ fn run(home: &std::path::Path, capture: Option<&std::path::Path>, now: Timestamp
     }
 }
 
-/// The statements walk of a pull, alone, on the book's kept statements: a capture
+/// The statements walk of a pull, alone, on the book's kept statements, and its
+/// fills step over every account, as a pull takes them: a capture
 /// with no reply in it answers every read, so a month the book keeps none of is a
 /// failure, never a read. The broker's accounts behind each of the book's are its
 /// own references to them, each in the one currency the broker last stated the
@@ -88,7 +89,9 @@ fn walk(home: &std::path::Path, now: Timestamp) -> Result<String, String> {
     let mut failures = Vec::new();
     let today = adapter.day(now);
     let d = bagholder_broker::statements::run(&book, &mut adapter, connection, &keys_of, &closed, today, now, &mut |_| {}, &mut failures).map_err(|e| e.to_string())?;
-    let mut out = format!("statements walked: withdrawn {}, booked {}, joined {}, unreconciled {}, feed only {}, failures {}\n", d.withdrawn, d.booked, d.joined, d.unreconciled.len(), d.feed_only.len(), failures.len());
+    // and each account's fills against its statements, as a pull takes them after the walk
+    let fills = bagholder_broker::statements::fills(&book, &mut adapter, connection, &keys_of, now, &mut failures).map_err(|e| e.to_string())?;
+    let mut out = format!("statements walked: withdrawn {}, booked {}, joined {}, unreconciled {}, feed only {}, fills {}, failures {}\n", d.withdrawn, d.booked, d.joined, d.unreconciled.len(), d.feed_only.len(), d.fills + fills, failures.len());
     let mut said: std::collections::BTreeMap<String, usize> = std::collections::BTreeMap::new();
     for (_, f) in &failures {
         let words = keys_of.values().flatten().fold(f.to_string(), |w, k| w.replace(k.as_str(), "<account>"));
@@ -159,6 +162,6 @@ mod tests {
             book.add_account(conn, &[AccountRef::new(ws, "acct-1")], &bagholder_wealthsimple::account_types::account_type("CASH"), AccountStatus::Open, None, now).unwrap();
         }
         let out = walk(home.path(), now).unwrap();
-        assert_eq!(out, "statements walked: withdrawn 0, booked 0, joined 0, unreconciled 0, feed only 0, failures 0\n");
+        assert_eq!(out, "statements walked: withdrawn 0, booked 0, joined 0, unreconciled 0, feed only 0, fills 0, failures 0\n");
     }
 }

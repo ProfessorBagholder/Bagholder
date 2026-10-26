@@ -13,12 +13,12 @@ use bagholder_book::Book;
 use bagholder_broker::pull::pull;
 use bagholder_core::Broker;
 use bagholder_wealthsimple::adapter::Wealthsimple;
-use bagholder_wealthsimple::generated::{Generated, Shape, Size, SHAPES, STATED_OTHERWISE};
+use bagholder_wealthsimple::generated::{Generated, Shape, Size, ASSIGNED, SHAPES, STATED_OTHERWISE};
 use serde_json::{json, Map, Value};
 
-/// Every shape the made-up broker has.
+/// Every shape the made-up broker has, calls written and assigned among them.
 fn every_shape() -> Vec<Shape> {
-    SHAPES.iter().chain(STATED_OTHERWISE.iter()).copied().collect()
+    SHAPES.iter().chain(STATED_OTHERWISE.iter()).chain(ASSIGNED.iter()).copied().collect()
 }
 
 /// One seed's book, pulled whole and opened as the app opens it: its figures.
