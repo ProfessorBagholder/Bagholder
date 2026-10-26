@@ -46,7 +46,11 @@ pub fn fill_of(description: &str) -> Option<(String, bagholder_core::Dec)> {
 /// A number as a statement writes it, `2442.50`, or with an exponent, `5.300E-7`.
 fn plain_number(text: &str) -> Option<bagholder_core::Dec> {
     let Some((mantissa, exp)) = text.split_once(['E', 'e']) else { return bagholder_core::Dec::parse(text).ok() };
-    let exp: i32 = exp.parse().ok()?;
+    let exp: i64 = exp.parse().ok()?;
+    // past the cap no digit lands where a `Dec` holds one: refused before a string that long is built
+    if exp.abs() > bagholder_core::Dec::EXPONENT_CAP {
+        return None;
+    }
     let negative = mantissa.starts_with('-');
     let m = mantissa.trim_start_matches(['-', '+']);
     let (whole, frac) = m.split_once('.').unwrap_or((m, ""));
@@ -55,7 +59,7 @@ fn plain_number(text: &str) -> Option<bagholder_core::Dec> {
     }
     let digits = format!("{whole}{frac}");
     // the decimal point sits after `whole.len()` digits, moved by the exponent
-    let point = i64::try_from(whole.len()).ok()? + i64::from(exp);
+    let point = i64::try_from(whole.len()).ok()? + exp;
     let text = if point <= 0 {
         format!("0.{}{digits}", "0".repeat(usize::try_from(-point).ok()?))
     } else if point as usize >= digits.len() {
@@ -133,6 +137,18 @@ mod tests {
         assert_eq!(fill_of("XQB 72.00 USD CALL 2034-06-20: Assigned -1 contract (executed at 2034-03-03)"), None);
         assert_eq!(fill_of("Fee for purchase of 7.2177302134 XQP (executed at 2034-03-15), FX Rate: 1.8536"), None);
         assert_eq!(fill_of("XQF - Examplia Wobbleworks Plc.: 4.8200 Shares on loan (executed at 2034-03-03)"), None);
+    }
+
+    #[test]
+    fn an_exponent_past_the_cap_is_refused_before_it_is_expanded() {
+        let d = |s: &str| bagholder_core::Dec::parse(s).unwrap();
+        let cap = bagholder_core::Dec::EXPONENT_CAP;
+        // expanded, the largest would be more zeros than any memory holds
+        for exp in [cap + 1, i64::from(i32::MAX), i64::MAX] {
+            assert_eq!(plain_number(&format!("3.0E{exp}")), None, "E{exp}");
+            assert_eq!(plain_number(&format!("3.0E-{exp}")), None, "E-{exp}");
+        }
+        assert_eq!(plain_number("3.0E-8"), Some(d("0.00000003")));
     }
 
     #[test]
