@@ -77,7 +77,7 @@ After 2.10.12's first sync the header should be empty. Never say "fixed" until t
 
 ### Workspace
 - Worktrees in this session's scratchpad: `shape` (#632), `hard` (#630), `aa` (agents), `g558` (paused, the owner's call), `ho` (this file).
-- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. Its dependencies are built at opt-level 0, so pass `--config 'profile.dev.package."*".opt-level=0'` or they all rebuild. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, and only the named tests a change touches. The server crate is a bin: `-p bagholder-server --bin bagholder <filter>`.
+- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. It was removed at 196 GB on 2026-10-26 because the disk filled; the next build starts cold. Keep it under ~30 GB (`du -sh`), and remove it when the day's branches merge. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, and only the named tests a change touches. The server crate is a bin: `-p bagholder-server --bin bagholder <filter>`.
 
 ### How a release goes (all delegated: Architect clearance + green checks = merge and release)
 - The version bump goes inside the fix PR, so CI runs once: `rust/Cargo.toml` `version`, `rust/crates/server/src/app.rs` `APP_VERSION`, `rust/crates/server/tests/golden/routes.json` `"version"`, then `cargo update --workspace --offline`.
