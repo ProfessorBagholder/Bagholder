@@ -349,7 +349,7 @@ fn forget_unkeyed_prices(book: &Book, cache: &MarketCache) -> Result<(), String>
 /// What must hold before anything is built from the book: its records derived
 /// again under this build's mappings, and no price kept under a guessed venue.
 fn prepared(book: &Book, cache: &MarketCache, at: Timestamp) -> Result<(), String> {
-    rederive_all(book, at)?;
+    rederive_all(book, cache, at)?;
     forget_unkeyed_prices(book, cache)
 }
 
@@ -453,6 +453,22 @@ impl Figures {
         drop(engine);
         self.logged(None);
         self.wake();
+        Ok(())
+    }
+
+    /// A mapping version refused before (`gated_rederive`), tried again once a pull
+    /// has stored what the broker states now: where what is refused changes, the
+    /// figures are built whole from the record as it stands.
+    pub fn retry_refused(&self, now: Timestamp) -> Result<(), String> {
+        let book = self.book()?;
+        let before = book.setting(REFUSED_VERSIONS).map_err(err)?;
+        if before.is_none() {
+            return Ok(());
+        }
+        gated_rederive(&book, &self.cache()?, now, &mappings())?;
+        if book.setting(REFUSED_VERSIONS).map_err(err)? != before {
+            self.rebuild(now)?;
+        }
         Ok(())
     }
 
@@ -877,17 +893,82 @@ pub fn mappings() -> [&'static dyn bagholder_book::mapping::Mapping; 4] {
 
 /// Derive again every record a newer version of its mapping reads differently: a
 /// mapping's version moves exactly when what it makes of a stored row changes,
-/// so the rows already stored follow it, not only the ones read after.
-fn rederive_all(book: &Book, at: Timestamp) -> Result<(), String> {
+/// so the rows already stored follow it, not only the ones read after. A version
+/// that leaves the book agreeing with the broker less than before is not applied
+/// (`gated_rederive`).
+fn rederive_all(book: &Book, cache: &MarketCache, at: Timestamp) -> Result<(), String> {
     // instruments an earlier build merged for a succession, put apart once
     book.repair_merged_successions(&mappings(), at).map_err(|e| format!("the instruments an earlier build merged could not be put apart: {e}"))?;
-    for m in mappings() {
-        let changes = book.rederive(m, at).map_err(|e| format!("{}'s records could not be derived again: {e}", m.source()))?;
-        if !changes.is_empty() {
-            crate::app::log(&format!("bagholder: {}'s records derived again under version {}", m.source(), m.version()));
+    gated_rederive(book, cache, at, &mappings())
+}
+
+/// The settings key naming each mapping version whose derivation was refused, and
+/// the accounts it made disagree with their broker; absent when none was.
+pub const REFUSED_VERSIONS: &str = "rederive.refused";
+
+/// Why a derivation is taken back: what `gated_rederive` rolls back on.
+const WORSE: &str = "it leaves the book agreeing with the broker less than before";
+
+/// Each mapping's records derived again, one mapping at a time in one transaction
+/// with the broker check before and after it (brief 77, §4): where an account's
+/// cash in a currency, or its units of an instrument, agreed with what its broker
+/// states (or differed only pending) and no longer does, the derivation is rolled
+/// back and the version noted refused (`REFUSED_VERSIONS`); the figures stay those
+/// of the derivation before. It is tried again at the next open and after a pull
+/// stores what the broker states. Before a zone is known no figure is built, so
+/// there is nothing to compare, and the records are derived again as they are.
+pub(crate) fn gated_rederive(book: &Book, cache: &MarketCache, at: Timestamp, mappings: &[&dyn bagholder_book::mapping::Mapping]) -> Result<(), String> {
+    let zone = book.zone().map_err(err)?;
+    let mut refused: Vec<String> = Vec::new();
+    for m in mappings {
+        if book.stale_records(*m).map_err(err)? == 0 {
+            continue;
+        }
+        let Some(z) = &zone else {
+            book.rederive(*m, at).map_err(|e| format!("{}'s records could not be derived again: {e}", m.source()))?;
+            continue;
+        };
+        let outcome = book.atomically(|| {
+            let before = disagreeing(book, cache, &z.zone, at).map_err(bagholder_book::BookError::Refused)?;
+            let changes = book.rederive(*m, at)?;
+            let after = disagreeing(book, cache, &z.zone, at).map_err(bagholder_book::BookError::Refused)?;
+            let worse: Vec<String> = after.difference(&before).cloned().collect();
+            if !worse.is_empty() {
+                return Err(bagholder_book::BookError::Refused(format!("{WORSE}: {}", worse.join(", "))));
+            }
+            Ok(changes)
+        });
+        match outcome {
+            Ok(changes) if !changes.is_empty() => crate::app::log(&format!("bagholder: {}'s records derived again under version {}", m.source(), m.version())),
+            Ok(_) => {}
+            Err(bagholder_book::BookError::Refused(why)) if why.starts_with(WORSE) => {
+                crate::app::log(&format!("bagholder: {}'s records were not derived again under version {}: {why}", m.source(), m.version()));
+                refused.push(format!("{} version {}: {why}", m.source(), m.version()));
+            }
+            Err(e) => return Err(format!("{}'s records could not be derived again: {e}", m.source())),
         }
     }
+    let note = (!refused.is_empty()).then(|| refused.join("; "));
+    if book.setting(REFUSED_VERSIONS).map_err(err)? != note {
+        book.set_setting(REFUSED_VERSIONS, note.as_deref(), at).map_err(err)?;
+    }
     Ok(())
+}
+
+/// What the broker check finds differing, by account and currency or instrument,
+/// pending differences aside: what a derivation must not add to.
+fn disagreeing(book: &Book, cache: &MarketCache, zone: &TimeZone, at: Timestamp) -> Result<std::collections::BTreeSet<String>, String> {
+    let e = build(book, cache, clock(zone, at)?)?;
+    Ok(e.figures()
+        .checks
+        .iter()
+        .flat_map(|c| {
+            c.differences.iter().filter(|d| !d.pending()).map(move |d| match d {
+                bagholder_engine::equity::Difference::Cash { currency, .. } => format!("{} cash {currency}", c.account),
+                bagholder_engine::equity::Difference::Units { instrument, .. } => format!("{} units {instrument}", c.account),
+            })
+        })
+        .collect())
 }
 
 #[cfg(test)]
@@ -992,6 +1073,103 @@ mod tests {
         same_as_fresh(&f, now);
     }
 
+    /// A book of the made-up Wealthsimple's six shapes, which agrees with the broker
+    /// by its making, open with its zone, and its market cache.
+    fn agreeing_book(home: &Path, now: Timestamp) -> (Book, MarketCache) {
+        let today = now.to_zoned(TimeZone::UTC).date();
+        let (book, _) = Book::open_in(home, crate::app::APP_VERSION, now).unwrap();
+        book.state_zone("America/Toronto", now).unwrap();
+        let connection = book.add_connection(&bagholder_core::Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
+        let size = bagholder_wealthsimple::generated::Size { accounts: 6, instruments: 12, trades: 40, months: 6, seed: 13, deep: 0 };
+        let mut ws = bagholder_wealthsimple::adapter::Wealthsimple::new(bagholder_wealthsimple::generated::Generated::shaped(size, today, &bagholder_wealthsimple::generated::SHAPES));
+        bagholder_broker::pull::pull(&book, &mut ws, connection, today, now, &mut |_| {}).unwrap();
+        // the balances read again after the pull, as the running app reads them every
+        // five minutes: a difference from them is the broker's word, no longer pending
+        let later = now.checked_add(bagholder_core::jiff::SignedDuration::from_mins(5)).unwrap();
+        for a in book.accounts().unwrap() {
+            if let Some((_, cash)) = book.stated(a.id).unwrap().cash {
+                let read = book.broker_read(connection, "cash", later).unwrap();
+                book.store_cash(a.id, later, &cash, &read).unwrap();
+            }
+        }
+        let cache = MarketCache::open(&home.join(CACHE_FILE), crate::app::APP_VERSION, now).unwrap().0;
+        (book, cache)
+    }
+
+    /// Wealthsimple's mapping, a version on, its CAD cash a cent off on every leg.
+    struct CentOff;
+    impl bagholder_book::mapping::Mapping for CentOff {
+        fn source(&self) -> bagholder_core::SourceName {
+            bagholder_wealthsimple::mapping::WealthsimpleMapping.source()
+        }
+        fn version(&self) -> u32 {
+            bagholder_wealthsimple::mapping::WealthsimpleMapping.version() + 1
+        }
+        fn map(&self, ctx: &bagholder_book::mapping::MapContext, payload: &str) -> bagholder_book::mapping::Mapped {
+            let mut m = bagholder_wealthsimple::mapping::WealthsimpleMapping.map(ctx, payload);
+            for l in &mut m.legs {
+                if let Some(c) = l.cash.as_mut().filter(|c| c.currency == bagholder_core::Currency::CAD) {
+                    c.amount = c.amount.checked_add(bagholder_core::Dec::new(1, 2).unwrap()).unwrap();
+                }
+            }
+            m
+        }
+    }
+
+    /// Wealthsimple's mapping, a version on, making what it made before.
+    struct Same;
+    impl bagholder_book::mapping::Mapping for Same {
+        fn source(&self) -> bagholder_core::SourceName {
+            bagholder_wealthsimple::mapping::WealthsimpleMapping.source()
+        }
+        fn version(&self) -> u32 {
+            bagholder_wealthsimple::mapping::WealthsimpleMapping.version() + 1
+        }
+        fn map(&self, ctx: &bagholder_book::mapping::MapContext, payload: &str) -> bagholder_book::mapping::Mapped {
+            bagholder_wealthsimple::mapping::WealthsimpleMapping.map(ctx, payload)
+        }
+    }
+
+    /// A mapping version that leaves the book agreeing with the broker less than
+    /// before is not applied (brief 77, §4): the derivation is rolled back, the
+    /// figures stay those of the version before, and the version is noted refused.
+    /// The same version applied without the gate makes accounts disagree.
+    #[test]
+    fn a_mapping_version_that_leaves_the_book_agreeing_with_the_broker_less_is_not_applied() {
+        let home = tempfile::tempdir().unwrap();
+        let now = at("2026-10-25T20:00:00Z");
+        let (book, cache) = agreeing_book(home.path(), now);
+        let zone = book.zone().unwrap().unwrap().zone;
+        let before = disagreeing(&book, &cache, &zone, now).unwrap();
+        let txs = book.transactions().unwrap();
+        gated_rederive(&book, &cache, now, &[&CentOff]).unwrap();
+        assert_eq!(book.transactions().unwrap(), txs, "the derivation was rolled back");
+        assert!(book.stale_records(&CentOff).unwrap() > 0, "the records stand under the version before");
+        assert_eq!(disagreeing(&book, &cache, &zone, now).unwrap(), before);
+        let note = book.setting(REFUSED_VERSIONS).unwrap().expect("the version noted refused");
+        assert!(note.contains(&format!("version {}", bagholder_book::mapping::Mapping::version(&CentOff))) && note.contains(WORSE), "{note}");
+        // tried again, still refused: the note stands, nothing is applied
+        gated_rederive(&book, &cache, now, &[&CentOff]).unwrap();
+        assert_eq!(book.transactions().unwrap(), txs);
+        // the plant: the same version applied without the gate is worse
+        book.rederive(&CentOff, now).unwrap();
+        let after = disagreeing(&book, &cache, &zone, now).unwrap();
+        assert!(after.difference(&before).next().is_some(), "the cent off makes accounts disagree: {after:?}");
+    }
+
+    /// A mapping version that moves no account's agreement with the broker is
+    /// applied, and a version refused before is noted no longer.
+    #[test]
+    fn a_mapping_version_that_moves_no_agreement_is_applied() {
+        let home = tempfile::tempdir().unwrap();
+        let now = at("2026-10-25T20:00:00Z");
+        let (book, cache) = agreeing_book(home.path(), now);
+        book.set_setting(REFUSED_VERSIONS, Some("an earlier refusal"), now).unwrap();
+        gated_rederive(&book, &cache, now, &[&Same]).unwrap();
+        assert_eq!(book.stale_records(&Same).unwrap(), 0, "every record derived under the new version");
+        assert_eq!(book.setting(REFUSED_VERSIONS).unwrap(), None);
+    }
+
     /// Nothing is built from records not derived again, even where the build could
     /// read them (brief 50, 5): a record this build's mapping refuses (an id the
     /// book reads, with nothing it can map) leaves the build able to run, so only
@@ -1011,8 +1189,8 @@ mod tests {
         c.execute("INSERT INTO source_records(id, source, source_key, state, derived_version, first_received_at, state_changed_at) VALUES ('01893c4a-0000-7000-8000-000000000001', ?, 'planted', 'live', 0, '2025-11-19T20:00:00Z', '2025-11-19T20:00:00Z')", [&source]).unwrap();
         // the build itself reads the book with the record in it
         let (book, _) = Book::open_in(home.path(), crate::app::APP_VERSION, now).unwrap();
-        assert!(rederive_all(&book, now).is_err(), "the mapping refuses the record");
         let cache = MarketCache::open(&home.path().join(CACHE_FILE), crate::app::APP_VERSION, now).unwrap().0;
+        assert!(rederive_all(&book, &cache, now).is_err(), "the mapping refuses the record");
         assert!(build(&book, &cache, clock(&book.zone().unwrap().unwrap().zone, now).unwrap()).is_ok(), "the build alone would run");
         drop((book, cache));
         let f = Figures::open(home.path(), now).expect("the open never stops on it");

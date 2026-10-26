@@ -451,6 +451,17 @@ impl Book {
         Ok(())
     }
 
+    /// How many live records of the mapping's source were derived under an earlier
+    /// version of it: what `rederive` would derive again.
+    pub fn stale_records(&self, mapping: &dyn Mapping) -> Result<usize> {
+        let n: i64 = self.conn().query_row(
+            "SELECT count(*) FROM source_records WHERE source = ? AND state = 'live' AND derived_version < ?",
+            params![mapping.source().as_str(), mapping.version()],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
     /// Derive again every live record of `mapping`'s source whose transactions or
     /// problems came from an older version of it, and say what moved. Records
     /// derived with this version already are left alone.
