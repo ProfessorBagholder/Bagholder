@@ -99,6 +99,32 @@ fn money_leaving_the_account_holds_an_amount_it_does_not_state() {
     }
 }
 
+/// The recorded card spend (SPEND/PREPAID, pending), as a pull stores it.
+fn spend() -> Value {
+    let v = json::parse(&std::fs::read_to_string(fixtures().join("edited-activity-one-per-kind.json")).unwrap()).unwrap();
+    let edges = bagholder_sources::reply::Node::root(&v).obj("data").unwrap().obj("activityFeedItems").unwrap().list("edges").unwrap();
+    let row = edges.iter().map(|e| e.obj("node").unwrap().value().clone()).find(|n| matches!(n, Value::Object(o) if o.get("type") == Some(&text("SPEND")))).expect("the recorded spend");
+    Value::Object([("activity".to_string(), row)].into())
+}
+
+/// A card spend not yet final holds the amount its row states, as Wealthsimple's
+/// stated cash already does; once final it is the purchase, and holds nothing
+/// (the owner's 💰Cash, 2026-10-26: a pending spend the book held as nothing).
+#[test]
+fn a_card_spend_not_yet_final_holds_the_amount_it_states_and_once_final_is_the_purchase() {
+    let pending = spend();
+    let m = map_payload(&pending);
+    assert!(m.legs.is_empty() && m.problems.is_empty(), "{:?}", m.problems);
+    let h = m.hold.expect("a hold");
+    assert_eq!((h.kind, h.currency, h.amount), (HoldKind::Withdrawal, Some(Currency::CAD), Some(dec("0.06"))));
+    let done = with(&pending, &[("unifiedStatus", text("COMPLETED")), ("status", text("settled"))]);
+    let m = map_payload(&done);
+    assert_eq!(m.hold, None);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    assert_eq!(m.legs.len(), 1);
+    assert_eq!((m.legs[0].kind, m.legs[0].cash.map(|c| (c.amount, c.currency))), (bagholder_core::transaction::Kind::CardPurchase, Some((dec("-0.06"), Currency::CAD))));
+}
+
 #[test]
 fn a_final_row_holds_nothing_whatever_its_kind() {
     for key in ["limit-buy", "stock-sell", "call-sale"] {
