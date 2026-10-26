@@ -76,6 +76,16 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
    - **Never** name the owner's securities, coins or account nicknames in this file, a commit, a PR or an issue: the repository is public (a push naming two of them was caught and replaced on 2026-10-26).
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
+### (c) premise check (2026-10-26 ~23:30, after the compaction): (c) proposed dropped, awaiting the Architect
+Five read-only Mac captures (scripts `scratchpad/diag/capture9.py`–`capture13.py`; real output in this session only) showed:
+- ".TO": the feed and its `security.stock.symbol` say SYM.TO in CAD, the statement says SYM; cash is equal, so the walk already pairs them by cash. A made-up fixture, `wealthsimple/tests/replies/wealthsimple/edited-activity-dot-to.json`, is in worktree `match` (detached from master b9017f9c, not pushed), with `Shape::Interlisted` begun in `generated.rs`; it compiles.
+- 2024 coin form ("Fee charged"): cash equals the feed's; units differ (the feed's are an estimate to 6 places). 2.10.8's step takes these as intended.
+- The "two coin sales that paired with nothing" are in the feed as limit sells dated the day the order was placed, 9 and 12 days before the execution date the statement gives. Both 2.10.8's window and #633's miss them; the walk's 31-day late pass pairs them by cash. Open item: limit fills are dated on their placement day.
+- 2025 coin form: a fill row before the fee plus its own FEE row ("Fee for purchase of N SYM …" / "Trading fee for sale of N SYM …"), with lists per currency. A sale's two rows come to the feed's amount (the combined pass pairs them); a purchase's come to a cent less. The coin account's cash agrees with the broker, so the walk never reads it.
+- June 2026 (the old "June line"'s month): every fill row has a feed fill of the same cash. The line was the conversions' USD difference, fixed by 2.10.12.
+- **Defect found:** a US fill stated as a cash row "Bought 0.0000 shares at $P per share (executed at D), FX Rate: R" plus a units row "Bought N shares …" at cash 0 (unit SYM). 2.10.8's `statements::fills` reads the cash row as a 0-unit fill and supersedes the feed's fill. The owner's book has exactly 2 such fills (a purchase and its sale, June 2026), so that round trip is missing from the trades. #625's made-up recording replaced 0.0000 with a number, which hid it.
+- Sent to the Architect (msg 12d5c369): drop (c) and its guards. Next comes a shapes PR (Interlisted, the 2025 coin form with its FEE row, the limit-date gap, the split fill, FeeFolded removed, golden re-blessed). Then a reading change for 2.10.8's step: the split pair is read as one fill, the next read withdraws the 0-unit records and makes the feed's live again; the form is re-recorded with 0.0000 kept; a SplitFill shape; test, golden, canary. Waiting for go/change.
+
 ### Delegated
 - **PR A (#630): merged** (cc28ea70), no release. It covers the exponent cap, `take_frame` returning `io::Result`, four clippy denies, and CI's clippy running with `--features bagholder-ws/standin` (the Architect's condition).
 - **PR B** (the wider lints): after brief 77.
