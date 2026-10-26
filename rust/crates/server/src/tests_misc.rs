@@ -821,7 +821,8 @@ fn test_every_markdown_file_a_test_reads_runs_the_tests_when_it_changes() {
     }
     assert!(read.contains("SPEC.md"), "the scan found no markdown read: {read:?}");
     for file in &read {
-        assert_eq!(workflow.matches(&format!("      - '{file}'\n")).count(), 2, "tests.yml runs on neither a pull request nor a push that changes only {file}, which a test reads");
+        // named once, in the pull request's paths: the suite runs on a pull request alone
+        assert_eq!(workflow.matches(&format!("      - '{file}'\n")).count(), 1, "tests.yml does not run on a pull request that changes only {file}, which a test reads");
     }
 }
 

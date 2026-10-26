@@ -234,7 +234,9 @@ fn held(inputs: &Inputs, matched: &Matched, account: AccountId, holds: &[baghold
     for h in holds {
         let amount: Option<Dec> = match h.kind {
             HoldKind::Buy => h.amount,
-            HoldKind::Withdrawal => None,
+            // money leaving holds an amount its row does not state, except a
+            // card spend's, whose authorized amount it does
+            HoldKind::Withdrawal => h.amount,
             HoldKind::PutSale if margin => continue,
             HoldKind::PutSale => (|| {
                 let (collateral, contracts, premium) = (h.amount?, h.quantity?, h.premium?);
