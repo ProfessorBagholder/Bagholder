@@ -304,6 +304,9 @@ test.describe('Trade detail', () => {
 
   // brief 52, 2: what a listing offers is the server's word as it changes, not as it was
   test('a timeframe the listing stops offering goes from the chart once the server says so, with no reload; picked, it says why and draws no other bars', async ({ page, request }) => {
+    // the search for a trade and the minute the server's notice is given below, never
+    // cut short by the suite's 30 seconds a test
+    test.setTimeout(120_000)
     const model = await getModel(request)
     // a trade whose listing offers 1H now: nothing has read its minute bars yet
     let found = false
