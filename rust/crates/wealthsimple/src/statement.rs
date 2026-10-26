@@ -147,6 +147,28 @@ pub fn paid_payload(p: &bagholder_broker::statements::Paid) -> Value {
 
 /// One per day's conversions paid in one currency (their keys joined by `|`;
 /// one conversion's alone as before): a later reading of the day's cash revises it.
+/// A side paid's record read back (`paid_payload`): none for a record of
+/// another kind, or one that does not read.
+pub fn paid_of(v: &Value) -> Option<bagholder_broker::statements::Paid> {
+    let Value::Object(o) = v else { return None };
+    let text = |k: &str| match o.get(k) {
+        Some(Value::String(s)) => Some(s.as_str()),
+        _ => None,
+    };
+    if text("kind")? != PAID {
+        return None;
+    }
+    Some(bagholder_broker::statements::Paid {
+        account: text("account")?.to_string(),
+        conversion: text("conversion")?.to_string(),
+        day: text("day")?.parse().ok()?,
+        currency: bagholder_core::Currency::parse(text("currency")?).ok()?,
+        cash: bagholder_core::Dec::parse(text("cashMovement")?).ok()?,
+        stated: bagholder_core::Dec::parse(text("stated")?).ok()?,
+        stated_at: text("statedAt")?.parse().ok()?,
+    })
+}
+
 pub fn paid_key(p: &bagholder_broker::statements::Paid) -> String {
     format!("{}|paid|{}", p.account, p.conversion)
 }

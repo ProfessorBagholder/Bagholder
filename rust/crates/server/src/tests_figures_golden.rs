@@ -22,21 +22,27 @@ fn every_shape() -> Vec<Shape> {
 }
 
 /// One seed's book, pulled whole and opened as the app opens it: its figures.
-fn figures(seed: u64) -> Value {
+/// `carried`: the broker read first by the mapping a version back, which read a
+/// conversion's side paid as unstated (`tests_common::PaidUnread`), as a
+/// person's book was read before rule set 16; the opening then derives it again,
+/// and says how many of the statements' bookings it withdrew.
+fn figures_through(seed: u64, carried: bool) -> (Value, usize) {
     let today: bagholder_core::jiff::civil::Date = "2026-10-25".parse().unwrap();
     let now = today.to_zoned(bagholder_core::jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(bagholder_core::jiff::SignedDuration::from_hours(20)).unwrap();
     let home = tempfile::tempdir().unwrap();
-    let report = {
+    let statements = bagholder_book::mapping::Mapping::source(&bagholder_wealthsimple::statement::StatementMapping);
+    let (report, booked) = {
         let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
         // the zone the page states, as a person's first visit keeps it
         book.state_zone("America/Toronto", now).unwrap();
         let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
         let size = Size { accounts: 8, instruments: 16, trades: 60, months: 12, seed, deep: 0 };
-        let mut ws = Wealthsimple::new(Generated::shaped(size, today, &every_shape()));
-        pull(&book, &mut ws, connection, today, now, &mut |_| {}).unwrap()
+        let ws = Wealthsimple::new(Generated::shaped(size, today, &every_shape()));
+        let report = if carried { pull(&book, &mut crate::tests_common::ReadBefore(ws), connection, today, now, &mut |_| {}) } else { pull(&book, &mut { ws }, connection, today, now, &mut |_| {}) }.unwrap();
+        (report, book.live_records(&statements).unwrap())
     };
     let f = crate::figures::Figures::open(home.path(), now).unwrap();
-    f.read(|e| {
+    let value = f.read(|e| {
         let inputs = e.inputs();
         let mut accounts: BTreeMap<String, (BTreeMap<String, bagholder_core::Dec>, BTreeMap<String, bagholder_core::Dec>)> = BTreeMap::new();
         for t in inputs.ledger.transactions.iter() {
@@ -65,7 +71,21 @@ fn figures(seed: u64) -> Value {
         header.sort();
         json!({"accounts": accounts, "header": header})
     })
-    .unwrap()
+    .unwrap();
+    drop(f);
+    let live = Book::open_in(home.path(), "test", now).unwrap().0.live_records(&statements).unwrap();
+    (value, booked.iter().filter(|r| !live.contains(r)).count())
+}
+
+/// One seed's figures, and how many of the statements' bookings an opening
+/// withdraws in a book the version before read: that book, once opened, is the
+/// one the version makes.
+fn figures(seed: u64) -> Value {
+    let (mut direct, _) = figures_through(seed, false);
+    let (carried, withdrawn) = figures_through(seed, true);
+    assert_eq!(carried, direct, "seed {seed}: the book the version before read, once opened, is not the one the version makes");
+    direct["withdrawn at opening, the book read a version before"] = json!(withdrawn);
+    direct
 }
 
 #[test]
