@@ -1,6 +1,6 @@
 # Handoff: the CTO session for Bagholder
 
-Written 2026-10-18 by the CTO session that ran on the owner's Mac; section 2 last rewritten 2026-10-25; and the home-server lessons updated the same day by the home-server CTO session for the next one. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
+Written 2026-10-18 by the CTO session that ran on the owner's Mac; section 2 last rewritten 2026-10-26; and the home-server lessons updated the same day by the home-server CTO session for the next one. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
 
 The old session's memory (about 95 notes) lived only on the Mac. Everything in it that still matters is folded in below. Where a rule is already in the repo's `CLAUDE.md`, this file points to it and does not restate it.
 
@@ -22,46 +22,51 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-25 ~22:30 UTC, written by the home-server CTO session before a compaction)
+## 2. Where things stand (2026-10-26 ~18:00 UTC, written by the home-server CTO session before a compaction)
 
-### Released, newest first (each a patch; `gh release list` is the truth)
-- **v2.10.7** (Latest), from #612–#616, brief 76 PR 1 and the four fixes its shapes found:
-  - Rule set 16 (#613): a leaving row in the other account's feed is the move's only where it is of the move's kind and group (`externalCanonicalId`); without a group, the same amount and currency; without an amount, as before.
-  - #614: the statements walk starts from nothing before an account's first month, where the statements open it at nothing.
-  - #615: a closed account's book is held to nothing, and its statements are walked back to the month it closed.
-  - #616: `side_paid` was replaced by `sides_paid`. A conversion whose record states only the side received, after the newest statement, is paid what its day's cash (`BrokerAdapter::cash_on`, the positions' `sec-c-` nodes) moved unexplained. One record a day names that day's conversions, it is re-derived every pull, and `settled_conversions` takes a record naming several as settling each. The walk proves nothing after `top` (`proven` bounded).
-- **v2.10.6** (#611): repayments under any account filter again, with the Cashflow chart starting at the filtered accounts' first payment. The statements are consulted only when the book disagrees with the newest statement's close (a difference after it is left to the next activity read).
-- **v2.10.5** (#610): what Wealthsimple states now is what the book holds. A removed record its source states again is restored (`Outcome::Restored`); the pull's `held` counts no removed record; `restore_withdrawn` rebooks rows a walk withdrew where no feed row holds them, in every kept month. (2.10.2–2.10.3 walked a two-id account on one id's statements.)
-- 2.10.0–2.10.4: the earlier-app removal and its repairs (migrations 37–40). See `docs/decisions.md` 2026-10-24 and 2026-10-25.
+### Released, newest first (`gh release list` is the truth)
+- **v2.10.11** (#624, merge 5976075c): a card spend not yet final (`SPEND`/`PREPAID`) holds the amount it states, and once final is the purchase. Mapping version 18. Cleared the owner's CAD 💰Cash header line (it clears at the next balances read online). Release run 40369572042; confirm 8 assets and Latest.
+- **v2.10.10** (#622): takes back 2.10.9, which damaged the real book (it booked an assignment's "Sold N shares" as a sale, among other fill matching built on invented wording). `take_back_2_10_9` runs at the start of the statements walk.
+- 2.10.7 to 2.10.9: brief 76's shapes and fixes; 2.10.9 is the one taken back.
 
-### The owner's book
-After 2.10.6 the owner's header showed only "USD cash in 🚀 Trading: Wealthsimple's June 2026 statement: a buy only the statement states…", and it came back after the five-minute reads. 2.10.6's newest-statement rule targets exactly that trigger, and 2.10.7 adds the conversion fixes. Whether anything still shows after 2.10.7's first sync is unknown. If the owner reports something, trace it from the code and the shapes without asking them anything (their words: "why is this so hard… you're still putting questions back to me").
+### The owner's book now
+- One header line is left: USD cash in 🚀 Trading. Diagnosed: five currency conversions each stand twice, once as the feed's `FUNDS_CONVERSION` paid leg and once as a statement's "Money transfer out" booked from the statement before the feed stated it. Fixed by (b) below. The amounts are real figures: never in the repo, a PR or a message to the Architect.
+- Never claim a line is fixed before the gate on a read-only copy of their book shows it gone.
 
-### Brief 76 (the shapes the feed has), on `architecture-briefs`
-- PR 1, #612: merged (in 2.10.7). `Generated::shaped`, `Shape`, `SHAPES`; one pull test per shape; an every-shape test over seeds 13, 1, 5 and 9; the rule in `docs/architecture.md` §16 "The shapes the feed has". The hand-edited recorded fixtures stay (the Architect agreed).
-- PR 2, #617: merged (tests only). `a_book_of_every_shape_read_whole_again_is_the_same_book`, and `a_book_of_every_shape_carried_from_version_36_is_the_same_book_after_its_next_pull` (37 splits the linked set, 39 finds no link, the next pull merges it). Both assert `report.suspect` is empty.
-- **PR 3, #618 OPEN at ece175fa, all checks green, sent to the Architect for review** (worktree `scratchpad/b78`, branch `capacity-on-the-shaped-books`; master with #617 merged in). `capacity::build` and the engine-inputs oracle read `Generated::shaped(.., &SHAPES)`; `test_the_same_seed_and_size_build_the_same_book` allows only `conversion-side-unstated`. The first run's two growth-rule failures were real, and both are fixed with nothing added to `OVER_BUDGET`:
-  - `add-trade` (depth) ×3.29 (8730115c): the generator timed rows by one count over the whole run, wrapping every 3,600, so a day's sale could be timed before its buy and a holding never went flat. The count now restarts each day, in seconds from 15:00 UTC, capped at 23:59:59. Held by `a_days_rows_are_timed_in_the_order_they_are_made`.
-  - `brokers` (breadth) ×3.11 (74f0d1c7): engine `Change::Broker` cloned every lot of the account's positions to diff them; it now compares `broker_qty` in place.
-  - The first run's browser idle-minute failure does not touch this PR (the e2e book is `bagholder demo`) and passed on ece175fa. It is 1 of the last 40 failed runs; give it its own fix if it recurs.
-  - Next: on the Architect's clearance, merge ece175fa (no release; tests and a five-minute-read saving only), then remove `scratchpad/b78` and `scratchpad/cap618`.
-- The Architect's note for later: a past day's positions are final, so a settled day's cash could be kept like statements and not read again every pull.
-- After brief 76: the agents-anywhere build (plan #572) at the owner's word.
+### Brief 77 (`briefs/77-how-a-reading-change-is-proven.md`), the order of work
+Each step is its own PR and release, tests first, with the golden diff. One reading change per release.
+1. **#625 recorded forms**: OPEN, head 3ea937b8, branch `recorded-statement-forms`, built by a cloud session. The generator states only the recorded statement forms (`wealthsimple/tests/replies/wealthsimple-statements/forms-*.json`); `Shape::Assigned` and `ASSIGNED`; `tests/forms.rs`. Next: after #626 merges, merge master in, push, read its one run, merge. No release (tests and generator only).
+2. **§3 golden figures**: branch `golden-figures` 364ed227 (worktree `gold`), pushed, no PR. `server/src/tests_figures_golden.rs` pins every figure and header line over 12 seeds to `server/tests/golden/figures.json` (`BAGHOLDER_BLESS=1` writes it). Next: merge master after #625, re-bless, open the PR, send the head to the Architect, merge on green.
+3. **§4 gated rederive**: branch `rederive-gated` 3248b66d (worktree `gate4`), pushed, no PR. `figures.rs` `gated_rederive`: a mapping version that leaves the book disagreeing with the broker on anything new is refused and rolled back, noted in setting `rederive.refused`; `retry_refused` runs after each broker read. The owner's decision on showing a refusal is pending with the Architect; nothing is shown now. Next: merge master, PR, Architect, merge.
+4. **(b) withdraw a statement row the feed now states**: branch `statement-copy-withdrawn` 29e84d06 (worktree `dup`), pushed, no PR. `statements.rs` `withdraw_stated_by_the_feed`, before `restore_withdrawn`. Test `a_movement_booked_from_a_statement_that_the_feed_now_states_is_withdrawn_and_stands_once` fails on the old code. Next: merge master, re-bless golden (show the diff), bump to 2.10.12, run the gate on a read-only copy of the owner's book (servers started with `BAGHOLDER_EXIT_WITH`; only "identical / new / worse" per line to the Architect), PR, Architect, merge, release. Clears the USD line.
+5. **(c)**: #620's identity matching rebuilt on the recorded forms. An assignment's "Sold N shares" pairs with its ASSIGN row and is never booked as a sale; the `STATED_OTHERWISE` shapes join `SHAPES`. Gated, with the golden diff.
+- After those three changes: the agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must carry in-app setup, and the owner checks one real connection per agent before release.
 
-### Older queue, status not rechecked this segment
-#580–#584, #587, the `install-check` branch, the short-interest bug (options sent to FINRA), PR #589. Check each before acting.
+### CI (#626, branch `ci-faster`, worktree `ci`, head ac763ee3)
+- Each suite runs once: `tests.yml` on pull requests only (Linux), capacity cases in their own job beside the suite, macOS and Windows suites moved to `release.yml` on the release tag (publishing waits for them), dependencies built at opt-level 2.
+- Before: #624's run was 33 min wall (rust 22, rust-macos 33, browser 12, capacity 11). Next: when run 40370045564 is green, put the measured timings in the PR body and merge (no release).
+- Open question to raise with the Architect with the timings: with no master runs of `tests.yml`, no master-scoped cache exists, so each new PR's first run builds dependencies cold (this run is that case). Also `capacity.yml` still re-measures on every master push. Decide both from the measurement.
+- Architect's follow-ups, each its own PR: platform suites on PRs that touch platform code (paths filter); measure own crates opt 1 and dependencies opt 3; the browser job is the long pole.
+
+### Other follow-ups, in order
+- `take_back_2_10_9`: make its SQL filter one query; remove it at the next stop release.
+- The version-36 carry with a superseded coin fill.
+- Older items, not rechecked: the `install-check` branch, the short-interest bug (options sent to FINRA), PR #589, the open dependabot PRs. Check each before acting.
 
 ### How a release goes (all delegated: Architect clearance + green checks = merge and release)
-- Bump `rust/Cargo.toml` `version`, `rust/crates/server/src/app.rs` `APP_VERSION`, `rust/crates/server/tests/golden/routes.json` `"version"`, then let cargo update `Cargo.lock`.
+- The version bump goes inside the fix PR, so CI runs once: `rust/Cargo.toml` `version`, `rust/crates/server/src/app.rs` `APP_VERSION`, `rust/crates/server/tests/golden/routes.json` `"version"`, then `cargo update --workspace --offline`.
 - Merge with `gh api -X PUT repos/ProfessorBagholder/Bagholder/pulls/N/merge -f merge_method=merge -f sha=<cleared head>`.
-- Then `gh release create vX.Y.Z --target <merge sha> --prerelease --title vX.Y.Z --notes-file <notes>`. release.yml builds 8 assets and marks it Latest; confirm with `gh release view` and `gh release list` before telling the owner it is out (never a link before it is ready).
-- Stacked PRs: merge each into the stack's base in order, retargeting the next with `gh api -X PATCH …/pulls/N -f base=<branch>`. Merge master into a long branch before its last run if master moved (#612 was cut before 2.10.6).
+- Then `gh release create vX.Y.Z --target <merge sha> --prerelease --title vX.Y.Z --notes "…"`. release.yml builds 8 assets and marks it Latest; confirm with `gh release view` and `gh api repos/ProfessorBagholder/Bagholder/releases/latest` before telling the owner it is out.
+
+### Delegation, learned this segment
+- Cloud sessions cannot message back: never tell one to `send_message`; say "ask for no permission"; read the result from its transcript with `list_events`. Telling one to message back made it ask for trust, and the owner got a sign-in prompt.
+- Never archive a session before its report has reached me.
+- The Mac bridge (look its name up with `list_environments`) cannot read `~/.bagholder-rust/book.db` unattended, even read-only with a stated go-ahead, and cannot `kill`. A gate there starts every server with `BAGHOLDER_EXIT_WITH=<its shell pid>`.
 
 ### Workspace
-- Worktrees in this session's scratchpad: `b78` (#618), `g558` (paused, the owner's call), `ho` (this file).
-- Scratch notes: `history-test.patch` (a test replaying 2.9.0 → 2.10.2's one-id walk → 2.10.5 that ends where 2.9.0 left the book; uncommitted, could join a later tests PR); `brief75.md`, `facts-pull.md`, `nt.md` and `verification.md` are older notes.
-- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`.
-- **Lesson from today:** a background waiter on CI never reported, and the owner saw an hour of "waiting" on checks that had already failed. Read `gh pr checks N` yourself at the point the result is needed, and never tell the owner you are waiting without having just checked.
+- Worktrees in this session's scratchpad: `aa`, `ci`, `dup`, `gate4`, `gold`, `ho` (this file), `g558` (paused, the owner's call; uncommitted edits). Remove each once its PR merges, with its local and remote branch.
+- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, only the named tests a change touches; the server crate is a bin (`-p bagholder-server --bin bagholder <filter>`).
+- Read CI yourself (`gh run view`) when the result is needed; never tell the owner you are waiting without having just checked.
 
 ## 3. How the owner wants to be worked with
 
