@@ -47,7 +47,19 @@ After 2.10.12's first sync the header should be empty. Never say "fixed" until t
      - After: applied, 4 withdrawn, and the book equals a direct pull under version 18.
    - The golden test runs the split at every seed (withdrawn 2,4,3,0,2,4,1,2,3,3,3,2).
    - Sent to the Architect. Merge on clearance and green; no release (ships with (c)).
-3. **(c)**: #620's identity matching rebuilt on the recorded forms. The ASSIGN sequence's "Sold N shares" is paired with the assignment and never booked as a sale, and the `STATED_OTHERWISE` shapes join `SHAPES`. Gated, with the golden diff and a canary on the owner's book. Release.
+3. **(c), branch `statement-fills` (worktree `fills`), stacked on #632, local commit 875d12f9, NOT pushed.**
+   - It re-applies #620 (ea83a81c, 6106cc72) and fixes what it got wrong:
+     - `codes::contract_of` reads only the recorded form "SYM N USD RIGHT D: Bought N contract…", with no " - NAME".
+     - `delivery()` holds an assignment's share sale or purchase out of the fills step.
+     - Supersedes use `STATED_FILL`, not 2.10.9's reason.
+     - The take-back runs once per book (setting `statements.taken-back-2.10.9`).
+     - The stated-otherwise shapes join `SHAPES`; the golden test adds `ASSIGNED`.
+     - The developer's walk also runs `statements::fills`.
+     - Version 2.10.13, docs written.
+   - Passing: statements 43, take_back, forms, pull 36, broker lib, figures, pull_broker. Plant: without `delivery()` the assigned shares sell twice (GW −300).
+   - **Blocked:** the golden carried check fails at seed 5. The walk's side-paid record (`sides_paid`, after the newest statement) is computed under the version before and is stale at opening, so it pays a conversion twice, and in the app #632's gate would refuse forever.
+   - Proposed to the Architect: the gate's pre-pass corrects paid records offline, in #632. Awaiting their answer, and #632's verdict waits on it.
+   - Then: bless golden, push, PR, gate on the owner's book (candidate with `--features pull-broker`; the walk command now runs fills too), release 2.10.13.
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
 ### Delegated
