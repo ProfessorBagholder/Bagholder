@@ -40,7 +40,11 @@ After 2.10.12's first sync the header should be empty. Never say "fixed" until t
 
 ### Brief 77, what is left, in order
 1. **§4, the gated rederive**: branch `rederive-gated` (worktree `gate4`). Master merged in; next, run its tests, open the PR and send it to the Architect. The owner's decision on showing a refusal is pending; nothing is shown.
-2. **The generator gains the shape "booked from a statement, then stated by the feed"** (the Architect, before (c)). Then re-bless the golden file; its diff names (b)'s withdrawals.
+2. **The generator gains the shape "booked from a statement, then stated by the feed"** (the Architect, before (c); brief 77 §1: "a conversion booked from a statement before the feed states its paid side"). Then re-bless the golden file; its diff names (b)'s withdrawals. Worktree `shape`, branch `statement-then-feed`, made from master; nothing written yet.
+   - **The mechanism in the owner's book.** A move between two accounts is refreshed on each pull until its other side can be read (`adapter.refreshes`, `lacks_opposing`, `pull.rs` ~158). A pull re-reads activity only from the last read day, or from an unsettled row's day.
+   - **The owner's case.** Conversions moved USD out of the old USD sub-account (a second id) into the account. The receiving FUNDS_CONVERSION record gained its USD side only once the sub-account's row could be read. Before that, the walk had booked the sub-account's statement "Money transfer out of the account" row.
+   - **The shape to build.** A conversion out of a USD account into the first investment account. The USD account's own row is held until `publish_late` (the generator's `held` rows), and the statements state the transfer out and in, from the recorded forms.
+   - **The golden test.** Pull, `publish_late`, pull again. Only this shape may change what the second pull does; check that LateRow's figures move only as `publish_late` already makes them.
 3. **(c)**: #620's identity matching rebuilt on the recorded forms. The ASSIGN sequence's "Sold N shares" is paired with the assignment and never booked as a sale, and the `STATED_OTHERWISE` shapes join `SHAPES`. Gated, with the golden diff and a canary.
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
