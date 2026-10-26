@@ -22,10 +22,10 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-26 ~19:55 UTC, written by the home-server CTO session)
+## 2. Where things stand (2026-10-26 ~21:00 UTC, written by the home-server CTO session)
 
 ### Released, newest first (`gh release list` is the truth)
-- **v2.10.12** (#629, merge a446c1a2): a booking the statements walk made from a statement, which the feed now states, is withdrawn (`withdraw_stated_by_the_feed`, before `restore_withdrawn`). Every kept row is paired with all the account's transactions in the kept months' span, feed first, and only a booking left unpaired is withdrawn. The gate on a copy of the owner's book: the walk withdrew 5 bookings, and the USD 🚀 Trading line was gone with nothing new or worse. Release run started ~19:50; confirm 8 assets and Latest.
+- **v2.10.12** (#629, merge a446c1a2): a booking the statements walk made from a statement, which the feed now states, is withdrawn (`withdraw_stated_by_the_feed`, before `restore_withdrawn`). Every kept row is paired with all the account's transactions in the kept months' span, feed first, and only a booking left unpaired is withdrawn. The gate on a copy of the owner's book: the walk withdrew 5 bookings, and the USD 🚀 Trading line was gone with nothing new or worse. Published 20:04, Latest, 8 assets.
 - **v2.10.11** (#624): a pending card spend (`SPEND`/`PREPAID`) holds its amount. The owner's CAD 💰Cash line cleared.
 - **v2.10.10** (#622): takes back 2.10.9.
 
@@ -39,17 +39,23 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 After 2.10.12's first sync the header should be empty. Never say "fixed" until the owner's screen or a gate shows it.
 
 ### Brief 77, what is left, in order
-1. **§4, the gated rederive**: branch `rederive-gated` (worktree `gate4`). Master merged in; next, run its tests, open the PR and send it to the Architect. The owner's decision on showing a refusal is pending; nothing is shown.
-2. **The generator gains the shape "booked from a statement, then stated by the feed"** (the Architect, before (c); brief 77 §1: "a conversion booked from a statement before the feed states its paid side"). Then re-bless the golden file; its diff names (b)'s withdrawals. Worktree `shape`, branch `statement-then-feed`, made from master; nothing written yet.
-   - **The mechanism in the owner's book.** A move between two accounts is refreshed on each pull until its other side can be read (`adapter.refreshes`, `lacks_opposing`, `pull.rs` ~158). A pull re-reads activity only from the last read day, or from an unsettled row's day.
-   - **The owner's case.** Conversions moved USD out of the old USD sub-account (a second id) into the account. The receiving FUNDS_CONVERSION record gained its USD side only once the sub-account's row could be read. Before that, the walk had booked the sub-account's statement "Money transfer out of the account" row.
-   - **The shape to build.** A conversion out of a USD account into the first investment account. The USD account's own row is held until `publish_late` (the generator's `held` rows), and the statements state the transfer out and in, from the recorded forms.
-   - **The golden test.** Pull, `publish_late`, pull again. Only this shape may change what the second pull does; check that LateRow's figures move only as `publish_late` already makes them.
-3. **(c)**: #620's identity matching rebuilt on the recorded forms. The ASSIGN sequence's "Sold N shares" is paired with the assignment and never booked as a sale, and the `STATED_OTHERWISE` shapes join `SHAPES`. Gated, with the golden diff and a canary.
+1. **#631 (§4, the gated rederive): merged** (730abe16), no release.
+2. **#632, head 90bc4569, branch `statement-then-feed` (worktree `shape`): the gate withdraws the statements' bookings a new version states.**
+   - It replaced the planned generator shape. Under today's pull an old conversion's paid side can't arrive later, so the doubled state comes from a mapping version, and the test reproduces that.
+   - The test, `figures::tests::a_version_stating_a_side_paid_…`: `tests_common::PaidUnread` (a version back, with paid legs unstated) and `ReadBefore` (an adapter that delegates everything except `mapping()`).
+     - Before the fix: refused, 410 records stale, 8 bookings, 0 withdrawn.
+     - After: applied, 4 withdrawn, and the book equals a direct pull under version 18.
+   - The golden test runs the split at every seed (withdrawn 2,4,3,0,2,4,1,2,3,3,3,2).
+   - Sent to the Architect. Merge on clearance and green; no release (ships with (c)).
+3. **(c)**: #620's identity matching rebuilt on the recorded forms. The ASSIGN sequence's "Sold N shares" is paired with the assignment and never booked as a sale, and the `STATED_OTHERWISE` shapes join `SHAPES`. Gated, with the golden diff and a canary on the owner's book. Release.
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
 ### Delegated
-- **PR A** (the Architect's hardening list: `plain_number` exponent cap, `take_frame` checked length, four clippy denies, the gate command with `standin`): cloud session `session_01PqGc6DaSzd5oe2D7FsbARQ`, branch `hardening-a`. Read its result with `list_events`; it cannot message back. The first attempt was refused at `git switch -c`.
+- **PR A is #630**, head af63cb12, green, sent to the Architect.
+  - `take_frame` now returns `io::Result`.
+  - `standin.rs` has five `#[expect]` attributes.
+  - CI's clippy doesn't turn on `standin` yet; that's the Architect's call.
+  - Worktree `hard`.
 - **PR B** (the wider lints): after brief 77.
 
 ### Other follow-ups
@@ -70,7 +76,7 @@ After 2.10.12's first sync the header should be empty. Never say "fixed" until t
 - **Merging.** A merge whose commit writes a new workflow file blob is refused (the token has no `workflow` scope). Merge master into the branch first and push; git pushes are allowed.
 
 ### Workspace
-- Worktrees in this session's scratchpad: `gate4` (§4), `aa` (agents), `g558` (paused, the owner's call), `ho` (this file).
+- Worktrees in this session's scratchpad: `shape` (#632), `hard` (#630), `aa` (agents), `g558` (paused, the owner's call), `ho` (this file).
 - The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. Its dependencies are built at opt-level 0, so pass `--config 'profile.dev.package."*".opt-level=0'` or they all rebuild. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, and only the named tests a change touches. The server crate is a bin: `-p bagholder-server --bin bagholder <filter>`.
 
 ### How a release goes (all delegated: Architect clearance + green checks = merge and release)
