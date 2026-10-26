@@ -79,7 +79,7 @@ fn walk(home: &std::path::Path, now: Timestamp) -> Result<String, String> {
     let empty = std::env::temp_dir().join(format!("bagholder-no-replies-{}", std::process::id()));
     std::fs::create_dir_all(&empty).map_err(|e| e.to_string())?;
     let replay = Replay::read(&empty).map_err(|e| e.to_string());
-    let _ = std::fs::remove_dir(&empty);
+    std::fs::remove_dir(&empty).map_err(|e| format!("{}: {e}", empty.display()))?;
     let (book, _) = Book::open_in(home, crate::app::APP_VERSION, now).map_err(|e| e.to_string())?;
     let wealthsimple = Broker::named("wealthsimple");
     let Some(connection) = book.connections().map_err(|e| e.to_string())?.into_iter().find(|c| c.broker == wealthsimple).map(|c| c.id) else {
