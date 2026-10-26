@@ -40,26 +40,14 @@ After 2.10.12's first sync the header should be empty. Never say "fixed" until t
 
 ### Brief 77, what is left, in order
 1. **#631 (§4, the gated rederive): merged** (730abe16), no release.
-2. **#632, head 90bc4569, branch `statement-then-feed` (worktree `shape`): the gate withdraws the statements' bookings a new version states.**
-   - It replaced the planned generator shape. Under today's pull an old conversion's paid side can't arrive later, so the doubled state comes from a mapping version, and the test reproduces that.
-   - The test, `figures::tests::a_version_stating_a_side_paid_…`: `tests_common::PaidUnread` (a version back, with paid legs unstated) and `ReadBefore` (an adapter that delegates everything except `mapping()`).
-     - Before the fix: refused, 410 records stale, 8 bookings, 0 withdrawn.
-     - After: applied, 4 withdrawn, and the book equals a direct pull under version 18.
-   - The golden test runs the split at every seed (withdrawn 2,4,3,0,2,4,1,2,3,3,3,2).
-   - Sent to the Architect. Merge on clearance and green; no release (ships with (c)).
-3. **(c), branch `statement-fills` (worktree `fills`), stacked on #632, local commit 875d12f9, NOT pushed.**
-   - It re-applies #620 (ea83a81c, 6106cc72) and fixes what it got wrong:
-     - `codes::contract_of` reads only the recorded form "SYM N USD RIGHT D: Bought N contract…", with no " - NAME".
-     - `delivery()` holds an assignment's share sale or purchase out of the fills step.
-     - Supersedes use `STATED_FILL`, not 2.10.9's reason.
-     - The take-back runs once per book (setting `statements.taken-back-2.10.9`).
-     - The stated-otherwise shapes join `SHAPES`; the golden test adds `ASSIGNED`.
-     - The developer's walk also runs `statements::fills`.
-     - Version 2.10.13, docs written.
-   - Passing: statements 43, take_back, forms, pull 36, broker lib, figures, pull_broker. Plant: without `delivery()` the assigned shares sell twice (GW −300).
-   - **Blocked:** the golden carried check fails at seed 5. The walk's side-paid record (`sides_paid`, after the newest statement) is computed under the version before and is stale at opening, so it pays a conversion twice, and in the app #632's gate would refuse forever.
-   - Proposed to the Architect: the gate's pre-pass corrects paid records offline, in #632. Awaiting their answer, and #632's verdict waits on it.
-   - Then: bless golden, push, PR, gate on the owner's book (candidate with `--features pull-broker`; the walk command now runs fills too), release 2.10.13.
+2. **#632, head 16d7c70a, branch `statement-then-feed` (worktree `shape`).** The gate's pre-pass, `statements::restate_walk_records`, brings every record the walk makes from the book's own data to what the re-derived records leave unexplained: statement bookings no row needs are withdrawn, and side-paid records are restated offline. The principle is in `gated_rederive`'s doc.
+   - Version-split test: before the fix, refused with 414 records stale; after, the version applies and the book equals the direct pull.
+   - With the Architect for the verdict. No release.
+3. **#633 = (c), head 30ae5be8, branch `statement-fills` (worktree `fills`), stacked on #632. Version 2.10.13.**
+   - Fixes: the recorded contract form, `delivery()` for an assignment's shares, `STATED_FILL`, the take-back once per book, the stated-otherwise shapes in `SHAPES`, the golden test with `ASSIGNED`, and the developer's walk running the fills step too.
+   - Golden: header lines 23–31 per seed drop to 0, none new.
+   - The Mac gate (session `session_01TmzDktA2igdrKZvnJhPska`) is running: 2.10.12 against 30ae5be8.
+   - Next: the gate verdict, then the Architect (send the head with the verdict: identical, new or worse per line), then green, merge #632 then #633 (retargeted), then release 2.10.13.
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
 ### Delegated
