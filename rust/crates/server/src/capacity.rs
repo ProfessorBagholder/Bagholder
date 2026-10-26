@@ -867,14 +867,15 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             // the broker's distribution of the holding (a buy, for a back-dated fill) in
             // the middle of its history, by day, in the account whose history is deep:
             // of the accounts with such a record, the one holding most of its rows, never
-            // another account that holds the listing too
+            // another account that holds the listing too. The activity feed's own record,
+            // stored again as the feed's: never one a statement booked in its place
             let kind = if op == Op::BackdatedFill { "buy" } else { "dividend" };
             let (record, day, account): (String, String, String) = {
                 let c = book.conn_for_tests();
                 let account: String = c
                     .query_row(
                         "SELECT t.account_id FROM transactions t WHERE t.instrument_id = ?1
-                           AND t.account_id IN (SELECT d.account_id FROM transactions d JOIN source_records r ON r.id = d.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE d.instrument_id = ?1 AND d.kind = ?2)
+                           AND t.account_id IN (SELECT d.account_id FROM transactions d JOIN source_records r ON r.id = d.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL AND r.source = 'wealthsimple' WHERE d.instrument_id = ?1 AND d.kind = ?2)
                          GROUP BY t.account_id ORDER BY count(*) DESC, t.account_id LIMIT 1",
                         [instrument.to_string(), kind.to_string()],
                         |r| r.get(0),
@@ -882,14 +883,14 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                     .map_err(err)?;
                 let n: i64 = c
                     .query_row(
-                        "SELECT count(*) FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL WHERE t.instrument_id = ?1 AND t.kind = ?2 AND t.account_id = ?3",
+                        "SELECT count(*) FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL AND r.source = 'wealthsimple' WHERE t.instrument_id = ?1 AND t.kind = ?2 AND t.account_id = ?3",
                         [instrument.to_string(), kind.to_string(), account.clone()],
                         |r| r.get(0),
                     )
                     .map_err(err)?;
                 let (record, day) = c
                     .query_row(
-                        "SELECT t.record_id, t.trade_date FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL
+                        "SELECT t.record_id, t.trade_date FROM transactions t JOIN source_records r ON r.id = t.record_id AND r.state = 'live' AND r.connection_id IS NOT NULL AND r.source = 'wealthsimple'
                          WHERE t.instrument_id = ?1 AND t.kind = ?3 AND t.account_id = ?4 ORDER BY t.trade_date, t.record_id LIMIT 1 OFFSET ?2",
                         rusqlite::params![instrument.to_string(), n / 2, kind, account],
                         |r| Ok((r.get(0)?, r.get(1)?)),

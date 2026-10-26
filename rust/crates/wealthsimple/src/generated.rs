@@ -1071,7 +1071,8 @@ impl Generated {
                     self.push(row);
                 }
                 let (code, said) = fill_line(&l, true, units, day);
-                let said = if fx_funded { format!("{said}, FX Rate: 1.3500") } else { said };
+                // the rate as the statement writes it, from the made-up broker's 135 cents a dollar
+                let said = if fx_funded { format!("{said}, FX Rate: {}", Dec::new(13_500, 4).expect("a rate").to_text()) } else { said };
                 self.move_cash(account, paid_in, -paid, day, code, said);
                 self.move_units(account, listing, units, day);
             }
