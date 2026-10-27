@@ -453,11 +453,12 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// here, with the reason it stays: this list is the one place timers are argued for.
-const TIMED_WAITS: [(&str, usize, &str); 21] = [
+const TIMED_WAITS: [(&str, usize, &str); 22] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
     ("net/src/client.rs", 1, "a test's stand-in peer that answers a byte at a time, slower than the fetch is given, to show the fetch ends at its deadline"),
     ("net/src/machine.rs", 1, "every host's request rate on the one limiter (Yahoo, SEDAR+, the SEC, fund companies, news feeds, the archive at TMX): a turn taken, waited for with no lock held"),
+    ("server/src/agents/fetch.rs", 2, "a client's metadata document: looking its name up gets what is left of the fetch's five seconds, since the system's resolver keeps no deadline of its own; one in its tests, a resolver too slow for it"),
     ("server/src/agents/listener.rs", 1, "agents switched off: the listener takes no connection from then on, and what is already in hand gets at most five seconds to finish, so a connection held open cannot keep it serving"),
     ("server/src/app.rs", 4, "`wait` itself, measured on the wall clock (`Wall`) so a deadline a sleeping machine passed is met on waking, looking at that clock once a minute as cron does; three in its test"),
     ("server/src/broker_reads.rs", 1, "Wealthsimple's reads: until the next pull window (weekdays 2 PM Mountain), the next balances read while a page is open, or a failed read's rest ending"),
