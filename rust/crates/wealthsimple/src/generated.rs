@@ -1144,6 +1144,12 @@ impl Generated {
     /// Cash enough for `cents` of `c` in account `a`: a deposit of CAD, and
     /// for another currency a conversion from it, before what needs it.
     fn fund(&mut self, a: usize, c: Cur, cents: i64, day: jiff::civil::Date, n: &mut u32) {
+        self.fund_counted(a, c, cents, day, n, true);
+    }
+
+    /// The same, its conversion counted among those `FundingIntent` takes every
+    /// other one of where `counted`, else never a funding intent.
+    fn fund_counted(&mut self, a: usize, c: Cur, cents: i64, day: jiff::civil::Date, n: &mut u32, counted: bool) {
         let short = cents - self.cash(a, c);
         if short <= 0 {
             return;
@@ -1163,8 +1169,8 @@ impl Generated {
         self.net_deposit(a, cad, day);
         if c == Cur::Usd {
             // every other one a funding intent, whose detail states the side received alone
-            self.funded += 1;
-            let funding = self.shapes.contains(&Shape::FundingIntent) && self.funded % 2 == 0;
+            self.funded += usize::from(counted);
+            let funding = counted && self.shapes.contains(&Shape::FundingIntent) && self.funded % 2 == 0;
             self.conversion(a, day, n, want, cad, funding);
         }
     }
@@ -1255,7 +1261,9 @@ impl Generated {
         match p {
             Plan::Buy { account, listing, units } => {
                 let l = self.listings[listing].clone();
-                let price = (l.price + r.range(-l.price / 20, l.price / 20)).max(1);
+                // `SplitFill`'s listing at its own price, drawing nothing: the book without it stays as it is
+                let own = self.split_on == Some(listing);
+                let price = if own { l.price } else { (l.price + r.range(-l.price / 20, l.price / 20)).max(1) };
                 let cost = l.cost(units, price).max(1);
                 // a US share paid out of CAD at the broker's rate, 135 cents a dollar, half a cent up
                 let fx_funded = self.shapes.contains(&Shape::FxFunded) && l.sort == Sort::Share && l.cur == Cur::Usd && day < self.today.first_of_month() && {
@@ -1265,7 +1273,7 @@ impl Generated {
                 let fee = if fx_funded { 0 } else { self.folded_fee(cost, day) };
                 let paid = if fx_funded { (cost * 135 + 50) / 100 } else { cost + fee };
                 let paid_in = if fx_funded { Cur::Cad } else { l.cur };
-                self.fund(account, paid_in, paid, day, n);
+                self.fund_counted(account, paid_in, paid, day, n, !own);
                 *n += 1;
                 let id = self.next_id("buy");
                 let (ty, sub) = match l.sort {
@@ -1292,7 +1300,7 @@ impl Generated {
                     return;
                 }
                 let units = if all { held } else { (held / 2).max(1) };
-                let price = (l.price + r.range(-l.price / 5, l.price / 5)).max(1);
+                let price = if self.split_on == Some(listing) { l.price + l.price / 10 } else { (l.price + r.range(-l.price / 5, l.price / 5)).max(1) };
                 let proceeds = l.cost(units, price);
                 let fee = if proceeds > 1 { self.folded_fee(proceeds, day) } else { 0 };
                 // a purchase the feed left out, sold the same day: no position states it, so it is listed

@@ -375,7 +375,9 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         }
     }
     report.statements = crate::statements::run(book, adapter, connection, &statement_keys, &closed, today, now, step, &mut report.failures)?;
-    report.statements.fills = crate::statements::fills(book, adapter, connection, &statement_keys, now, &mut report.failures)?;
+    let (taken, given_back) = crate::statements::fills(book, adapter, connection, &statement_keys, now, &mut report.failures)?;
+    report.statements.fills = taken;
+    report.statements.withdrawn += given_back;
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
     // units already stated as of that day are not asked again (brief 07 §1),
