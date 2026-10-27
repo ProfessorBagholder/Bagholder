@@ -1389,20 +1389,44 @@ fn a_fill_of_no_units_an_earlier_step_took_gives_the_feed_s_record_its_place_bac
     let rows = split("2025-06-03", true, "482.0000", "3.00", "2025-06-02", "-1446.00", "-1446.00");
     let kept = kept_rows(&mut w, "2025-06-01", &rows);
     // as the step before wrote it: the cash row read as a fill of no units, in the feed's place
-    let t = w.book.transactions_of(bought).unwrap().pop().unwrap();
-    let instrument = t.instrument.unwrap();
-    let security = w.book.own_refs(instrument).unwrap().into_iter().find(|r| matches!(r.scheme, bagholder_core::instrument::RefScheme::BrokerSecurity(_))).unwrap();
-    let info = w.book.instruments().unwrap().into_iter().find(|i| i.id == instrument).unwrap();
-    let row = w.broker.statement_rows("lira-1", &kept).unwrap().remove(0);
-    let fill = bagholder_broker::statements::Fill { account: "lira-1".into(), month: day("2025-06-01"), position: 0, row, quantity: Dec::ZERO, security, kind: info.kind, currency: info.currency, feed: t };
-    let (key, payload) = w.broker.fill_record(&fill).unwrap();
-    let incoming = Incoming { connection: Some(w.conn), source_key: &key, payload: &payload.canonical(), refs: vec![] };
-    w.book.store_superseding(&statement::StatementMapping, &incoming, &[bought], "the broker's statement states the units the fill executed", at(NOW)).unwrap();
+    took_in_the_feed_s_place(&mut w, bought, &kept, Dec::ZERO);
     assert_eq!(w.units_of(w.lira, "XQL"), Dec::ZERO, "the step before's fill of no units");
     let mut failures = vec![];
     assert_eq!(w.units_step(&mut failures), (0, 1), "{failures:?}");
     assert_eq!(w.book.record(bought).unwrap().state, RecordState::Live);
     assert_eq!(w.units_of(w.lira, "XQL"), dec("482"), "the feed's own units again");
+    assert_eq!(w.units_step(&mut failures), (0, 0), "read again, nothing changes");
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+/// A statement fill in the feed's place, as the step before wrote one: of the kept
+/// statement's first row, at `quantity`.
+fn took_in_the_feed_s_place(w: &mut World, feed: bagholder_core::RecordId, kept: &Value, quantity: Dec) {
+    let t = w.book.transactions_of(feed).unwrap().pop().unwrap();
+    let instrument = t.instrument.unwrap();
+    let security = w.book.own_refs(instrument).unwrap().into_iter().find(|r| matches!(r.scheme, bagholder_core::instrument::RefScheme::BrokerSecurity(_))).unwrap();
+    let info = w.book.instruments().unwrap().into_iter().find(|i| i.id == instrument).unwrap();
+    let row = w.broker.statement_rows("lira-1", kept).unwrap().remove(0);
+    let fill = bagholder_broker::statements::Fill { account: "lira-1".into(), month: day("2025-06-01"), position: 0, row, quantity, security, kind: info.kind, currency: info.currency, feed: t };
+    let (key, payload) = w.broker.fill_record(&fill).unwrap();
+    let incoming = Incoming { connection: Some(w.conn), source_key: &key, payload: &payload.canonical(), refs: vec![] };
+    w.book.store_superseding(&statement::StatementMapping, &incoming, &[feed], "the broker's statement states the units the fill executed", at(NOW)).unwrap();
+}
+
+/// A statement fill in the feed's place whose row now reads as the feed's own
+/// units (a feed row read again can state other units than it did) gives the feed's
+/// record its place back: the statement states nothing otherwise any more.
+#[test]
+fn a_statement_fill_whose_row_reads_as_the_feed_s_own_units_gives_the_feed_s_record_its_place_back() {
+    let mut w = World::new();
+    let bought = w.fill("lira-1", "2025-06-02T15:00:00Z", "buy", "XQM", "482", "-1446.00");
+    let kept = kept_rows(&mut w, "2025-06-01", &[("2025-06-03".into(), "BUY".into(), "XQM - Examplia Wobbleworks Plc.: Bought 482.0000 shares (executed at 2025-06-02)".into(), "-1446.00".into(), "-1446.00".into())]);
+    took_in_the_feed_s_place(&mut w, bought, &kept, dec("482"));
+    assert_eq!(w.book.record(bought).unwrap().state, RecordState::Superseded);
+    let mut failures = vec![];
+    assert_eq!(w.units_step(&mut failures), (0, 1), "{failures:?}");
+    assert_eq!(w.book.record(bought).unwrap().state, RecordState::Live);
+    assert_eq!(w.units_of(w.lira, "XQM"), dec("482"));
     assert_eq!(w.units_step(&mut failures), (0, 0), "read again, nothing changes");
     assert!(failures.is_empty(), "{failures:?}");
 }
