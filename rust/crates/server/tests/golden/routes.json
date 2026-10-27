@@ -16,7 +16,7 @@
       "summaryReady": false,
       "protocol": "2026-09-26.2",
       "startedAt": "<startedAt>",
-      "version": "2.11.5",
+      "version": "2.12.0",
       "latestVersion": "",
       "updateAvailable": false,
       "updateUrl": "https://github.com/ProfessorBagholder/Bagholder",
@@ -80,6 +80,7 @@
         "ready": null,
         "waiting": [],
         "allowed": [],
+        "refused": [],
         "error": ""
       },
       "dataVersion": "exposures:0|filings:0|news:0|universes:0|<today>",
