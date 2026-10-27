@@ -192,7 +192,16 @@ async fn choose(State(state): State<AppState>, Required(asked): Required<Setup>)
         if !matches!(s.funnel_port, None | Some(443) | Some(8443)) {
             return Err("Funnel serves on 443 or 8443 here.".into());
         }
-        let tailscale = if s.provider == Provider::Tailscale { app.agents.look_at_tailscale().name } else { None };
+        let tailscale = if s.provider == Provider::Tailscale {
+            let says = app.agents.look_at_tailscale();
+            // 443 held by another program here: Funnel serves on 8443 unless the person chose
+            if says.https_port_taken && s.funnel_port.is_none() {
+                s.funnel_port = Some(8443);
+            }
+            says.name
+        } else {
+            None
+        };
         let host = tunnel::host_of(&s, tailscale.as_deref())?;
         let receives = tunnel::received_host(&s)?;
         let a = store(&app)?;

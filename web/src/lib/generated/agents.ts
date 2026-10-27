@@ -21,6 +21,15 @@ sendsHost: string | null, };
 
 export type TailscaleSays = { installed: boolean, signedIn: boolean, https: boolean, funnel: boolean, name: string | null, 
 /**
+ * This machine's first address on its tailnet.
+ */
+address: string | null, 
+/**
+ * Whether another program answers on 443 at that address: Funnel's traffic on
+ * 443 would reach it, not Bagholder, so Funnel serves on 8443.
+ */
+httpsPortTaken: boolean, 
+/**
  * Why Tailscale could not be asked, in its words (its app not running, say).
  */
 said: string, };
