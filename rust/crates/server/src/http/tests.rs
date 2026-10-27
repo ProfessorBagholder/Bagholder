@@ -129,6 +129,23 @@ fn test_a_name_listed_for_a_proxy_is_answered_from_this_machine_alone() {
     });
 }
 
+/// The agents' public name is never answered by the page, even listed for a proxy:
+/// the page's Allow and Deny cannot be reached through the agents' tunnel.
+#[test]
+fn test_the_agents_name_is_never_the_page_s_even_listed() {
+    let _g = guard();
+    let local = [127, 0, 0, 1];
+    runtime().block_on(async {
+        let _listed = Listed::names(&["agents.example.com"]);
+        assert_eq!(json_of(through(Method::GET, "/api/status", None, "agents.example.com", local)).await.0, StatusCode::OK, "listed, and no agents' address yet");
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/agents/switch", Some(r#"{"on":true}"#))).await.0, StatusCode::OK);
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/agents/tunnel", Some(r#"{"provider":"own","name":"agents.example.com"}"#))).await.0, StatusCode::OK);
+        assert_eq!(json_of(through(Method::GET, "/api/status", None, "agents.example.com", local)).await.0, StatusCode::FORBIDDEN, "the agents' name, though listed");
+        assert_eq!(json_of(from_the_page(Method::GET, "/api/status", None)).await.0, StatusCode::OK);
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/data/clear", Some(r#"{"kinds":["agents"]}"#))).await.0, StatusCode::OK);
+    });
+}
+
 /// `BAGHOLDER_HOSTS` read: names lowercased, a port kept; an entry with a space,
 /// an empty one, or one that is no host name refuses the start, naming it.
 #[test]

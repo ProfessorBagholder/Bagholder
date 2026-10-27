@@ -164,13 +164,44 @@ fn parse_url(url: &str) -> Result<Url, Error> {
 
 enum Conn {
     Tls(Box<SslStream<TcpStream>>),
+    /// TLS over a socket whose reads end at a deadline (`get_at`).
+    TlsUntil(Box<SslStream<Until>>),
     Plain(TcpStream),
+}
+
+/// A socket whose reads end at a deadline: each waits only what is left of it, so a
+/// peer sending a byte at a time cannot hold the read past it.
+#[derive(Debug)]
+struct Until {
+    tcp: TcpStream,
+    at: std::time::Instant,
+}
+
+impl Read for Until {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = self.at.saturating_duration_since(std::time::Instant::now());
+        if left.is_zero() {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the answer took longer than it is given"));
+        }
+        self.tcp.set_read_timeout(Some(left))?;
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for Until {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tcp.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.tcp.flush()
+    }
 }
 
 impl Read for Conn {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
             Conn::Tls(s) => s.read(buf),
+            Conn::TlsUntil(s) => s.read(buf),
             Conn::Plain(s) => s.read(buf),
         }
     }
@@ -180,12 +211,14 @@ impl Write for Conn {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Conn::Tls(s) => s.write(buf),
+            Conn::TlsUntil(s) => s.write(buf),
             Conn::Plain(s) => s.write(buf),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Conn::Tls(s) => s.flush(),
+            Conn::TlsUntil(s) => s.flush(),
             Conn::Plain(s) => s.flush(),
         }
     }
@@ -738,7 +771,8 @@ fn send(
 /// resolved again, so a second answer for it cannot move the request elsewhere; it
 /// is checked for TLS and sent as `Host`. Nothing is pooled, no proxy is used, and
 /// no redirect is followed (the redirect is the answer). The body is at most
-/// `ceiling` bytes. For a fetch whose address was checked before it was made: an
+/// `ceiling` bytes, and the whole of it, from connecting to the last byte, takes at
+/// most `timeout`. For a fetch whose address was checked before it was made: an
 /// agent's metadata document, and the agents' address asked from outside
 /// (`docs/plans/agents-from-anywhere.md`, §2.1 and §4.4).
 pub fn get_at(to: std::net::SocketAddr, url: &str, headers: &[(&str, &str)], timeout: Duration, ceiling: u64) -> Result<Response, Error> {
@@ -747,11 +781,11 @@ pub fn get_at(to: std::net::SocketAddr, url: &str, headers: &[(&str, &str)], tim
         return Err(Error::Transport(format!("{url} is not https")));
     }
     leaving("GET", &u)?;
+    let at = std::time::Instant::now() + timeout;
     let tcp = TcpStream::connect_timeout(&to, timeout).map_err(transport)?;
-    tcp.set_read_timeout(Some(timeout)).map_err(transport)?;
     tcp.set_write_timeout(Some(timeout)).map_err(transport)?;
-    let tls = connector()?.connect(&u.host, tcp).map_err(|e| Error::Transport(e.to_string()))?;
-    let mut c = Conn::Tls(Box::new(tls));
+    let tls = connector()?.connect(&u.host, Until { tcp, at }).map_err(|e| Error::Transport(e.to_string()))?;
+    let mut c = Conn::TlsUntil(Box::new(tls));
     let host_header = if u.port == 443 { u.host.clone() } else { format!("{}:{}", u.host, u.port) };
     let mut req = format!("GET {} HTTP/1.1\r\nHost: {}\r\nAccept-Encoding: identity\r\nConnection: close\r\n", u.path, host_header);
     for (k, v) in headers {
@@ -1060,6 +1094,29 @@ mod ceiling_tests {
         let (port, _) = host("HTTP/1.1 200 OK\r\nContent-Length: 50000\r\nConnection: close\r\n\r\n", 50_000, false);
         let mut f = std::fs::File::create(&path).unwrap();
         assert_eq!(download(&format!("http://127.0.0.1:{port}/f"), &[], Duration::from_secs(10), &mut f, 100 * 1024, &|_| true, &mut |_| true).unwrap(), 50_000);
+    }
+
+    /// A peer that answers a byte at a time, each well within a socket's wait, is
+    /// still cut off once the whole fetch has taken its time.
+    #[test]
+    fn a_fetch_from_a_checked_address_ends_at_its_deadline_however_slowly_the_peer_answers() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let to = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                // a TLS handshake record announcing 1 KiB, then its bytes one by one
+                let _ = s.write_all(&[0x16, 0x03, 0x03, 0x04, 0x00]);
+                for _ in 0..1024 {
+                    std::thread::sleep(Duration::from_millis(50));
+                    if s.write_all(&[0]).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let started = std::time::Instant::now();
+        assert!(super::get_at(to, "https://localhost/doc", &[], Duration::from_millis(500), 1024).is_err());
+        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
     }
 
     #[test]

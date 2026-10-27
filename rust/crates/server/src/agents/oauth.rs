@@ -314,10 +314,12 @@ fn back(redirect: &str, params: &[(&str, &str)], state: Option<&str>, iss: &str)
 }
 
 /// `/oauth/authorize/status?request={id}`: the request this id names alone (brief
-/// 73, 5): waiting, or the redirect back to the agent once the person answered.
+/// 73, 5): waiting, or the redirect back to the agent once the person answered. A
+/// poll naming a request takes nothing from the allowance before sign-in, so the
+/// waiting page never uses it up; one naming none takes a call, as any stranger's.
 pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -> Response {
     blocking(move || {
-        let not = || said(StatusCode::NOT_FOUND, "not_found", "No such sign-in.");
+        let not = || super::listener::spend_before_sign_in(&ctx).err().unwrap_or_else(|| said(StatusCode::NOT_FOUND, "not_found", "No such sign-in."));
         // an id is 32 hex digits: anything else, the code among them, names nothing
         let Some(id) = q.request.filter(|i| i.len() == 32 && i.bytes().all(|b| b.is_ascii_hexdigit())) else { return not() };
         let now = ctx.now();

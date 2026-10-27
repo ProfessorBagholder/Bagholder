@@ -91,12 +91,14 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/.well-known/oauth-authorization-server", get(oauth::authorization_server))
         .route("/oauth/register", post(oauth::register))
         .route("/oauth/authorize", get(oauth::authorize))
-        .route("/oauth/authorize/status", get(oauth::status))
         .route("/oauth/token", post(oauth::token))
         .route("/agents/check/{value}", get(check))
         .route("/api/agents/openapi.json", get(api::openapi))
         .layer(DefaultBodyLimit::max(super::BODY_LIMIT))
-        .layer(axum::middleware::from_fn_with_state(ctx.clone(), before_sign_in));
+        .layer(axum::middleware::from_fn_with_state(ctx.clone(), before_sign_in))
+        // the waiting page's polls take from the allowance only when they name no
+        // request waiting (`oauth::status`): a page left open never uses it up
+        .route("/oauth/authorize/status", get(oauth::status).layer(DefaultBodyLimit::max(super::BODY_LIMIT)));
     let mcp_service = || {
         let reader: Arc<dyn super::tools::Reader> = Arc::new(Served(ctx.clone()));
         let config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default()
@@ -198,19 +200,24 @@ async fn gate(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response
 /// Everything before sign-in, every caller together: at most
 /// `BEFORE_SIGN_IN_PER_MINUTE` a minute.
 async fn before_sign_in(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response {
-    let now = ctx.now();
+    let c = ctx.clone();
+    match tokio::task::spawn_blocking(move || spend_before_sign_in(&c)).await {
+        Ok(Ok(())) => next.run(req).await,
+        Ok(Err(refusal)) => refusal,
+        Err(_) => said(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Bagholder failed to answer."),
+    }
+}
+
+/// One call from the allowance before sign-in, or the refusal, logged.
+pub fn spend_before_sign_in(ctx: &Ctx) -> Result<(), Response> {
     let taken = {
         let mut l = ctx.limits.lock().unwrap_or_else(|e| e.into_inner());
-        Bucket::take(&mut l.before, now, super::BEFORE_SIGN_IN_PER_MINUTE, super::BEFORE_SIGN_IN_PER_MINUTE)
+        Bucket::take(&mut l.before, ctx.now(), super::BEFORE_SIGN_IN_PER_MINUTE, super::BEFORE_SIGN_IN_PER_MINUTE)
     };
-    match taken {
-        Ok(()) => next.run(req).await,
-        Err(retry) => {
-            let c = ctx.clone();
-            let _ = tokio::task::spawn_blocking(move || refused(&c, "", "over the rate before sign-in")).await;
-            too_many(retry)
-        }
-    }
+    taken.map_err(|retry| {
+        refused(ctx, "", "over the rate before sign-in");
+        too_many(retry)
+    })
 }
 
 /// An agent's read taken from its bucket.

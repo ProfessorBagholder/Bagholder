@@ -346,6 +346,22 @@ fn an_expired_request_does_not() {
 
 /// The status route answers for its 128-bit id alone (brief 73, 5).
 #[test]
+fn a_waiting_page_s_polls_never_use_up_the_allowance_before_sign_in() {
+    let h = harness();
+    let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    for n in 0..3 * BEFORE_SIGN_IN_PER_MINUTE {
+        assert_eq!(h.get(&format!("/oauth/authorize/status?request={id}")).status, StatusCode::OK, "poll {n}");
+    }
+    assert_eq!(h.get("/.well-known/oauth-protected-resource").status, StatusCode::OK, "the allowance is whole");
+    // a poll naming no request is a stranger's call, and spends it
+    let mut refused = false;
+    for _ in 0..=BEFORE_SIGN_IN_PER_MINUTE {
+        refused |= h.get(&format!("/oauth/authorize/status?request={}", secret::request_id())).status == StatusCode::TOO_MANY_REQUESTS;
+    }
+    assert!(refused, "unknown ids are bounded");
+}
+
+#[test]
 fn the_status_route_answers_only_for_its_request_id() {
     let h = harness();
     let (id, code) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
