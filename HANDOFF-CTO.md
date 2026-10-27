@@ -55,10 +55,7 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 ### Next, in order (the owner's go, 2026-10-27: "tell CTO to go ahead with all that")
 1. #643 → 2.11.5, then the check on the Mac.
 2. #639 → 2.12.0.
-3. **The sign-in at start (a proven bug; fix it without asking).** At start, `boot_session` with a saved, unexpired sign-in and no answer from Wealthsimple leaves `connected` false. The page then offers "Connect Wealthsimple", which opens the sign-in window. A throwaway test showed `connected=false`, the error "unreachable: the connection dropped", and the saved sign-in still on disk. The rule dates from 8ae43bed (2.2.2).
-   - The fix: an unexpired saved sign-in counts as connected until Wealthsimple refuses it, and an unanswered check is asked again.
-   - Also: a log line saying why a sign-in is dropped.
-   - The owner says their sign-in has not expired. Never theorise to them about tokens.
+3. (The sign-in at start is fixed on master: 3903a528, "Only Wealthsimple's refusal ends a sign-in; no answer leaves it standing", with the log line saying why one ends.)
 4. **Brief 79** (architecture-briefs, `briefs/79-amounts-as-wealthsimple-states-them.md`, amended at b73a9106; read it whole first). The capture is withdrawn. The plan decides §3's points from the code and the recorded replies, naming the basis of each, and names every file removed and every test kept. Then one build PR, released MINOR. The research started 2026-10-27.
 5. **agents-every-tunnel:** Cloudflare without a terminal, after #639.
 6. The cleanup PR (below).
