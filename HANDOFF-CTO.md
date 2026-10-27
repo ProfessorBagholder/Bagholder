@@ -87,7 +87,6 @@ For each removal, the PR says why nothing calls it: a function nothing calls can
 - **PR B** (the wider lints): after brief 77.
 
 ### Other follow-ups
-- **The idle-minute request in the browser test** (`dataflow.spec.ts` "each interaction keeps within its request budget", failed once on #643's cb813f46): a watch naming book, cashflow, notifications and status was sent during the idle minute. The likely cause: the filter change's watch waits for the screens drawn from what was kept (`sayWanted` waits on `drawing`), and on a slow runner it went out after the measure's fixed second, so it was counted in the next window. Prove it, then make the measure wait for the page to have said what it shows, not a fixed second.
 - **The intermittent `.tmpXXXXXX` leftover** (macOS and Linux suites): still not found. `bin/check-test-leftovers.sh` now lists every path left (#643): when it fails, the listing names the test. Fix it; never rerun.
 - The header's lines come in a different order from one opening to the next (#628 sorts them in the golden file only). This needs an owner decision before anything visible changes; after brief 79 only the "took more" lines are left.
 - `take_back_2_10_9`, `READ_BY_2_10_9` and the version-36 carry of a superseded coin fill go with brief 79's removal of the statements.
