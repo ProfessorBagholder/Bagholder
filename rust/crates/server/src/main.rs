@@ -154,11 +154,6 @@ pub(crate) fn open_figures(a: &std::sync::Arc<app::App>) {
 
 /// What follows the figure path's opening, wherever it opens.
 fn figures_opened(a: &std::sync::Arc<app::App>, f: figures::Figures) {
-    // what the last pull's statements said, until the next pull
-    match f.book().and_then(|b| b.setting(status::STATEMENTS_SAID).map_err(|e| e.to_string())) {
-        Ok(said) => a.state.lock().unwrap().statement_error = said.unwrap_or_default(),
-        Err(e) => log(&format!("bagholder: what the statements last said could not be read: {e}")),
-    }
     a.set_figures(f);
     // the default tile row where none was chosen
     following::open(a);

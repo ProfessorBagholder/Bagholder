@@ -21,7 +21,8 @@ TMPDIR=$fresh TMP=$native TEMP=$native "$@"
 status=$?
 if [ -n "$(ls -A "$fresh")" ]; then
   echo "check-test-leftovers: '$*' left these in its temp folder; each test must remove what it made:" >&2
-  ls -A "$fresh" | sed -n 1,100p >&2
+  # every path left, so its names say which test made it
+  find "$fresh" -mindepth 1 | sed "s|^$fresh/||" | sed -n 1,100p >&2
   rm -rf "$fresh"
   [ "$status" -ne 0 ] && exit "$status"
   exit 1

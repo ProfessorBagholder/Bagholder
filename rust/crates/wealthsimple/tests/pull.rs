@@ -7,7 +7,7 @@ use std::path::{Path, PathBuf};
 
 use bagholder_book::statements::AccountDay;
 use bagholder_book::Book;
-use bagholder_broker::pull::{pull, Report};
+use bagholder_broker::pull::{pull, pull_restating, Report};
 use bagholder_broker::BrokerAdapter;
 use bagholder_core::account::{AccountRef, AccountStatus};
 use bagholder_core::json::Value;
@@ -1006,6 +1006,33 @@ fn an_account_under_two_ids_wealthsimple_links_is_one_account_open_while_either_
     assert_eq!(book.account(account).unwrap().status, AccountStatus::Open);
     cash_agrees(&book, &ws.source);
     assert_eq!(book_units(&book, account), ws.source.units_of(new));
+}
+
+/// A restating pull states every day again the same day, with no new day due: a
+/// run's first whole pull, so a day an earlier build stored wrong is put right as
+/// the app starts (the owner, 2026-10-27: "waiting for a whole day to pass for a
+/// correction is not acceptable"). A plain pull the same day leaves them as they are.
+#[test]
+fn a_restating_pull_states_every_day_again_the_same_day() {
+    let (_h, book, mut ws, report) = shaped(&[Shape::LinkedIds]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let [(_, new)] = &ws.source.retired()[..] else { panic!("one id retired") };
+    let account = book_account(&book, new);
+    let stated = book.stated(account).unwrap().days;
+    let spoiled: Vec<AccountDay> = stated.iter().map(|(day, (v, n))| AccountDay { day: *day, net_value: Money::zero(v.currency), net_deposits: Money::zero(n.currency) }).collect();
+    let read = book.broker_read(connection(&book, "2026-10-08T21:00:00Z"), "history", at("2026-10-08T21:00:00Z")).unwrap();
+    book.store_account_days(account, &spoiled, &read).unwrap();
+    let spoilt = book.stated(account).unwrap().days;
+    assert_ne!(spoilt, stated);
+    // the same day: a plain pull asks no history
+    let now = "2026-10-08T22:00:00Z";
+    pull(&book, &mut ws, connection(&book, now), shaped_today(), at(now), &mut |_| {}).unwrap();
+    assert_eq!(book.stated(account).unwrap().days, spoilt);
+    // and a restating one states every day again
+    let now = "2026-10-08T23:00:00Z";
+    let r = pull_restating(&book, &mut ws, connection(&book, now), shaped_today(), at(now), &mut |_| {}).unwrap();
+    assert!(!r.failures.iter().any(|(part, _)| part.starts_with("history")), "{:?}", r.failures);
+    assert_eq!(book.stated(account).unwrap().days, stated);
 }
 
 /// The days of an account under two ids, the first closed halfway, stored at

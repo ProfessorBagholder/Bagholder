@@ -90,7 +90,14 @@ impl BookMoves for Index {
 /// broker files rows under now; `now` the instant. `step` is told where the
 /// pull is as it goes.
 pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step)) -> Result<Report> {
-    pull_in(book, adapter, connection, today, now, step, true)
+    pull_in(book, adapter, connection, today, now, step, true, false)
+}
+
+/// A whole pull that also reads every open account's daily history whole, a day
+/// new or not: what Wealthsimple states now replaces any day an earlier build
+/// stored wrong at once (a run's first whole pull, `broker_reads`).
+pub fn pull_restating(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step)) -> Result<Report> {
+    pull_in(book, adapter, connection, today, now, step, true, true)
 }
 
 /// A pull of what moved since the last: the accounts, each account's activity
@@ -99,11 +106,13 @@ pub fn pull(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connection
 /// full day and are read by the day's pull: for a movement seen during the day
 /// (the cash moving at the broker), the rows that moved, quickly.
 pub fn pull_activity(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step)) -> Result<Report> {
-    pull_in(book, adapter, connection, today, now, step, false)
+    pull_in(book, adapter, connection, today, now, step, false, false)
 }
 
-/// `daily`: the holdings and the daily history as of the last full day are read too.
-fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step), daily: bool) -> Result<Report> {
+/// `daily`: the holdings and the daily history as of the last full day are read
+/// too; `restate`: every open account's history, a day new or not.
+#[expect(clippy::too_many_arguments, reason = "the two kinds of pull and the restating one share every step")]
+fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step), daily: bool, restate: bool) -> Result<Report> {
     let mut report = Report::default();
     let broker = adapter.broker();
     step(Step::Accounts);
@@ -481,8 +490,8 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     let mut days_of: BTreeMap<AccountId, BTreeMap<jiff::civil::Date, (bagholder_core::Money, bagholder_core::Money)>> = BTreeMap::new();
     let mut history_failed: BTreeSet<AccountId> = BTreeSet::new();
     // An account's daily history is read whole when a day it has not stated is
-    // due: every day as Wealthsimple states it now, so a day an earlier read stored
-    // wrong is put right by the next day's pull (only a day that changed is
+    // due, or the pull restates: every day as Wealthsimple states it now, so a day
+    // an earlier read stored wrong is put right (only a day that changed is
     // stored). It is read over every id behind the account, closed ones too, and
     // the days are theirs added up: each id states what it held on each day. An
     // account closed whole is read once.
@@ -495,7 +504,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
             Some(l) => *l,
             None => *last_of.entry(id).or_insert(book.last_account_day(id)?),
         };
-        let due = if open.contains(&id) { !last.is_some_and(|d| d >= as_of) } else { last.is_none() };
+        let due = if open.contains(&id) { restate || !last.is_some_and(|d| d >= as_of) } else { last.is_none() };
         if due {
             dated.push(a);
         }
