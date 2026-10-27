@@ -156,6 +156,25 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
   - **Measurements (plan §5):** size, build time, memory, a capacity row.
   - **Deviations to state in the PR:** no `mcp_http.rs`/`grants.rs` (rmcp in `listener.rs`, storage in `book/src/agents.rs`); Allow takes the id in the body; tokens are looked up by SHA-256 in SQL, not `memcmp`; forwarded headers are never trusted and not logged; tests_mcp is replaced by a narrower scan; `AgentsBook` writes only the agent tables.
 
+### Local model leftover: #640 (2.11.2)
+- **Cleared by the Architect at f5a8207e:** merge once rust and container are green, then release 2.11.2 (PATCH).
+  - main calls `localmodel::shutdown()` after `http::serve`;
+  - provision stops a model whose start failed;
+  - the test is tests/exit_with.rs `a_copy_that_stops_leaves_no_local_model_running`.
+- **Follow-up once #639's guard lands:** the model starts through the guard, and the call in main goes (one mechanism). The stop after a failed start stays.
+
+### The cleanup PR (the Architect's ruling, 2026-10-27; after the agents build, one PR, no owner decision)
+For each removal, the PR says why nothing calls it: a function nothing calls can be a missing call (#640 was one).
+1. Remove four functions nothing calls on 920d24a:
+   - `core/src/bracket.rs:1138` `bracket::settle`;
+   - `model/src/filters.rs:89` `Filters::key`;
+   - `model/src/input.rs:278` `Listing::to_value`;
+   - `wealthsimple/src/generated.rs:1724` `Generated::statement_closing`.
+2. `model/src/symbols_of.rs:59` `migrate_legacy_notes` is called only by model/tests/model.rs:1318. Remove both, unless it should still run.
+3. `broker/src/statements.rs:1084`: `checked_sub(book).expect(...)` goes through the loop's `too_large` path.
+4. `server/src/update.rs:226`: `kept.expect("asked with its ETag")`. A 304 to a request without an ETag is a failed check, not a panic.
+5. `market/tests/listing_isolation.rs:163` uses `unwrap_or_default` (denied): fix it. Then measure `clippy --all-targets`. If clean, widen CI's gate to `--all-targets` in this PR; if not, it stays with PR B.
+
 ### Delegated
 - **PR A (#630): merged** (cc28ea70), no release. It covers the exponent cap, `take_frame` returning `io::Result`, four clippy denies, and CI's clippy running with `--features bagholder-ws/standin` (the Architect's condition).
 - **PR B** (the wider lints): after brief 77.
