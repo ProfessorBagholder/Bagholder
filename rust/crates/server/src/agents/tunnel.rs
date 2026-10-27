@@ -160,16 +160,35 @@ pub struct TailscaleSays {
     /// This machine's first address on its tailnet.
     pub address: Option<String>,
     /// Whether another program answers on 443 at that address: Funnel's traffic on
-    /// 443 would reach it, not Bagholder, so Funnel serves on 8443.
+    /// 443 would reach it, not Bagholder. The panel says so and offers 8443.
     pub https_port_taken: bool,
     /// Why Tailscale could not be asked, in its words (its app not running, say).
     pub said: String,
+    /// On Linux, whether Funnel may be started by this user: `None` elsewhere, where
+    /// no such step is; `Some(false)` until it is known to be so (root), never taken
+    /// for done before a start is refused (brief 80 §5.6).
+    pub operator: Option<bool>,
+}
+
+/// The operator step on this system: none but on Linux, done only for root.
+pub fn operator_step(linux: bool, root: bool) -> Option<bool> {
+    linux.then_some(root)
+}
+
+/// The operator step for this process.
+pub fn operator_here() -> Option<bool> {
+    #[cfg(unix)]
+    // SAFETY: geteuid has no preconditions and cannot fail
+    let root = unsafe { libc::geteuid() } == 0;
+    #[cfg(not(unix))]
+    let root = false;
+    operator_step(cfg!(target_os = "linux"), root)
 }
 
 /// Tailscale asked through its own program (`tailscale status --json`).
 pub fn tailscale_says(program: Option<&std::path::Path>) -> TailscaleSays {
     let Some(program) = program else { return TailscaleSays::default() };
-    let installed = TailscaleSays { installed: true, ..TailscaleSays::default() };
+    let installed = TailscaleSays { installed: true, operator: operator_here(), ..TailscaleSays::default() };
     let out = match Command::new(program).args(["status", "--json"]).stdin(Stdio::null()).output() {
         Ok(o) => o,
         Err(e) => return TailscaleSays { said: format!("Tailscale could not be asked: {e}"), ..installed },
@@ -197,6 +216,7 @@ pub fn read_tailscale_status(v: &serde_json::Value) -> TailscaleSays {
         address: me.and_then(|s| s.get("TailscaleIPs")).and_then(|a| a.as_array()).into_iter().flatten().filter_map(|a| a.as_str()).find(|a| a.parse::<std::net::IpAddr>().is_ok()).map(str::to_string),
         https_port_taken: false,
         said: String::new(),
+        operator: operator_here(),
     }
 }
 
@@ -256,7 +276,7 @@ impl Tunnels {
             std::thread::Builder::new()
                 .name("tunnel-output".into())
                 .spawn(move || {
-                    for line in std::io::BufReader::new(out).lines().map_while(Result::ok) {
+                    each_line(out, |line| {
                         let mut l = lines.lock().unwrap_or_else(|e| e.into_inner());
                         l.push_back(line);
                         while l.len() > LINES_KEPT {
@@ -265,7 +285,7 @@ impl Tunnels {
                         state.lock().unwrap_or_else(|e| e.into_inner()).lines = l.iter().cloned().collect();
                         drop(l);
                         signal();
-                    }
+                    });
                     // the stream closed: the tunnel ended, and the panel reads how
                     signal();
                 })
@@ -309,6 +329,24 @@ impl Tunnels {
         }
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.running = None;
+    }
+}
+
+/// Each line a tunnel writes, until its stream closes: a line that is not UTF-8 is
+/// read with what cannot be read replaced, never ending the reading, so a tunnel is
+/// never left blocked on a stream no one reads (brief 80 §5.4).
+pub fn each_line(out: impl std::io::Read, mut each: impl FnMut(String)) {
+    use std::io::BufRead;
+    let mut r = std::io::BufReader::new(out);
+    let mut buf = Vec::new();
+    loop {
+        buf.clear();
+        match r.read_until(b'\n', &mut buf) {
+            Ok(0) => return,
+            Ok(_) => each(String::from_utf8_lossy(&buf).trim_end_matches(['\n', '\r']).to_string()),
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => {}
+            Err(_) => return,
+        }
     }
 }
 
@@ -516,6 +554,7 @@ pub const UNCONFIRMED: &str = "Reachable from this computer; confirm from your a
 /// from that address with the public name for TLS and `Host`; for Tailscale, the
 /// request arriving the Funnel way.
 pub fn reach(ctx: &Ctx, provider: Provider) -> Ready {
+    let _one = ctx.one_check.lock().unwrap_or_else(|e| e.into_inner());
     let value = secret::secret("bhcheck_");
     *ctx.check.lock().unwrap_or_else(|e| e.into_inner()) = Some(Check { value: value.clone(), seen: false, funnel: false });
     let ready = reach_with(ctx, provider, &value);

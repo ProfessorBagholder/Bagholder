@@ -81,6 +81,9 @@ pub struct Ctx {
     pub limits: Mutex<listener::Limits>,
     /// The one-time reachability value while a check is open (§4.4).
     pub check: Mutex<Option<tunnel::Check>>,
+    /// Held by the check running: a second waits for it, so neither replaces the
+    /// other's value (brief 80 §5.3).
+    pub one_check: Mutex<()>,
 }
 
 impl Ctx {

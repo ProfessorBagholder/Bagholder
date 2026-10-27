@@ -117,6 +117,12 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
             out.error = e;
         }
     }
+    // a tunnel Bagholder starts that is not running: nothing to give an agent, and
+    // nothing ready, whatever an earlier check found (brief 80 §5.2)
+    if out.setup.as_ref().is_some_and(|s| s.provider != Provider::Own) && out.tunnel.running.is_none() {
+        out.ready = None;
+        out.address.clear();
+    }
     out
 }
 
@@ -141,6 +147,7 @@ fn ctx(app: &Arc<App>, host: &str, receives: Option<&str>) -> Ctx {
         outside: agents::fetch::Outside::network(),
         limits: Default::default(),
         check: Default::default(),
+        one_check: Default::default(),
     }
 }
 
@@ -227,13 +234,10 @@ async fn choose(State(state): State<AppState>, Required(asked): Required<Setup>)
         if !matches!(s.funnel_port, None | Some(443) | Some(8443)) {
             return Err("Funnel serves on 443 or 8443 here.".into());
         }
+        // Funnel serves on 443 unless the person chooses 8443, a program answering on
+        // 443 here or not: the panel says so and offers it (brief 80 §5.5)
         let tailscale = if s.provider == Provider::Tailscale {
-            let says = app.agents.look_at_tailscale();
-            // 443 held by another program here: Funnel serves on 8443 unless the person chose
-            if says.https_port_taken && s.funnel_port.is_none() {
-                s.funnel_port = Some(8443);
-            }
-            says.name
+            app.agents.look_at_tailscale().name
         } else {
             None
         };
@@ -431,6 +435,30 @@ mod tests {
         check_while_coming_up(&app, Provider::Own, &checking);
         assert!(!checking.load(std::sync::atomic::Ordering::SeqCst));
         assert_eq!(app.agents.ready(), Some(Ready::Ready));
+        app.agents.switch_off();
+        crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], bagholder_core::jiff::Timestamp::now()).unwrap();
+    }
+
+    /// Ready, and the address given to agents, last only while the tunnel Bagholder
+    /// starts runs: with it not running they go, whatever a check found; the
+    /// person's own proxy, which Bagholder does not run, keeps them (brief 80 §5.2).
+    #[test]
+    fn ready_and_the_address_last_only_while_the_tunnel_runs() {
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+        switch_on(&app, rt.handle()).unwrap();
+        let a = store(&app).unwrap();
+        let now = bagholder_core::jiff::Timestamp::now();
+        for (provider, kept) in [(Provider::Ngrok, false), (Provider::Own, true)] {
+            let s = Setup { provider, name: "agents.example.com".into(), funnel_port: None, sends_host: None };
+            a.set_setting(agents::TUNNEL, Some(&serde_json::to_string(&s).unwrap()), now).unwrap();
+            app.agents.set_host("agents.example.com", None);
+            app.agents.set_ready(Some(Ready::Ready));
+            let st = status(&app);
+            assert!(st.tunnel.running.is_none());
+            assert_eq!((st.ready.is_some(), !st.address.is_empty()), (kept, kept), "{provider:?}");
+        }
         app.agents.switch_off();
         crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], bagholder_core::jiff::Timestamp::now()).unwrap();
     }

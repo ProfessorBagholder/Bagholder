@@ -28,10 +28,6 @@
   let copied = $state('')
 
   $effect(() => {
-    // 443 held by another program here, and nothing saved yet: Funnel serves on 8443
-    if (st?.tailscale?.httpsPortTaken && !st.setup) funnelPort = 8443
-  })
-  $effect(() => {
     // the saved tunnel, once the status says it
     if (st?.setup && !picked) {
       picked = st.setup.provider
@@ -60,6 +56,8 @@
           { what: 'Install Tailscale', link: 'https://tailscale.com/download', done: !!program(p) },
           { what: 'Sign in with the Tailscale app', link: 'https://tailscale.com/kb/1017/install', done: !!ts?.signedIn },
           { what: 'Let this computer use Funnel: if it is off, starting the tunnel shows a link that turns it on', link: 'https://tailscale.com/kb/1223/funnel#requirements-and-limitations', done: !!ts?.https && !!ts?.funnel },
+          // on Linux, Funnel is started by root or the user Tailscale names its operator
+          ...(ts?.operator != null ? [{ what: 'sudo tailscale set --operator=$USER', done: ts.operator }] : []),
         ]
       }
       case 'cloudflare':
@@ -217,9 +215,9 @@
         <div style="display:flex;gap:8px;margin-top:10px;align-items:flex-end;flex-wrap:wrap">
           {#if picked === 'tailscale'}
             <div><div class="lbl" style="margin-bottom:5px">Funnel port</div>
-              <select class="input" bind:value={funnelPort} aria-label="Funnel port"><option value={443}>443</option><option value={8443}>8443 (443 is in use)</option></select>
+              <select class="input" bind:value={funnelPort} aria-label="Funnel port"><option value={443}>443</option><option value={8443}>8443</option></select>
             </div>
-            {#if st?.tailscale?.httpsPortTaken}<div class="muted" style="font-size:11.5px;align-self:center">Another program on this computer answers on 443, so Funnel serves on 8443.</div>{/if}
+            {#if st?.tailscale?.httpsPortTaken}<div class="muted" style="font-size:11.5px;align-self:center">Another program on this computer answers on 443 at its tailnet address: Funnel on 443 would reach it, not Bagholder. Free 443, or choose 8443.</div>{/if}
             {#if funnelPort === 8443}<div class="status-err" style="font-size:11.5px;align-self:center">Claude.ai did not reach Funnel on 8443 when Bagholder was tested: to connect it, free 443 on this computer or choose another tunnel.</div>{/if}
           {:else}
             <div style="flex:1;min-width:200px"><div class="lbl" style="margin-bottom:5px">{nameLabel(picked)}</div><input class="input" bind:value={name} spellcheck="false" aria-label={nameLabel(picked)} /></div>

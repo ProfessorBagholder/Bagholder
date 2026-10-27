@@ -1,10 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { render } from '@testing-library/svelte'
+import { fireEvent, render } from '@testing-library/svelte'
 import { flushSync } from 'svelte'
 import AgentsPanel from './AgentsPanel.svelte'
 import { status } from './subs.svelte'
 import type { Status } from './model'
-import type { AgentsStatus, Waiting } from './generated/agents'
+import type { AgentsStatus, TailscaleSays, Waiting } from './generated/agents'
 
 // The plan's page check for who is asking (docs/plans/agents-from-anywhere.md §6, "The
 // page"; brief 73, 4): a metadata-document client by its client_id's host, the name from
@@ -54,5 +54,31 @@ describe('the Agents panel says who is asking', () => {
     expect(cards[0]).not.toContain('not checked')
     expect(cards[0]).toContain('its page shows code ABCDEF')
     expect(cards[1]).toContain('agent.example (“Totally Claude”, name given by the agent, not checked)')
+  })
+})
+
+describe('the Agents panel with Tailscale chosen', () => {
+  afterEach(() => {
+    status.data = null as unknown as Status
+    vi.unstubAllGlobals()
+  })
+
+  // brief 80 §5.5, §5.6: Funnel serves on 443 unless the person chooses 8443, a
+  // program answering on 443 here or not; on Linux, the operator step is shown, and
+  // not done until known done
+  it('keeps 443 with a program on 443, offers 8443, and shows the operator step not done', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, lines: [] }))))
+    const tailscale: TailscaleSays = { installed: true, signedIn: true, https: true, funnel: true, name: 'box.tail1234.ts.net', address: '100.64.0.1', httpsPortTaken: true, said: '', operator: false }
+    status.data = { agents: { ...agents([]), tailscale } } as unknown as Status
+    const { container, getByRole } = render(AgentsPanel)
+    flushSync()
+    await fireEvent.click(getByRole('radio', { name: /Tailscale Funnel/ }))
+    flushSync()
+    const port = container.querySelector('select[aria-label="Funnel port"]') as HTMLSelectElement
+    expect(port.value).toBe('443')
+    expect(container.textContent).toContain('Free 443, or choose 8443.')
+    const step = [...container.querySelectorAll('li')].find((li) => li.textContent?.includes('tailscale set --operator'))
+    expect(step?.textContent).toBeTruthy()
+    expect(step?.textContent).not.toContain('Done')
   })
 })

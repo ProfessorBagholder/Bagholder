@@ -26,13 +26,19 @@ export type TailscaleSays = { installed: boolean, signedIn: boolean, https: bool
 address: string | null, 
 /**
  * Whether another program answers on 443 at that address: Funnel's traffic on
- * 443 would reach it, not Bagholder, so Funnel serves on 8443.
+ * 443 would reach it, not Bagholder. The panel says so and offers 8443.
  */
 httpsPortTaken: boolean, 
 /**
  * Why Tailscale could not be asked, in its words (its app not running, say).
  */
-said: string, };
+said: string, 
+/**
+ * On Linux, whether Funnel may be started by this user: `None` elsewhere, where
+ * no such step is; `Some(false)` until it is known to be so (root), never taken
+ * for done before a start is refused (brief 80 §5.6).
+ */
+operator: boolean | null, };
 
 export type TunnelState = { 
 /**

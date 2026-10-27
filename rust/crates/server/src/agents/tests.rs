@@ -75,6 +75,7 @@ fn harness_with(outside: Outside, read: Arc<dyn Fn() -> Result<crate::mcp::ReadO
         outside,
         limits: Default::default(),
         check: Default::default(),
+        one_check: Default::default(),
     };
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     Harness { ctx: Arc::new(ctx), clock, home, rt }
@@ -241,6 +242,49 @@ fn the_route_table_is_exactly_the_planned_one() {
 /// Every path a router source names, each `.route(` and `.route_service(` on a line.
 fn routes_named(src: &str) -> Vec<&str> {
     src.lines().flat_map(|l| l.split(".route(\"").skip(1).chain(l.split(".route_service(\"").skip(1))).map(|r| r.split('"').next().unwrap()).collect()
+}
+
+/// One reachability check at a time: a second waits for the one running, so
+/// neither replaces the other's value (brief 80 §5.3).
+#[test]
+fn a_second_reachability_check_waits_for_the_first() {
+    let h = harness();
+    let held = h.ctx.one_check.lock().unwrap();
+    let ctx = h.ctx.clone();
+    let (tx, rx) = std::sync::mpsc::channel();
+    let t = std::thread::spawn(move || tx.send(tunnel::reach(&ctx, tunnel::Provider::Own)).unwrap());
+    assert!(rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(), "it ran beside the one running");
+    drop(held);
+    assert!(rx.recv_timeout(std::time::Duration::from_secs(30)).is_ok(), "it ran once the first was done");
+    t.join().unwrap();
+}
+
+/// A tunnel's output that is not UTF-8 is read lossily and never stops the reading
+/// (brief 80 §5.4).
+#[test]
+fn a_tunnel_line_that_is_not_utf8_is_read_and_the_reading_goes_on() {
+    let mut lines = vec![];
+    tunnel::each_line(&b"first\n\xff\xfe bytes\r\nlast"[..], |l| lines.push(l));
+    assert_eq!(lines, vec!["first".to_string(), "\u{FFFD}\u{FFFD} bytes".to_string(), "last".to_string()]);
+}
+
+/// The Linux step Funnel needs from a user who is not root is shown until known
+/// done, never done before a start is refused; elsewhere there is none (brief 80 §5.6).
+#[test]
+fn the_operator_step_is_linux_s_alone_and_done_only_for_root() {
+    assert_eq!(tunnel::operator_step(false, false), None);
+    assert_eq!(tunnel::operator_step(false, true), None);
+    assert_eq!(tunnel::operator_step(true, false), Some(false));
+    assert_eq!(tunnel::operator_step(true, true), Some(true));
+}
+
+/// The tunnel is started through the guard with the variable naming this process
+/// passed to it, not only named in a comment (brief 80 §5.7).
+#[test]
+fn the_tunnel_s_guard_is_given_this_process_to_end_with() {
+    let (argv, env) = tunnel::guarded(&["ngrok".into(), "http".into()]).unwrap();
+    assert_eq!(&argv[1..], &["tunnel-guard".to_string(), "--".into(), "ngrok".into(), "http".into()]);
+    assert_eq!(env, vec![(crate::exit_with::VAR.to_string(), std::process::id().to_string())]);
 }
 
 /// The route scan reads every route a line names: a second chained on one line is
@@ -975,6 +1019,7 @@ fn switching_off_closes_the_listener_and_refuses_every_agent_at_once() {
         outside: h.ctx.outside.clone(),
         limits: Default::default(),
         check: Default::default(),
+        one_check: Default::default(),
     };
     let port = agents.switch_on(h.rt.handle(), 0, ctx).unwrap();
     let answers = |p: u16| std::net::TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], p)), std::time::Duration::from_secs(2)).is_ok();
