@@ -72,7 +72,7 @@ In `/home/md/.claude/projects/-home-md-dev/memory/` (index `MEMORY.md`, 32 lines
 
 `/tmp/claude-1005/-home-md-dev/12a8decb-6b2e-51e6-96e2-82398e1475b1/scratchpad/`:
 - `briefs/` (the worktree of `architecture-briefs`);
-- `r590/` (a blob-less clone for reviews; branches `pN` per PR; **its `rust/target` is 32 GB** — delete it when the disk passes ~70% or it passes ~50 GB; the next build is then from scratch, several minutes);
+- `r590/` (a blob-less clone for reviews; branches `pN` per PR; its `rust/target` held 49 GB on 2026-10-27, when the incremental folder (26 GB) was deleted at 71% disk: delete `debug/incremental` first, the whole target only if that is not enough); `w639/` (a read-only worktree of #639 for the re-review); `r639.txt` (the review's findings); `repro639.sh` (the guard's stop);
 - `plant590.sh` (the plant runner); `plants635.sh`, `plants636.sh`, `plants638.sh` and `sweep635.sh` (the newest templates: suites, the twelve-seed sweep with every fill shape, plants); `clippy-count.sh` (Clippy with the four panic lints as JSON, production and all targets).
 - Review pattern for a large read: a `Workflow` pipeline over chunks of sites with a structured schema, two adversarial checkers per finding (the deny-unwrap assessment used 20 agents; the script is under the session's `workflows/scripts/`).
 
