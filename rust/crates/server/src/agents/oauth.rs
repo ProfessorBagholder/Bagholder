@@ -105,18 +105,32 @@ pub fn access(ctx: &Ctx, token: Option<&str>) -> Result<String, Response> {
 
 // ---- redirect URIs and clients ----
 
-/// A redirect URI an agent may be sent back to: https, and never this machine
-/// (brief 73, 3: a cloud agent never redirects here, and a local one uses stdio).
+/// A redirect URI an agent may be sent back to: https, to a public name or address,
+/// never this machine (brief 73, 3: a cloud agent never redirects here, and a local
+/// one uses stdio). Its host is a DNS name of letters, digits and hyphens with a dot
+/// and a last label that is not all digits, or a public IP address written as it
+/// is canonically: every other spelling (a number, `127.1`, `0x7f.1`, a trailing
+/// dot, a percent escape, a backslash a browser ends the host at) is refused, as a
+/// browser may read it as this machine.
 pub fn redirect_ok(uri: &str) -> Result<(), String> {
     let (host, _) = fetch::https_host(uri)?;
     if uri.contains('#') {
         return Err(format!("{uri} carries a fragment"));
     }
-    let loopback = host == "localhost" || host.ends_with(".localhost") || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback() || matches!(ip, std::net::IpAddr::V6(v6) if v6.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback())));
-    if loopback {
-        return Err(format!("{uri} redirects to this machine, which a cloud agent never does"));
+    let refused = || Err(format!("{uri} redirects to what is not a public name or address, which a cloud agent never does"));
+    if let Ok(ip) = host.parse::<std::net::IpAddr>() {
+        return if ip.to_string() == host && fetch::public(ip) { Ok(()) } else { refused() };
     }
-    Ok(())
+    let labels: Vec<&str> = host.split('.').collect();
+    let named = labels.len() >= 2
+        && labels.iter().all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-') && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+        && !labels.last().is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
+        && labels.last() != Some(&"localhost");
+    if named {
+        Ok(())
+    } else {
+        refused()
+    }
 }
 
 #[derive(Deserialize)]
@@ -171,6 +185,8 @@ struct Asking {
     client: Client,
     /// The host shown as who it is: the metadata document's, or the redirect's.
     who: String,
+    /// The host the agent is sent back to, shown whoever asks (plan §3).
+    redirect_host: String,
 }
 
 /// The client `client_id` names, and that `redirect_uri` is exactly one of its own.
@@ -194,8 +210,9 @@ fn asking(ctx: &Ctx, client_id: &str, redirect_uri: &str) -> Result<Asking, Stri
     if !client.redirect_uris.iter().any(|u| u == redirect_uri) {
         return Err(format!("{redirect_uri} is not a redirect URI of this client"));
     }
-    let who = if client.metadata { fetch::https_host(client_id)?.0 } else { fetch::https_host(redirect_uri)?.0 };
-    Ok(Asking { client, who })
+    let redirect_host = fetch::https_host(redirect_uri)?.0;
+    let who = if client.metadata { fetch::https_host(client_id)?.0 } else { redirect_host.clone() };
+    Ok(Asking { client, who, redirect_host })
 }
 
 #[derive(Deserialize, Default)]
@@ -289,11 +306,12 @@ fn waiting_page(a: &Asking, code: &str, id: &str) -> String {
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title>\
 <body style='font:16px system-ui;margin:40px auto;max-width:520px;padding:0 16px'>\
 <h1 style='font-size:20px'>Approve this in Bagholder on your computer</h1>\
-<p><b>{who}</b>{name} is asking to read your trade history.</p>\
+<p><b>{who}</b>{name} is asking to read your trade history. It sends you back to <b>{back}</b>.</p>\
 <p>Its code is</p><p style='font:600 32px ui-monospace,monospace;letter-spacing:.2em'>{code}</p>\
 <p id=s style='opacity:.7'>Waiting for your answer in Bagholder…</p>\
 <script>(function(){{var id={id};function ask(){{fetch('/oauth/authorize/status?request='+id).then(function(r){{return r.json()}}).then(function(j){{if(j.redirect){{location.replace(j.redirect)}}else if(j.state==='waiting'){{setTimeout(ask,2000)}}else{{document.getElementById('s').textContent='This sign-in has ended. Start again from your agent.'}}}}).catch(function(){{setTimeout(ask,4000)}})}}ask()}})()</script>",
         who = escape(&a.who),
+        back = escape(&a.redirect_host),
         name = name,
         code = escape(code),
         id = id_json,

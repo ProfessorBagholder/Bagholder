@@ -600,14 +600,28 @@ fn a_redirect_not_exactly_registered_is_refused_never_redirected() {
     assert_eq!(h.authorize(&client, "https://agent.example/cb", &[]).status, StatusCode::OK);
 }
 
-/// A loopback redirect is refused, at registration and at authorization (brief 73, 3).
+/// A redirect to this machine, or to a host a browser may read as it, is refused at
+/// registration and at authorization (brief 73, 3; brief 80 §3.1). The metadata
+/// document lists every one of them, so authorization reaches the redirect check
+/// itself rather than the exact match (brief 80 §3.2).
 #[test]
-fn a_loopback_redirect_is_refused_everywhere() {
-    let h = harness();
-    let good = h.register("https://agent.example/cb").json()["client_id"].as_str().unwrap().to_string();
-    for r in ["http://localhost/cb", "http://foo.localhost/cb", "http://127.0.0.2/cb", "http://[::1]/cb", "https://localhost/cb", "https://127.0.0.1/cb", "https://[::1]/cb", "https://app.localhost/cb"] {
+fn a_redirect_that_is_not_a_public_host_is_refused_everywhere() {
+    let refused = [
+        "http://localhost/cb", "http://localhost:33418/cb", "http://foo.localhost/cb", "http://127.0.0.2/cb", "http://[::1]/cb",
+        "https://localhost/cb", "https://127.0.0.1/cb", "https://[::1]/cb", "https://app.localhost/cb",
+        "https://2130706433/cb", "https://127.1/cb", "https://0x7f.1/cb", "https://localhost./cb", "https://0.0.0.0/cb",
+        "https://%6Cocalhost/cb", "https://localhost\\x/cb", "https://10.0.0.1/cb", "https://[::ffff:127.0.0.1]/cb", "https://[0:0:0:0:0:0:0:1]/cb",
+    ];
+    let docs = Arc::new(Documents { doc: json!({ "client_id": CIMD, "client_name": "Agent Example", "redirect_uris": refused }), asked: Mutex::new(vec![]) });
+    let h = harness_with(Outside { resolve: Arc::new(PublicAnswer("93.184.215.14".parse().unwrap())), get: docs.clone(), public_dns: Arc::new(Unreachable) }, Arc::new(|| Err("none".into())));
+    for r in refused {
         assert_eq!(h.register(r).status, StatusCode::BAD_REQUEST, "registered {r}");
-        assert_eq!(h.authorize(&good, r, &[]).status, StatusCode::BAD_REQUEST, "authorized {r}");
+        assert_eq!(h.authorize(CIMD, r, &[]).status, StatusCode::BAD_REQUEST, "authorized {r}");
+    }
+    assert!(docs.asked.lock().unwrap().is_empty(), "refused before the document is fetched");
+    // a public name, and a public address as written canonically, are taken
+    for ok in ["https://agent.example/cb", "https://agent-1.example.co.uk:8443/cb", "https://93.184.215.14/cb"] {
+        assert!(oauth::redirect_ok(ok).is_ok(), "{ok}");
     }
 }
 
@@ -643,6 +657,33 @@ fn the_pages_say_who_is_really_asking() {
     assert!(page.contains("<b>claude.example</b>") && page.contains("Totally Claude") && page.contains("name given by the agent, not checked"), "{page}");
     let waiting = approve::waiting(&h.store(), h.ctx.now()).unwrap();
     assert_eq!(waiting.iter().map(|w| (w.who.as_str(), w.checked)).collect::<Vec<_>>(), vec![("agent.example", true), ("claude.example", false)]);
+}
+
+/// Who is asking is the metadata document's host, never the callback's, where the
+/// two differ; both pages name the host the agent is sent back to as well (plan §3,
+/// brief 80 §3.4, §3.5).
+#[test]
+fn who_is_asking_is_the_document_s_host_and_the_callback_is_named_beside_it() {
+    let docs = Arc::new(Documents { doc: json!({ "client_id": CIMD, "client_name": "Agent Example", "redirect_uris": ["https://callback.example/cb"] }), asked: Mutex::new(vec![]) });
+    let h = harness_with(Outside { resolve: Arc::new(PublicAnswer("93.184.215.14".parse().unwrap())), get: docs, public_dns: Arc::new(Unreachable) }, Arc::new(|| Err("none".into())));
+    let page = h.authorize(CIMD, "https://callback.example/cb", &[]).text();
+    assert!(page.contains("<b>agent.example</b>") && page.contains("Agent Example"), "{page}");
+    assert!(page.contains("It sends you back to <b>callback.example</b>"), "{page}");
+    let w = approve::waiting(&h.store(), h.ctx.now()).unwrap();
+    assert_eq!(w.iter().map(|w| (w.who.as_str(), w.redirect_host.as_str(), w.checked)).collect::<Vec<_>>(), vec![("agent.example", "callback.example", true)]);
+}
+
+/// The status route answers for the id it is asked with alone: asked with one
+/// sign-in's id while another is allowed, it says that one still waits, and hands
+/// no code (plan §3, brief 73, 5).
+#[test]
+fn the_status_route_answers_for_its_own_id_alone() {
+    let h = harness();
+    let (first, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    let (second, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    approve::answer(&h.store(), &second, true, h.ctx.now()).unwrap();
+    assert_eq!(h.get(&format!("/oauth/authorize/status?request={first}")).json(), json!({ "state": "waiting" }));
+    assert_eq!(h.get(&format!("/oauth/authorize/status?request={second}")).json()["state"], "allowed");
 }
 
 // ---- bounds before sign-in (brief 73, 1) ----
