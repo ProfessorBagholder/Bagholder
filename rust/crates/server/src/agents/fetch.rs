@@ -6,29 +6,42 @@
 //! to the address checked and no other, its name sent for TLS and `Host`.
 
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::time::Duration;
+use std::sync::Arc;
+use std::time::{Duration, Instant};
 
 /// The most a metadata document may be.
 pub const DOCUMENT_LIMIT: u64 = 8 * 1024;
-/// How long a fetch may take.
+/// How long a fetch may take, from resolving its name to its last byte.
 pub const FETCH_LIMIT: Duration = Duration::from_secs(5);
 
-/// Whether `ip` is an address on the public internet: never this machine, a
-/// private network, a link, CGNAT (which holds Tailscale's addresses), a
-/// unique-local range, multicast or the unspecified address, nor an IPv4 address
-/// written as IPv6 that is any of those.
+/// Whether `ip` is an address on the public internet: never one of this machine's
+/// own, a private network, a link, CGNAT (which holds Tailscale's addresses), a
+/// unique- or site-local range, multicast or the unspecified address, nor an IPv4
+/// address written as IPv6 that is any of those.
 pub fn public(ip: IpAddr) -> bool {
-    match ip {
+    public_beside(ip, this_machine)
+}
+
+/// The same, with `own` saying which addresses are this machine's.
+fn public_beside(ip: IpAddr, own: impl Fn(IpAddr) -> bool) -> bool {
+    let range = match ip {
         IpAddr::V4(v4) => public_v4(v4),
         IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
             Some(v4) => public_v4(v4),
             None => public_v6(v6),
         },
-    }
+    };
+    range && !own(ip)
+}
+
+/// Whether `ip` is one of this machine's own addresses: one a socket here can be
+/// bound to, which an address on none of its interfaces cannot.
+pub fn this_machine(ip: IpAddr) -> bool {
+    std::net::UdpSocket::bind(SocketAddr::new(ip, 0)).is_ok()
 }
 
 fn public_v4(ip: Ipv4Addr) -> bool {
-    let [a, b, ..] = ip.octets();
+    let [a, b, c, _] = ip.octets();
     !(ip.is_loopback()
         || ip.is_private()
         || ip.is_link_local()
@@ -38,6 +51,8 @@ fn public_v4(ip: Ipv4Addr) -> bool {
         || ip.is_documentation()
         // 0.0.0.0/8, "this network"
         || a == 0
+        // 192.0.0.0/24, IETF protocol assignments
+        || (a == 192 && b == 0 && c == 0)
         // 100.64.0.0/10, CGNAT
         || (a == 100 && (64..128).contains(&b))
         // 198.18.0.0/15, benchmarking
@@ -55,6 +70,8 @@ fn public_v6(ip: Ipv6Addr) -> bool {
         || (first & 0xfe00) == 0xfc00
         // fe80::/10, link-local
         || (first & 0xffc0) == 0xfe80
+        // fec0::/10, site-local
+        || (first & 0xffc0) == 0xfec0
         // ::ffff:0:0/96 is handled as IPv4; ::/96 (IPv4-compatible) and 64:ff9b::/96 (NAT64) carry IPv4 too
         || ip.segments()[..6] == [0, 0, 0, 0, 0, 0]
         || first == 0x64
@@ -77,10 +94,11 @@ impl Resolve for System {
     }
 }
 
-/// What makes the one request: the network in use, a stand-in in tests (which
-/// records what it was asked, and is never asked for a refused address).
+/// What makes the one request, within `within` from connecting to its last byte:
+/// the network in use, a stand-in in tests (which records what it was asked, and is
+/// never asked for a refused address).
 pub trait Get: Send + Sync {
-    fn get(&self, to: SocketAddr, url: &str, headers: &[(&str, &str)]) -> Result<bagholder_net::client::Response, String>;
+    fn get(&self, to: SocketAddr, url: &str, headers: &[(&str, &str)], within: Duration) -> Result<bagholder_net::client::Response, String>;
 }
 
 /// The machine's clock, which a guarded fetch's deadline is kept on.
@@ -92,8 +110,8 @@ fn machine_clock() -> std::sync::Arc<dyn bagholder_net::Clock> {
 pub struct Net;
 
 impl Get for Net {
-    fn get(&self, to: SocketAddr, url: &str, headers: &[(&str, &str)]) -> Result<bagholder_net::client::Response, String> {
-        bagholder_net::client::get_at(&machine_clock(), to, url, headers, FETCH_LIMIT, DOCUMENT_LIMIT + 1).map_err(|e| e.to_string())
+    fn get(&self, to: SocketAddr, url: &str, headers: &[(&str, &str)], within: Duration) -> Result<bagholder_net::client::Response, String> {
+        bagholder_net::client::get_at(&machine_clock(), to, url, headers, within, DOCUMENT_LIMIT + 1).map_err(|e| e.to_string())
     }
 }
 
@@ -115,26 +133,46 @@ pub fn https_host(url: &str) -> Result<(String, u16), String> {
     Ok((host.trim_matches(['[', ']']).to_ascii_lowercase(), port))
 }
 
-/// The address to fetch `url` from: its host resolved once, every answer public.
-pub fn checked(url: &str, resolve: &dyn Resolve) -> Result<SocketAddr, String> {
+/// The address to fetch `url` from: its host resolved once, within `within`, every
+/// answer public. What is said never names an address the resolver gave, nor why
+/// it failed: a stranger asks this, and the answers can be this machine's network.
+pub fn checked(url: &str, resolve: &Arc<dyn Resolve>, within: Duration) -> Result<SocketAddr, String> {
     let (host, port) = https_host(url)?;
     let addrs = match host.parse::<IpAddr>() {
         Ok(ip) => vec![ip],
-        Err(_) => resolve.resolve(&host, port)?,
+        Err(_) => {
+            let (tx, rx) = std::sync::mpsc::channel();
+            let (r, h) = (resolve.clone(), host.clone());
+            // the system's resolver keeps its own time: past ours, its answer is not waited for
+            std::thread::Builder::new().name("agents-resolve".into()).spawn(move || tx.send(r.resolve(&h, port))).map_err(|_| format!("{host} could not be resolved"))?;
+            match rx.recv_timeout(within) {
+                Ok(Ok(a)) => a,
+                Ok(Err(_)) => return Err(format!("{host} could not be resolved")),
+                Err(_) => return Err(format!("{host} was not resolved within {} seconds", within.as_secs())),
+            }
+        }
     };
     let first = *addrs.first().ok_or_else(|| format!("{host} resolves to no address"))?;
-    if let Some(bad) = addrs.iter().find(|a| !public(**a)) {
-        return Err(format!("{host} resolves to {bad}, which is not a public address"));
+    if addrs.iter().any(|a| !public(*a)) {
+        return Err(format!("{host} resolves to an address that is not a public address"));
     }
     Ok(SocketAddr::new(first, port))
 }
 
 /// An agent's metadata document (the Client ID Metadata Document its `client_id`
 /// names): https only, from its checked address alone, no redirect followed, at
-/// most `DOCUMENT_LIMIT` bytes.
-pub fn metadata(url: &str, resolve: &dyn Resolve, get: &dyn Get) -> Result<serde_json::Value, String> {
-    let to = checked(url, resolve)?;
-    let r = get.get(to, url, &[("Accept", "application/json")])?;
+/// most `DOCUMENT_LIMIT` bytes as decoded, all within `FETCH_LIMIT`.
+pub fn metadata(url: &str, resolve: &Arc<dyn Resolve>, get: &dyn Get) -> Result<serde_json::Value, String> {
+    metadata_within(url, resolve, get, FETCH_LIMIT)
+}
+
+/// The same, within `within` from resolving the name to the document's last byte.
+pub fn metadata_within(url: &str, resolve: &Arc<dyn Resolve>, get: &dyn Get, within: Duration) -> Result<serde_json::Value, String> {
+    let started = Instant::now();
+    let to = checked(url, resolve, within)?;
+    let left = within.checked_sub(started.elapsed()).filter(|d| !d.is_zero()).ok_or_else(|| format!("{url} was not fetched within {} seconds", within.as_secs()))?;
+    // why a connection failed is never said: it can name this machine's network
+    let r = get.get(to, url, &[("Accept", "application/json")], left).map_err(|_| format!("{url} could not be fetched"))?;
     if (300..400).contains(&r.status) {
         return Err(format!("{url} redirected, and a metadata document is never followed elsewhere"));
     }
@@ -219,6 +257,10 @@ mod tests {
         }
     }
 
+    fn answers(a: Vec<IpAddr>) -> Arc<dyn Resolve> {
+        Arc::new(Answers(a))
+    }
+
     /// Records each address it is asked to reach, and answers as told.
     struct Recorded {
         asked: Mutex<Vec<SocketAddr>>,
@@ -226,7 +268,7 @@ mod tests {
         body: Vec<u8>,
     }
     impl Get for Recorded {
-        fn get(&self, to: SocketAddr, _url: &str, _headers: &[(&str, &str)]) -> Result<bagholder_net::client::Response, String> {
+        fn get(&self, to: SocketAddr, _url: &str, _headers: &[(&str, &str)], _within: Duration) -> Result<bagholder_net::client::Response, String> {
             self.asked.lock().unwrap().push(to);
             Ok(bagholder_net::client::Response { status: self.status, body: self.body.clone(), headers: vec![] })
         }
@@ -240,15 +282,15 @@ mod tests {
     /// fetched: no address is ever connected to (brief 73, 2).
     #[test]
     fn a_client_id_resolving_into_a_refused_range_fetches_nothing() {
-        for bad in ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "100.101.102.103", "fc00::1", "fd12:3456::1", "::ffff:127.0.0.1", "::1", "0.0.0.0", "224.0.0.1", "fe80::1"] {
+        for bad in ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "100.101.102.103", "fc00::1", "fd12:3456::1", "::ffff:127.0.0.1", "::1", "0.0.0.0", "224.0.0.1", "fe80::1", "192.0.0.8", "fec0::1"] {
             let ip: IpAddr = bad.parse().unwrap();
             let get = recorded(200, b"{}");
-            let said = metadata("https://agent.example/client.json", &Answers(vec![ip]), &get).unwrap_err();
+            let said = metadata("https://agent.example/client.json", &answers(vec![ip]), &get).unwrap_err();
             assert!(said.contains("not a public address"), "{bad}: {said}");
             assert!(get.asked.lock().unwrap().is_empty(), "{bad}: something was fetched");
             // and one bad answer among good ones refuses the whole name
             let get = recorded(200, b"{}");
-            assert!(metadata("https://agent.example/client.json", &Answers(vec!["93.184.215.14".parse().unwrap(), ip]), &get).is_err(), "{bad} beside a public one");
+            assert!(metadata("https://agent.example/client.json", &answers(vec!["93.184.215.14".parse().unwrap(), ip]), &get).is_err(), "{bad} beside a public one");
             assert!(get.asked.lock().unwrap().is_empty());
         }
     }
@@ -258,27 +300,81 @@ mod tests {
         let public: IpAddr = "93.184.215.14".parse().unwrap();
         // not https
         let get = recorded(200, b"{}");
-        assert!(metadata("http://agent.example/client.json", &Answers(vec![public]), &get).is_err());
+        assert!(metadata("http://agent.example/client.json", &answers(vec![public]), &get).is_err());
         assert!(get.asked.lock().unwrap().is_empty());
         // a redirect is refused, not followed
         let get = recorded(302, b"");
-        assert!(metadata("https://agent.example/client.json", &Answers(vec![public]), &get).unwrap_err().contains("redirected"));
+        assert!(metadata("https://agent.example/client.json", &answers(vec![public]), &get).unwrap_err().contains("redirected"));
         assert_eq!(get.asked.lock().unwrap().len(), 1, "one request, to the checked address");
         // over 8 KiB
         let big = format!("{{\"a\":\"{}\"}}", "x".repeat(9000));
-        assert!(metadata("https://agent.example/client.json", &Answers(vec![public]), &recorded(200, big.as_bytes())).unwrap_err().contains("larger"));
+        assert!(metadata("https://agent.example/client.json", &answers(vec![public]), &recorded(200, big.as_bytes())).unwrap_err().contains("larger"));
         // a good one, read from the address checked
         let get = recorded(200, br#"{"client_id":"https://agent.example/client.json"}"#);
-        assert!(metadata("https://agent.example/client.json", &Answers(vec![public]), &get).is_ok());
+        assert!(metadata("https://agent.example/client.json", &answers(vec![public]), &get).is_ok());
         assert_eq!(get.asked.lock().unwrap()[0], SocketAddr::new(public, 443));
     }
 
     #[test]
     fn an_address_named_in_the_url_is_held_to_the_same_rule() {
         let get = recorded(200, b"{}");
-        assert!(metadata("https://127.0.0.1/client.json", &Answers(vec![]), &get).is_err());
-        assert!(metadata("https://[::1]/client.json", &Answers(vec![]), &get).is_err());
-        assert!(metadata("https://user@agent.example/client.json", &Answers(vec![]), &get).is_err());
+        assert!(metadata("https://127.0.0.1/client.json", &answers(vec![]), &get).is_err());
+        assert!(metadata("https://[::1]/client.json", &answers(vec![]), &get).is_err());
+        assert!(metadata("https://user@agent.example/client.json", &answers(vec![]), &get).is_err());
+        assert!(get.asked.lock().unwrap().is_empty());
+    }
+
+    /// One of this machine's own addresses is never public, whatever its range:
+    /// the address this machine sends from is one.
+    #[test]
+    fn this_machine_s_own_addresses_are_never_public() {
+        let probe = std::net::UdpSocket::bind("0.0.0.0:0").unwrap();
+        // connecting a UDP socket sends nothing: it only picks the interface
+        if probe.connect("93.184.215.14:443").is_ok() {
+            let own = probe.local_addr().unwrap().ip();
+            assert!(this_machine(own), "{own}");
+            assert!(!public(own), "{own}");
+        }
+        assert!(!this_machine("93.184.215.14".parse().unwrap()));
+        assert!(public("93.184.215.14".parse().unwrap()));
+        // an address in a public range that is this machine's own, as a server's can be
+        let own: IpAddr = "93.184.215.14".parse().unwrap();
+        assert!(!public_beside(own, |ip| ip == own));
+        assert!(public_beside("93.184.215.15".parse().unwrap(), |ip| ip == own));
+    }
+
+    /// What a refusal says names no address the resolver gave and no reason a
+    /// connection failed: a stranger asks, and those name this machine's network.
+    #[test]
+    fn a_refusal_names_no_address_resolved_and_no_connect_error() {
+        let said = metadata("https://agent.example/client.json", &answers(vec!["10.0.0.5".parse().unwrap()]), &recorded(200, b"{}")).unwrap_err();
+        assert!(!said.contains("10.0.0.5"), "{said}");
+        struct Refused;
+        impl Get for Refused {
+            fn get(&self, _to: SocketAddr, _url: &str, _h: &[(&str, &str)], _within: Duration) -> Result<bagholder_net::client::Response, String> {
+                Err("connect 93.184.215.14:443: Connection refused (os error 111)".into())
+            }
+        }
+        let said = metadata("https://agent.example/client.json", &answers(vec!["93.184.215.14".parse().unwrap()]), &Refused).unwrap_err();
+        assert!(!said.contains("93.184.215.14") && !said.contains("os error"), "{said}");
+    }
+
+    /// The deadline covers resolving the name: a resolver that does not answer in
+    /// time ends the fetch at the deadline, and nothing is fetched.
+    #[test]
+    fn the_deadline_covers_resolving_the_name() {
+        struct Slow;
+        impl Resolve for Slow {
+            fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, String> {
+                std::thread::sleep(Duration::from_millis(1500));
+                Ok(vec!["93.184.215.14".parse().unwrap()])
+            }
+        }
+        let get = recorded(200, b"{}");
+        let started = Instant::now();
+        let said = metadata_within("https://agent.example/client.json", &(Arc::new(Slow) as Arc<dyn Resolve>), &get, Duration::from_millis(200)).unwrap_err();
+        assert!(started.elapsed() < Duration::from_millis(1000), "waited {:?}", started.elapsed());
+        assert!(said.contains("not resolved within"), "{said}");
         assert!(get.asked.lock().unwrap().is_empty());
     }
 }

@@ -47,7 +47,7 @@ struct Documents {
     asked: Mutex<Vec<(SocketAddr, String)>>,
 }
 impl Get for Documents {
-    fn get(&self, to: SocketAddr, url: &str, _h: &[(&str, &str)]) -> Result<bagholder_net::client::Response, String> {
+    fn get(&self, to: SocketAddr, url: &str, _h: &[(&str, &str)], _within: std::time::Duration) -> Result<bagholder_net::client::Response, String> {
         self.asked.lock().unwrap().push((to, url.to_string()));
         Ok(bagholder_net::client::Response { status: 200, body: self.doc.to_string().into_bytes(), headers: vec![] })
     }
@@ -943,7 +943,7 @@ struct Through {
     closed: Vec<IpAddr>,
 }
 impl Get for Through {
-    fn get(&self, to: SocketAddr, url: &str, _h: &[(&str, &str)]) -> Result<bagholder_net::client::Response, String> {
+    fn get(&self, to: SocketAddr, url: &str, _h: &[(&str, &str)], _within: std::time::Duration) -> Result<bagholder_net::client::Response, String> {
         self.went.lock().unwrap().push(to);
         if self.closed.contains(&to.ip()) {
             return Err("the handshake failed: unexpected EOF".into());
@@ -979,9 +979,9 @@ fn reach_through(system: &str, public: Option<&str>, funnel: bool, provider: tun
     let slot: Arc<Mutex<Option<Arc<Through>>>> = Arc::default();
     struct Late(Arc<Mutex<Option<Arc<Through>>>>);
     impl Get for Late {
-        fn get(&self, to: SocketAddr, url: &str, h: &[(&str, &str)]) -> Result<bagholder_net::client::Response, String> {
+        fn get(&self, to: SocketAddr, url: &str, h: &[(&str, &str)], within: std::time::Duration) -> Result<bagholder_net::client::Response, String> {
             let t = self.0.lock().unwrap().clone().unwrap();
-            t.get(to, url, h)
+            t.get(to, url, h, within)
         }
     }
     let h = harness_with(Outside { resolve: Arc::new(PublicAnswer(system.parse().unwrap())), get: Arc::new(Late(slot.clone())), public_dns }, Arc::new(|| Err("none".into())));

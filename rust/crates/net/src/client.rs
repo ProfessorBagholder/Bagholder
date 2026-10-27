@@ -596,26 +596,31 @@ fn read_body(conn: &mut Conn, head: &Head, out: &mut Capped<'_>) -> Result<bool,
 /// its own bytes: a file that is itself gzip (a `.tar.gz` release archive) is
 /// returned as it came. A coding that cannot be undone is the error, never the
 /// raw bytes passed off as the body.
-fn decoded(raw: Vec<u8>, headers: &[(String, String)]) -> Result<Vec<u8>, Error> {
+/// The body as sent, its content coding undone, at most `ceiling` bytes once
+/// undone: a small coded body can inflate far past what it may be, and is stopped
+/// as it is undone, never after.
+fn decoded(raw: Vec<u8>, headers: &[(String, String)], ceiling: u64) -> Result<Vec<u8>, Error> {
     let coding = headers.iter().find(|(k, _)| k == "content-encoding").map(|(_, v)| v.trim().to_ascii_lowercase()).unwrap_or_default();
-    let undo = |r: std::io::Result<usize>, out: Vec<u8>, name: &str| r.map(|_| out).map_err(|e| Error::Transport(format!("a {name} body that does not decode: {e}")));
+    // Ok(None): it does not decode as `name`
+    let undo = |reader: &mut dyn Read| -> Result<Option<Vec<u8>>, Error> {
+        let mut out = Vec::new();
+        if reader.take(ceiling.saturating_add(1)).read_to_end(&mut out).is_err() {
+            return Ok(None);
+        }
+        if out.len() as u64 > ceiling {
+            return Err(Error::Transport(format!("an answer larger than the {ceiling} bytes it may be once decoded")));
+        }
+        Ok(Some(out))
+    };
+    let not = |name: &str| Error::Transport(format!("a {name} body that does not decode"));
     match coding.as_str() {
         "" | "identity" => Ok(raw),
-        "gzip" | "x-gzip" => {
-            let mut out = Vec::new();
-            let r = flate2::read::GzDecoder::new(&raw[..]).read_to_end(&mut out);
-            undo(r, out, "gzip")
-        }
+        "gzip" | "x-gzip" => undo(&mut flate2::read::GzDecoder::new(&raw[..]))?.ok_or_else(|| not("gzip")),
         // HTTP's deflate is zlib-wrapped (RFC 9110 §8.4.1.2); some servers send the bare stream
-        "deflate" => {
-            let mut out = Vec::new();
-            if flate2::read::ZlibDecoder::new(&raw[..]).read_to_end(&mut out).is_ok() {
-                return Ok(out);
-            }
-            let mut out = Vec::new();
-            let r = flate2::read::DeflateDecoder::new(&raw[..]).read_to_end(&mut out);
-            undo(r, out, "deflate")
-        }
+        "deflate" => match undo(&mut flate2::read::ZlibDecoder::new(&raw[..]))? {
+            Some(out) => Ok(out),
+            None => undo(&mut flate2::read::DeflateDecoder::new(&raw[..]))?.ok_or_else(|| not("deflate")),
+        },
         other => Err(Error::Transport(format!("a body in a coding not asked for: {other}"))),
     }
 }
@@ -803,7 +808,7 @@ pub fn get_at(clock: &std::sync::Arc<dyn crate::Clock>, to: std::net::SocketAddr
     let head = read_head(&mut c).and_then(|(raw, _)| parse_head(&raw))?;
     let mut raw: Vec<u8> = Vec::new();
     read_body(&mut c, &head, &mut Capped::new(&mut raw, ceiling))?;
-    Ok(Response { status: head.status, body: decoded(raw, &head.headers)?, headers: head.headers.clone() })
+    Ok(Response { status: head.status, body: decoded(raw, &head.headers, ceiling)?, headers: head.headers.clone() })
 }
 
 /// Where a download's body goes: the file, how large it may be, and the hosts it
@@ -973,7 +978,7 @@ fn send_into(
             return Err(Error::Status(head.status));
         }
         // a download's body is in its file: the answer carries the bytes written
-        let body = if written.is_some() { Vec::new() } else { decoded(raw, &head.headers)? };
+        let body = if written.is_some() { Vec::new() } else { decoded(raw, &head.headers, u64::MAX)? };
         return Ok((Response { status: head.status, body, headers: head.headers.clone() }, written));
     }
     Err(Error::Transport("too many redirects".into()))
@@ -1029,18 +1034,30 @@ mod coding_tests {
     #[test]
     fn a_body_is_decoded_by_its_content_encoding_alone() {
         let file = gz(b"an archive's own bytes");
-        assert_eq!(decoded(file.clone(), &[]).unwrap(), file, "a .tar.gz sent with no coding is the file itself");
-        assert_eq!(decoded(file.clone(), &h("identity")).unwrap(), file);
-        assert_eq!(decoded(gz(b"text"), &h("gzip")).unwrap(), b"text");
+        assert_eq!(decoded(file.clone(), &[], u64::MAX).unwrap(), file, "a .tar.gz sent with no coding is the file itself");
+        assert_eq!(decoded(file.clone(), &h("identity"), u64::MAX).unwrap(), file);
+        assert_eq!(decoded(gz(b"text"), &h("gzip"), u64::MAX).unwrap(), b"text");
         let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         z.write_all(b"text").unwrap();
-        assert_eq!(decoded(z.finish().unwrap(), &h("deflate")).unwrap(), b"text");
+        assert_eq!(decoded(z.finish().unwrap(), &h("deflate"), u64::MAX).unwrap(), b"text");
         let mut d = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
         d.write_all(b"text").unwrap();
-        assert_eq!(decoded(d.finish().unwrap(), &h("deflate")).unwrap(), b"text", "the bare stream some servers send");
+        assert_eq!(decoded(d.finish().unwrap(), &h("deflate"), u64::MAX).unwrap(), b"text", "the bare stream some servers send");
         // what cannot be undone is the error, never the raw bytes
-        assert!(decoded(b"not gzip".to_vec(), &h("gzip")).is_err());
-        assert!(decoded(b"x".to_vec(), &h("br")).is_err());
+        assert!(decoded(b"not gzip".to_vec(), &h("gzip"), u64::MAX).is_err());
+        assert!(decoded(b"x".to_vec(), &h("br"), u64::MAX).is_err());
+    }
+
+    /// A small coded body that inflates past its ceiling is refused as it is
+    /// undone: a megabyte of zeros sent as about a kilobyte of gzip, held to 8 KiB.
+    #[test]
+    fn a_coded_body_is_held_to_its_ceiling_once_decoded() {
+        let bomb = gz(&vec![0u8; 1 << 20]);
+        assert!(bomb.len() < 8 * 1024, "{}", bomb.len());
+        let said = decoded(bomb.clone(), &h("gzip"), 8 * 1024).err().expect("refused");
+        assert!(said.to_string().contains("larger than the 8192 bytes"), "{said}");
+        assert_eq!(decoded(gz(b"text"), &h("gzip"), 4).unwrap(), b"text", "at the ceiling exactly");
+        assert!(decoded(gz(b"texts"), &h("gzip"), 4).is_err());
     }
 }
 

@@ -178,7 +178,7 @@ fn asking(ctx: &Ctx, client_id: &str, redirect_uri: &str) -> Result<Asking, Stri
     redirect_ok(redirect_uri)?;
     let store = ctx.store()?;
     let client = if client_id.starts_with("https://") {
-        let doc = fetch::metadata(client_id, ctx.outside.resolve.as_ref(), ctx.outside.get.as_ref())?;
+        let doc = fetch::metadata(client_id, &ctx.outside.resolve, ctx.outside.get.as_ref())?;
         if doc.get("client_id").and_then(Value::as_str) != Some(client_id) {
             return Err(format!("the metadata document at {client_id} names another client_id"));
         }

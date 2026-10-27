@@ -527,7 +527,7 @@ fn reach_with(ctx: &Ctx, provider: Provider, value: &str) -> Ready {
         Err(e) => return Ready::Failed { said: e },
     };
     let fetched = |to: SocketAddr| -> Result<(), String> {
-        let r = ctx.outside.get.get(to, &url, &[])?;
+        let r = ctx.outside.get.get(to, &url, &[], fetch::FETCH_LIMIT)?;
         if r.status == 200 && r.body == value.as_bytes() {
             Ok(())
         } else {
