@@ -28,21 +28,23 @@ type Input<K extends GetKey> = Omit<Routes[K], 'answer'>
  * - a search the person types, and a match's glance quote (SPEC.md §4 Markets,
  *   Watchlist: a minute's memory, nothing stored);
  * - what is asked as an action, not to be shown: the news read for a ticker typed, a
- *   forced re-read of a listing's disclosures.
+ *   forced re-read of a listing's disclosures;
+ * - what an agent read, which the Agents panel shows as it is now.
  */
 export const NEVER_KEPT: readonly GetKey[] = [
   'GET /api/symbols/search',
   'GET /api/symbols/quote',
   'GET /api/news/symbol',
   'GET /api/filings',
+  'GET /api/agents/log',
 ]
 /**
  * The ones asked of the server each time, never answered from this page load's memory:
  * an action, the glance quote, whose minute the watchlist keeps, and every trade (the
  * export and the rows a trade page is drawn from, each wanting the book as it is now;
- * the rows are kept, so a trade page opens on them at once).
+ * the rows are kept, so a trade page opens on them at once), and an agent's log.
  */
-const ASKED_EACH_TIME: readonly GetKey[] = ['GET /api/symbols/quote', 'GET /api/figures/trades', 'GET /api/news/symbol', 'GET /api/filings']
+const ASKED_EACH_TIME: readonly GetKey[] = ['GET /api/symbols/quote', 'GET /api/figures/trades', 'GET /api/news/symbol', 'GET /api/filings', 'GET /api/agents/log']
 
 /** The page's own reads in the air: what is read ahead waits for none (`whenIdle`). */
 let pageReads = 0

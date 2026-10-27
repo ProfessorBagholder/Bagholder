@@ -62,6 +62,9 @@ pub struct Ctx {
     /// The public name, as `Host` must name it: lower case, with its port when
     /// that is not 443. Empty until a tunnel's address is known: then nothing passes.
     pub host: std::sync::RwLock<String>,
+    /// The `Host` the listener receives, where the person's own proxy sends one
+    /// other than the public name; empty when it is the public name.
+    pub receives: std::sync::RwLock<String>,
     pub store: Arc<dyn Fn() -> Result<AgentsBook, String> + Send + Sync>,
     pub read: Arc<dyn Fn() -> Result<ReadOnly, String> + Send + Sync>,
     pub now: Arc<dyn Fn() -> Timestamp + Send + Sync>,
@@ -76,6 +79,16 @@ impl Ctx {
     /// The public name the gate requires.
     pub fn host(&self) -> String {
         self.host.read().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    /// The `Host` the gate takes: the public name, or what the person's proxy sends.
+    pub fn received(&self) -> String {
+        let r = self.receives.read().unwrap_or_else(|e| e.into_inner()).clone();
+        if r.is_empty() {
+            self.host()
+        } else {
+            r
+        }
     }
 
     /// The address an agent is given: `https://{host}`.
@@ -113,6 +126,8 @@ pub struct Agents {
     tunnel: Mutex<tunnel::Tunnels>,
     /// The last check of the address, until the address or the tunnel changes.
     ready: Mutex<Option<tunnel::Ready>>,
+    /// What Tailscale last said of this machine, when it was asked.
+    tailscale: Mutex<Option<tunnel::TailscaleSays>>,
 }
 
 impl Agents {
@@ -159,15 +174,28 @@ impl Agents {
         *self.ready.lock().unwrap_or_else(|e| e.into_inner()) = r;
     }
 
+    /// Tailscale asked again: what it says now is what the panel shows.
+    pub fn look_at_tailscale(&self) -> tunnel::TailscaleSays {
+        let says = tunnel::tailscale_says(tunnel::find(tunnel::Provider::Tailscale).as_deref());
+        *self.tailscale.lock().unwrap_or_else(|e| e.into_inner()) = Some(says.clone());
+        says
+    }
+
+    /// What Tailscale last said, if it was asked in this run.
+    pub fn tailscale(&self) -> Option<tunnel::TailscaleSays> {
+        self.tailscale.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
     /// The port the listener answers on, while it is on.
     pub fn port(&self) -> Option<u16> {
         self.listening.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map(|l| l.port)
     }
 
     /// The public name the listener answers for, from now on.
-    pub fn set_host(&self, host: &str) {
+    pub fn set_host(&self, host: &str, receives: Option<&str>) {
         if let Some(c) = self.ctx() {
             *c.host.write().unwrap_or_else(|e| e.into_inner()) = host.to_ascii_lowercase();
+            *c.receives.write().unwrap_or_else(|e| e.into_inner()) = receives.unwrap_or("").to_ascii_lowercase();
         }
         self.set_ready(None);
     }

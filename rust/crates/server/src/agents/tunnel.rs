@@ -112,9 +112,18 @@ pub fn host_of(setup: &Setup, tailscale_name: Option<&str>) -> Result<String, St
     };
     Ok(match setup.provider {
         Provider::Tailscale if setup.funnel_port == Some(8443) => format!("{name}:8443"),
-        Provider::Own => setup.sends_host.as_deref().filter(|h| !h.trim().is_empty()).map(clean_name).transpose()?.unwrap_or(name),
         _ => name,
     })
+}
+
+/// The `Host` the listener receives where it is not the public name: the person's
+/// own proxy may send its own (§4.3a). Every tunnel Bagholder starts sends the
+/// public name.
+pub fn received_host(setup: &Setup) -> Result<Option<String>, String> {
+    match setup.provider {
+        Provider::Own => setup.sends_host.as_deref().filter(|h| !h.trim().is_empty()).map(clean_name).transpose(),
+        _ => Ok(None),
+    }
 }
 
 /// The program's path: the maker's install location, else on `PATH`.
@@ -130,14 +139,51 @@ pub fn find(provider: Provider) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(&exe)).find(|p| p.is_file()))
 }
 
-/// This machine's name on its tailnet, as Tailscale states it (`Self.DNSName`).
-pub fn tailscale_name(program: &std::path::Path) -> Result<String, String> {
-    let out = Command::new(program).args(["status", "--json"]).stdin(Stdio::null()).output().map_err(|e| format!("Tailscale could not be asked: {e}"))?;
-    if !out.status.success() {
-        return Err(format!("Tailscale said: {}", String::from_utf8_lossy(&out.stderr).trim()));
+/// What Tailscale states of this machine, by which the panel shows each of its
+/// steps done: installed, signed in, its tailnet letting it take HTTPS
+/// certificates and use Funnel, and its name on the tailnet.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct TailscaleSays {
+    pub installed: bool,
+    pub signed_in: bool,
+    pub https: bool,
+    pub funnel: bool,
+    pub name: Option<String>,
+    /// Why Tailscale could not be asked, in its words (its app not running, say).
+    pub said: String,
+}
+
+/// Tailscale asked through its own program (`tailscale status --json`).
+pub fn tailscale_says(program: Option<&std::path::Path>) -> TailscaleSays {
+    let Some(program) = program else { return TailscaleSays::default() };
+    let installed = TailscaleSays { installed: true, ..TailscaleSays::default() };
+    let out = match Command::new(program).args(["status", "--json"]).stdin(Stdio::null()).output() {
+        Ok(o) => o,
+        Err(e) => return TailscaleSays { said: format!("Tailscale could not be asked: {e}"), ..installed },
+    };
+    match serde_json::from_slice::<serde_json::Value>(&out.stdout) {
+        Ok(v) => read_tailscale_status(&v),
+        Err(_) => TailscaleSays { said: format!("Tailscale said: {}", String::from_utf8_lossy(&out.stderr).trim()), ..installed },
     }
-    let v: serde_json::Value = serde_json::from_slice(&out.stdout).map_err(|e| format!("Tailscale's status could not be read: {e}"))?;
-    v.pointer("/Self/DNSName").and_then(|n| n.as_str()).filter(|n| !n.is_empty()).map(str::to_string).ok_or_else(|| "Tailscale states no name for this machine: is it signed in?".to_string())
+}
+
+/// `tailscale status --json`, read: signed in when its backend runs; HTTPS and
+/// Funnel by the capabilities its tailnet gave this machine (`Self.Capabilities`,
+/// and `Self.CapMap` in later versions).
+pub fn read_tailscale_status(v: &serde_json::Value) -> TailscaleSays {
+    let me = v.get("Self");
+    let listed = me.and_then(|s| s.get("Capabilities")).and_then(|c| c.as_array()).into_iter().flatten().filter_map(|c| c.as_str());
+    let mapped = me.and_then(|s| s.get("CapMap")).and_then(|c| c.as_object()).into_iter().flat_map(|m| m.keys().map(String::as_str));
+    let caps: Vec<&str> = listed.chain(mapped).collect();
+    TailscaleSays {
+        installed: true,
+        signed_in: v.get("BackendState").and_then(|s| s.as_str()) == Some("Running"),
+        https: caps.contains(&"https"),
+        funnel: caps.contains(&"funnel"),
+        name: me.and_then(|s| s.get("DNSName")).and_then(|n| n.as_str()).map(|n| n.trim_end_matches('.').to_ascii_lowercase()).filter(|n| !n.is_empty()),
+        said: String::new(),
+    }
 }
 
 /// How many of a tunnel's last lines are kept to show.

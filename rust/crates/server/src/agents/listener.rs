@@ -177,7 +177,7 @@ async fn gate(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response
         return said(StatusCode::FORBIDDEN, "forbidden", "Only the tunnel on this computer reaches this address.");
     }
     let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("").trim().to_ascii_lowercase();
-    let want = ctx.host();
+    let want = ctx.received();
     if want.is_empty() || host != want {
         let c = ctx.clone();
         let why = format!("a request for another host ({host})");

@@ -75,6 +75,7 @@ export interface Routes {
   'POST /api/agents/tunnel': { body: Setup; answer: OkOr }
   'POST /api/agents/tunnel/start': { answer: OkOr }
   'POST /api/agents/tunnel/stop': { answer: OkOr }
+  'POST /api/agents/tunnel/look': { answer: OkOr }
   'POST /api/agents/check': { answer: OkOr }
   'POST /api/agents/requests/allow': { body: AgentId; answer: OkOr }
   'POST /api/agents/requests/deny': { body: AgentId; answer: OkOr }

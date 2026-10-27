@@ -6,6 +6,7 @@
   import { status as statusSlot } from './subs.svelte'
   import { ui, closeModal } from './ui.svelte'
   import { call } from './api'
+  import { read } from './reads.svelte'
   import { relTime } from './fmt'
   import type { Provider, Setup, MadeKey, LogLine } from './generated/agents'
 
@@ -49,12 +50,14 @@
   function steps(p: Provider): { what: string; link?: string; done?: boolean }[] {
     const port = st?.port ?? 0
     switch (p) {
-      case 'tailscale':
+      case 'tailscale': {
+        const ts = st?.tailscale
         return [
           { what: 'Install Tailscale', link: 'https://tailscale.com/download', done: !!program(p) },
-          { what: 'Sign in: tailscale up' },
-          { what: 'Turn on HTTPS certificates and Funnel for this machine, from the link `tailscale funnel` prints when they are off', link: 'https://tailscale.com/kb/1223/funnel' },
+          { what: 'Sign in with the Tailscale app', link: 'https://tailscale.com/kb/1017/install', done: !!ts?.signedIn },
+          { what: 'Let this computer use Funnel: if it is off, starting the tunnel shows a link that turns it on', link: 'https://tailscale.com/kb/1223/funnel#requirements-and-limitations', done: !!ts?.https && !!ts?.funnel },
         ]
+      }
       case 'cloudflare':
         return [
           { what: 'Install cloudflared', link: 'https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/', done: !!program(p) },
@@ -94,6 +97,12 @@
     return act('save', () => call('POST /api/agents/tunnel', { body: setup }))
   }
   const start = () => act('start', () => call('POST /api/agents/tunnel/start'))
+  /** Tailscale asked again: once chosen, and when the person has signed in or let Funnel on since */
+  const look = () => act('look', () => call('POST /api/agents/tunnel/look'))
+  function pick(p: Provider) {
+    picked = p
+    if (p === 'tailscale') void look()
+  }
   const stop = () => act('stop', () => call('POST /api/agents/tunnel/stop'))
   const check = () => act('check', () => call('POST /api/agents/check'))
   const answer = (id: string, allow: boolean) => act(id, () => call(allow ? 'POST /api/agents/requests/allow' : 'POST /api/agents/requests/deny', { body: { id } }))
@@ -110,6 +119,8 @@
     made = r
     return r
   }
+  /** an agent's log, or (`REFUSED`) the requests no grant or key named, refused */
+  const REFUSED = 'refused'
   async function openLog(id: string) {
     if (logOf === id) {
       logOf = ''
@@ -117,7 +128,7 @@
     }
     logOf = id
     log = []
-    const r = await call('GET /api/agents/log', { query: { agent: id } })
+    const r = await read('GET /api/agents/log', { query: { agent: id === REFUSED ? '' : id } })
     if (r.ok && logOf === id) log = r.lines
   }
   function copy(text: string, what: string) {
@@ -131,13 +142,19 @@
     if (agent === 'claude') copy(`In Claude.ai: Settings → Connectors → Add custom connector. URL: ${address}/mcp. Then approve the code Bagholder shows on your computer.`, agent)
     else if (agent === 'chatgpt') copy(`In ChatGPT (and Dots through it): add a connector with the MCP server URL ${address}/mcp, sign in, and approve the code Bagholder shows on your computer.`, agent)
     else if (agent === 'muse') {
-      const k = await makeKey('Muse', 'api')
+      const k = made?.name === 'Muse' ? made : await makeKey('Muse', 'api')
       if (k) copy(`In Muse, add a custom connector. API description: ${address}/api/agents/openapi.json. Authorization: Bearer ${k.key}`, agent)
     } else if (agent === 'grok') {
-      const k = await makeKey('Grok Bot', 'mcp')
+      const k = made?.name === 'Grok Bot' ? made : await makeKey('Grok Bot', 'mcp')
       if (k) copy(`In Grok Bot, add a remote MCP server. URL: ${address}/mcp/key. Header: Authorization: Bearer ${k.key}`, agent)
     }
   }
+  /** a line the tunnel wrote, with each https link in it one to open: a sign-in, or the page that lets Funnel on */
+  function linked(line: string): { text: string; link: boolean }[] {
+    return line.split(/(https:\/\/[^\s"'<>]+)/).filter((t) => t !== '').map((t) => ({ text: t, link: t.startsWith('https://') }))
+  }
+  /** an agent is given the address once a check found it answers */
+  const confirmed = $derived(st?.ready?.state === 'ready' || st?.ready?.state === 'unconfirmed')
   const way = (w: string) => (w === 'sign-in' ? 'Signed in' : w === 'mcp-key' ? 'MCP key' : 'API key')
   const readyWord = $derived(!st?.ready ? '' : st.ready.state === 'ready' ? 'Ready' : st.ready.said)
 </script>
@@ -157,7 +174,7 @@
 
     {#each st?.waiting ?? [] as w (w.id)}
       <div class="card agent-ask" style="margin-top:14px;padding:12px 14px;border:1px solid var(--accent)">
-        <div style="font-size:12.5px"><b>{w.who}</b>{#if w.name}{' '}<span class="muted">({w.checked ? w.name : '“' + w.name + '”, name given by the agent, not checked'})</span>{/if}{' '}is asking to read your trade history.</div>
+        <div style="font-size:12.5px"><b>{w.who}</b>{#if w.name}{' '}<span class="muted">({w.checked ? w.name : '“' + w.name + '”, name given by the agent, not checked'})</span>{/if}{' '}is asking to read your trade history. It sends you back to <b>{w.redirectHost}</b>.</div>
         <div style="font-size:12.5px;margin-top:6px">Allow only if you just started connecting this agent, and its page shows code <b style="font-family:ui-monospace,monospace;letter-spacing:.15em">{w.code}</b>.</div>
         <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
           <button class="btn btn-secondary" disabled={busy === w.id} onclick={() => answer(w.id, false)}>Deny</button>
@@ -171,7 +188,7 @@
       <div role="radiogroup" aria-label="Tunnel">
         {#each TUNNELS as t (t.p)}
           <label class="agent-tunnel" style="display:flex;gap:10px;padding:9px 0;border-top:1px solid rgba(var(--ink-rgb),.08);cursor:pointer;font-size:12px;line-height:1.5">
-            <input type="radio" name="tunnel" aria-label={t.label} checked={picked === t.p} onchange={() => (picked = t.p)} style="margin-top:3px" />
+            <input type="radio" name="tunnel" aria-label={t.label} checked={picked === t.p} onchange={() => pick(t.p)} style="margin-top:3px" />
             <span style="min-width:0">
               <span style="font-weight:500">{t.label}</span>{#if t.p === 'tailscale'}{' '}<span class="pill on" style="padding:1px 6px;margin-left:4px">Recommended</span>{/if}{#if t.doc}{' '}<a href={t.doc} target="_blank" rel="noopener" style="margin-left:4px;font-size:11px">About</a>{/if}
               <span class="muted" style="display:block">Account: {t.account} · Cost: {t.cost} · Address stays fixed: {t.fixed}</span>
@@ -187,6 +204,12 @@
             <li>{#if s.done}<span class="muted">Done: </span>{/if}{#if s.link}<a href={s.link} target="_blank" rel="noopener">{s.what}</a>{:else}<code>{s.what}</code>{/if}</li>
           {/each}
         </ol>
+        {#if picked === 'tailscale'}
+          <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+            <button class="btn btn-secondary" disabled={busy === 'look'} onclick={look}>{busy === 'look' ? 'Asking Tailscale…' : 'Check again'}</button>
+            {#if st?.tailscale?.said}<span class="muted" style="font-size:11.5px">{st.tailscale.said}</span>{/if}
+          </div>
+        {/if}
         {#if program(picked)}<div class="muted" style="font-size:11px;margin-top:6px">Bagholder will start {program(picked)}.</div>{/if}
         <div style="display:flex;gap:8px;margin-top:10px;align-items:flex-end;flex-wrap:wrap">
           {#if picked === 'tailscale'}
@@ -212,12 +235,12 @@
           <button class="btn btn-secondary" disabled={busy === 'check' || !address} onclick={check}>{busy === 'check' ? 'Checking…' : 'Check the address'}</button>
           {#if readyWord}<span class={st.ready?.state === 'failed' ? 'status-err' : st.ready?.state === 'ready' ? '' : 'muted'} style="font-size:12px">{readyWord}</span>{/if}
         </div>
-        {#if address}<div class="muted" style="font-size:11.5px;margin-top:8px">Address: {address}</div>{/if}
+        {#if address}<div class="muted" style="font-size:11.5px;margin-top:8px">Address: {address}{confirmed ? '' : ', given to agents once the check finds it answers'}</div>{/if}
         {#if st.tunnel.exited}<div class="status-err" style="font-size:12px;margin-top:6px">{st.tunnel.exited}</div>{/if}
-        {#if st.tunnel.lines.length}<pre class="scroll" style="font-size:11px;max-height:120px;margin:8px 0 0;white-space:pre-wrap">{st.tunnel.lines.join('\n')}</pre>{/if}
+        {#if st.tunnel.lines.length}<pre class="scroll" style="font-size:11px;max-height:120px;margin:8px 0 0;white-space:pre-wrap">{#each st.tunnel.lines as line, i (i)}{#each linked(line) as part, j (j)}{#if part.link}<a href={part.text} target="_blank" rel="noopener">{part.text}</a>{:else}{part.text}{/if}{/each}{'\n'}{/each}</pre>{/if}
       {/if}
 
-      {#if address}
+      {#if address && confirmed}
         <div class="lbl" style="margin:18px 0 8px">Connect an agent</div>
         <div style="display:flex;gap:8px;flex-wrap:wrap">
           {#each [['claude', 'Claude.ai'], ['chatgpt', 'ChatGPT and Dots'], ['muse', 'Muse'], ['grok', 'Grok Bot']] as a (a[0])}
@@ -256,6 +279,16 @@
           {/if}
         </div>
       {/each}
+    {/if}
+    {#if st?.on}
+      <div style="padding:8px 0;border-top:1px solid rgba(var(--ink-rgb),.08);font-size:12.5px">
+        <button style="background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left" onclick={() => openLog(REFUSED)}><span class="muted">Requests refused from callers no agent's sign-in or key names</span></button>
+        {#if logOf === REFUSED}
+          <div class="scroll" style="max-height:160px;margin-top:6px;font-size:11.5px">
+            {#each log as l, i (i)}<div class="muted">{relTime(l.at)} · refused: {l.refusal}</div>{:else}<div class="muted">None.</div>{/each}
+          </div>
+        {/if}
+      </div>
     {/if}
   </div>
 </div>

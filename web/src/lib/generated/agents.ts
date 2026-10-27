@@ -19,6 +19,12 @@ funnelPort: number | null,
  */
 sendsHost: string | null, };
 
+export type TailscaleSays = { installed: boolean, signedIn: boolean, https: boolean, funnel: boolean, name: string | null, 
+/**
+ * Why Tailscale could not be asked, in its words (its app not running, say).
+ */
+said: string, };
+
 export type TunnelState = { 
 /**
  * The provider of the tunnel running, if one is.
@@ -78,7 +84,12 @@ setup: Setup | null,
 /**
  * The address an agent is given, once its name is known.
  */
-address: string, programs: Array<ProgramFound>, tunnel: TunnelState, ready: Ready | null, waiting: Array<Waiting>, connected: Array<Connected>, 
+address: string, programs: Array<ProgramFound>, 
+/**
+ * What Tailscale said of this machine when last asked: asked when Tailscale is
+ * chosen, when its tunnel starts, and when the person asks again.
+ */
+tailscale: TailscaleSays | null, tunnel: TunnelState, ready: Ready | null, waiting: Array<Waiting>, connected: Array<Connected>, 
 /**
  * What could not be read, in words.
  */

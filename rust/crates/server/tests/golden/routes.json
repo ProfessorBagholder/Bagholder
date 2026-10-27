@@ -70,6 +70,7 @@
             "path": "<this machine's>"
           }
         ],
+        "tailscale": null,
         "tunnel": {
           "running": null,
           "command": [],

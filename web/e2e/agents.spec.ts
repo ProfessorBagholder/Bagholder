@@ -48,8 +48,8 @@ test('the Agents panel offers every tunnel side by side, a waiting sign-in with 
     await expect(panel.getByRole('radio', { name: t })).toBeVisible()
     await expect(panel.getByRole('radio', { name: t })).not.toBeChecked()
   }
-  await expect(panel.locator('tr', { hasText: 'Tailscale Funnel' })).toContainText('Recommended')
-  await expect(panel.locator('tr', { hasText: 'Cloudflare Tunnel' })).not.toContainText('Recommended')
+  await expect(panel.locator('label.agent-tunnel', { hasText: 'Tailscale Funnel' })).toContainText('Recommended')
+  await expect(panel.locator('label.agent-tunnel', { hasText: 'Cloudflare Tunnel' })).not.toContainText('Recommended')
 
   // the person's own proxy, by its public name
   expect((await write(request, '/api/agents/tunnel', { provider: 'own', name: PUBLIC })).ok()).toBe(true)

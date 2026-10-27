@@ -68,6 +68,7 @@ fn harness_with(outside: Outside, read: Arc<dyn Fn() -> Result<crate::mcp::ReadO
     let c = clock.clone();
     let ctx = Ctx {
         host: std::sync::RwLock::new(HOST.into()),
+        receives: Default::default(),
         store: Arc::new(move || bagholder_book::Book::open_in(&path, crate::app::APP_VERSION, Timestamp::now()).map(|(b, _)| b.agents()).map_err(|e| e.to_string())),
         read,
         now: Arc::new(move || *c.lock().unwrap()),
@@ -586,6 +587,27 @@ fn the_key_path_offers_no_sign_in_and_takes_only_its_own_keys() {
 
 // ---- the gate ----
 
+/// The person's own proxy may send a `Host` of its own: the gate takes that one
+/// alone, and an agent is still given the public name, as the address, the issuer
+/// and the resource its tokens are for (§4.3a).
+#[test]
+fn a_proxy_s_own_host_is_taken_and_the_public_name_given() {
+    use tunnel::{Provider, Setup};
+    let own = Setup { provider: Provider::Own, name: "Agents.Example.com".into(), funnel_port: None, sends_host: Some("bagholder.lan".into()) };
+    assert_eq!(tunnel::host_of(&own, None).unwrap(), "agents.example.com");
+    assert_eq!(tunnel::received_host(&own).unwrap().as_deref(), Some("bagholder.lan"));
+    // every tunnel Bagholder starts sends the public name
+    for p in [Provider::Tailscale, Provider::Cloudflare, Provider::Ngrok, Provider::Zrok] {
+        assert_eq!(tunnel::received_host(&Setup { provider: p, sends_host: Some("bagholder.lan".into()), ..own.clone() }).unwrap(), None, "{p:?}");
+    }
+    let h = harness();
+    *h.ctx.receives.write().unwrap() = "bagholder.lan".into();
+    let a = h.ask("GET", "/.well-known/oauth-protected-resource", &[("host", "bagholder.lan")], vec![]);
+    assert_eq!(a.status, StatusCode::OK);
+    assert_eq!(a.json()["resource"], json!(format!("https://{HOST}/mcp")), "the public name, never the proxy's own");
+    assert_eq!(h.ask("GET", "/.well-known/oauth-protected-resource", &[("host", HOST)], vec![]).status, StatusCode::MISDIRECTED_REQUEST, "only the Host the proxy sends");
+}
+
 #[test]
 fn the_gate_takes_the_public_name_and_a_loopback_peer_and_sends_no_cors() {
     let h = harness();
@@ -654,6 +676,27 @@ fn the_11th_read_in_a_burst_is_refused_and_the_log_keeps_arguments_never_answers
 
 // ---- the tunnels ----
 
+/// Each Tailscale step is shown done by what `tailscale status --json` states, in
+/// the shapes its versions write: signed in when the backend runs, HTTPS and Funnel
+/// by the capabilities in `Self.Capabilities` or `Self.CapMap`, the name without its
+/// trailing dot. Not installed or not answering, nothing is done.
+#[test]
+fn tailscale_s_status_shows_each_step_done() {
+    let says = |v: Value| tunnel::read_tailscale_status(&v);
+    let signed_out = says(json!({"BackendState": "NeedsLogin", "AuthURL": "", "Self": {"DNSName": "", "Capabilities": null}}));
+    assert!(signed_out.installed && !signed_out.signed_in && !signed_out.https && !signed_out.funnel && signed_out.name.is_none());
+    let listed = says(json!({"BackendState": "Running", "Self": {"DNSName": "Machine.tail0000.ts.net.", "Capabilities": ["https", "funnel", "https://tailscale.com/cap/funnel-ports?ports=443,8443,10000"]}}));
+    assert!(listed.signed_in && listed.https && listed.funnel);
+    assert_eq!(listed.name.as_deref(), Some("machine.tail0000.ts.net"));
+    let mapped = says(json!({"BackendState": "Running", "Self": {"DNSName": "m.tail0000.ts.net.", "CapMap": {"https": null, "funnel": null}}}));
+    assert!(mapped.https && mapped.funnel);
+    let no_funnel = says(json!({"BackendState": "Running", "Self": {"DNSName": "m.tail0000.ts.net.", "CapMap": {"https": null}}}));
+    assert!(no_funnel.signed_in && no_funnel.https && !no_funnel.funnel);
+    assert_eq!(tunnel::tailscale_says(None), tunnel::TailscaleSays::default(), "not installed: nothing done");
+    let not_answering = tunnel::tailscale_says(Some(std::path::Path::new("/bin/false")));
+    assert!(not_answering.installed && !not_answering.signed_in);
+}
+
 #[test]
 fn the_tailscale_command_never_runs_in_the_background() {
     let setups = [Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: None, sends_host: None }, Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: Some(8443), sends_host: None }];
@@ -690,6 +733,7 @@ fn switching_off_closes_the_listener_and_refuses_every_agent_at_once() {
     let agents = Agents::default();
     let ctx = Ctx {
         host: std::sync::RwLock::new(HOST.into()),
+        receives: Default::default(),
         store: h.ctx.store.clone(),
         read: h.ctx.read.clone(),
         now: h.ctx.now.clone(),

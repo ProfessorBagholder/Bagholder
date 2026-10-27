@@ -14,7 +14,7 @@ use ts_rs::TS;
 
 use super::{api_routes, blocking, Api, ApiError, AppState, OkOr, Params, Required, Routed};
 use crate::agents::approve::{self, Connected, KeyAsked, LogLine, MadeKey, Waiting};
-use crate::agents::tunnel::{self, Provider, Ready, Setup, TunnelState};
+use crate::agents::tunnel::{self, Provider, Ready, Setup, TailscaleSays, TunnelState};
 use crate::agents::{self, Ctx};
 use crate::app::App;
 
@@ -24,6 +24,7 @@ pub fn routes() -> Routed {
         post "/api/agents/tunnel" => choose;
         post "/api/agents/tunnel/start" => start_tunnel;
         post "/api/agents/tunnel/stop" => stop_tunnel;
+        post "/api/agents/tunnel/look" => look;
         post "/api/agents/check" => check;
         post "/api/agents/requests/allow" => allow;
         post "/api/agents/requests/deny" => deny;
@@ -53,6 +54,9 @@ pub struct AgentsStatus {
     /// The address an agent is given, once its name is known.
     pub address: String,
     pub programs: Vec<ProgramFound>,
+    /// What Tailscale said of this machine when last asked: asked when Tailscale is
+    /// chosen, when its tunnel starts, and when the person asks again.
+    pub tailscale: Option<TailscaleSays>,
     pub tunnel: TunnelState,
     pub ready: Option<Ready>,
     pub waiting: Vec<Waiting>,
@@ -82,6 +86,7 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
         out.tunnel = t.state();
     }
     out.ready = app.agents.ready();
+    out.tailscale = app.agents.tailscale();
     out.address = app.agents.ctx().map(|c| c.host()).filter(|h| !h.is_empty()).map(|h| format!("https://{h}")).unwrap_or_default();
     out.programs = Provider::ALL.iter().filter(|p| p.program().is_some()).map(|p| ProgramFound { provider: *p, path: tunnel::find(*p).map(|x| x.display().to_string()) }).collect();
     let mut read = || -> Result<(), String> {
@@ -105,10 +110,11 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
 /// What the listener is given in this app: the agent tables, this server's own
 /// address to read, the clock, and the network. Held weakly, so the listener
 /// never keeps the app alive.
-fn ctx(app: &Arc<App>, host: &str) -> Ctx {
+fn ctx(app: &Arc<App>, host: &str, receives: Option<&str>) -> Ctx {
     let (w1, w2): (Weak<App>, Weak<App>) = (Arc::downgrade(app), Arc::downgrade(app));
     Ctx {
         host: std::sync::RwLock::new(host.to_ascii_lowercase()),
+        receives: std::sync::RwLock::new(receives.unwrap_or("").to_ascii_lowercase()),
         store: Arc::new(move || {
             let app = w1.upgrade().ok_or_else(|| "Bagholder is stopping.".to_string())?;
             store(&app)
@@ -129,10 +135,11 @@ fn ctx(app: &Arc<App>, host: &str) -> Ctx {
 pub fn switch_on(app: &Arc<App>, rt: &tokio::runtime::Handle) -> Result<u16, String> {
     let a = store(app)?;
     let host = a.setting(agents::HOST).map_err(|e| e.to_string())?.unwrap_or_default();
+    let receives = setup(&a)?.map(|s| tunnel::received_host(&s)).transpose()?.flatten();
     let kept: u16 = a.setting(agents::PORT).map_err(|e| e.to_string())?.and_then(|p| p.parse().ok()).unwrap_or(0);
     // never the page's own ports
     let wanted = if (8765..=8767).contains(&kept) { 0 } else { kept };
-    let port = app.agents.switch_on(rt, wanted, ctx(app, &host)).or_else(|_| app.agents.switch_on(rt, 0, ctx(app, &host)))?;
+    let port = app.agents.switch_on(rt, wanted, ctx(app, &host, receives.as_deref())).or_else(|_| app.agents.switch_on(rt, 0, ctx(app, &host, receives.as_deref())))?;
     let now = bagholder_core::jiff::Timestamp::now();
     a.set_setting(agents::ON, Some("1"), now).map_err(|e| e.to_string())?;
     a.set_setting(agents::PORT, Some(&port.to_string()), now).map_err(|e| e.to_string())?;
@@ -185,13 +192,14 @@ async fn choose(State(state): State<AppState>, Required(asked): Required<Setup>)
         if !matches!(s.funnel_port, None | Some(443) | Some(8443)) {
             return Err("Funnel serves on 443 or 8443 here.".into());
         }
-        let tailscale = if s.provider == Provider::Tailscale { tunnel::find(Provider::Tailscale).map(|p| tunnel::tailscale_name(&p)).transpose()? } else { None };
+        let tailscale = if s.provider == Provider::Tailscale { app.agents.look_at_tailscale().name } else { None };
         let host = tunnel::host_of(&s, tailscale.as_deref())?;
+        let receives = tunnel::received_host(&s)?;
         let a = store(&app)?;
         let now = bagholder_core::jiff::Timestamp::now();
         a.set_setting(agents::TUNNEL, Some(&serde_json::to_string(&s).map_err(|e| e.to_string())?), now).map_err(|e| e.to_string())?;
         a.set_setting(agents::HOST, Some(&host), now).map_err(|e| e.to_string())?;
-        app.agents.set_host(&host);
+        app.agents.set_host(&host, receives.as_deref());
         app.events.signal();
         Ok(())
     })
@@ -206,6 +214,9 @@ async fn start_tunnel(State(state): State<AppState>) -> Api<OkOr> {
         let s = setup(&store(&app)?)?.ok_or("Choose a tunnel first.")?;
         let program = s.provider.program().ok_or("Your own proxy is yours to run: point it at the address shown.")?;
         let path = tunnel::find(s.provider).ok_or_else(|| format!("{program} is not installed on this computer: follow its first step."))?;
+        if s.provider == Provider::Tailscale {
+            app.agents.look_at_tailscale();
+        }
         let command = tunnel::command(&s, &path.display().to_string(), port).ok_or("This tunnel has no command.")?;
         let signal = app.events.clone();
         app.agents.tunnels().start(s.provider, tunnel::guarded(&command)?, Arc::new(move || signal.signal()))?;
@@ -222,6 +233,17 @@ async fn stop_tunnel(State(state): State<AppState>) -> Api<OkOr> {
     blocking(move || {
         app.agents.tunnels().stop();
         app.agents.set_ready(None);
+        app.events.signal();
+    })
+    .await?;
+    Ok(Json(OkOr::ok()))
+}
+
+/// Tailscale asked again, when the person has signed in or let Funnel on since.
+async fn look(State(state): State<AppState>) -> Api<OkOr> {
+    let app = state.app.clone();
+    blocking(move || {
+        app.agents.look_at_tailscale();
         app.events.signal();
     })
     .await?;
