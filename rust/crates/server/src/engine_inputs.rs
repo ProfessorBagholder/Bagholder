@@ -337,8 +337,10 @@ pub(crate) mod tests {
         assert_ne!(book.debts_print().unwrap(), second, "an answer given");
     }
 
+    /// The holdings are the newest positions read's: its units, and the worth and
+    /// book value it states beside them where it states them (brief 79 §2.1).
     #[test]
-    fn a_statement_of_units_kept_before_their_worth_was_is_not_compared_and_one_with_it_is() {
+    fn the_holdings_are_the_newest_positions_read_s_with_its_worth_and_book_value() {
         let dir = tempfile::tempdir().unwrap();
         let now: bagholder_core::jiff::Timestamp = "2026-09-27T12:00:00Z".parse().unwrap();
         let (book, _) = Book::open_in(dir.path(), "test", now).unwrap();
@@ -350,10 +352,12 @@ pub(crate) mod tests {
         let read = book.broker_read(conn, "units", now).unwrap();
         let q = Dec::parse("0.0000005").unwrap();
         book.store_units(a, "2026-09-26".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: None, value: None }], &read, now).unwrap();
-        assert!(brokers(&book).unwrap()[&a].held.is_empty(), "kept before the worth was: not compared");
-        let worth = Money::new(Dec::parse("0.0000014").unwrap(), Currency::CAD);
-        book.store_units(a, "2026-09-27".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: None, value: Some(worth) }], &read, now).unwrap();
         let b = &brokers(&book).unwrap()[&a];
-        assert_eq!((b.held[&i], b.held_value[&i]), (q, worth));
+        assert_eq!(b.held[&i], q, "kept before its worth was, its units stand");
+        assert!(b.held_value.is_empty() && b.held_book.is_empty());
+        let (worth, cost) = (Money::new(Dec::parse("0.0000014").unwrap(), Currency::CAD), Money::new(Dec::parse("0.0000011").unwrap(), Currency::CAD));
+        book.store_units(a, "2026-09-27".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: Some(cost), value: Some(worth) }], &read, now).unwrap();
+        let b = &brokers(&book).unwrap()[&a];
+        assert_eq!((b.held[&i], b.held_value[&i], b.held_book[&i]), (q, worth, cost));
     }
 }

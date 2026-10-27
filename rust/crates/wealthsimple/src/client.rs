@@ -4,6 +4,7 @@
 //! valid (401 or 403) is refreshed once and asked once more; a second refusal
 //! is a lapse, and nothing is asked again with it.
 
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bagholder_broker::{Answer, Failure};
@@ -269,16 +270,26 @@ impl Source for Client<'_> {
         Ok(Some(Node::root(&data).obj("identity").map_err(|m| mismatch(op, m))?.value().clone()))
     }
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
+        let mut of = self.positions_of(&[account.to_string()], day)?;
+        of.remove(account).ok_or_else(|| Failure::Mismatch(format!("FetchHoldingsExportPositionsAsOfDate: {account} was asked for and not stated")))
+    }
+    fn positions_of(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
         let op = "FetchHoldingsExportPositionsAsOfDate";
-        let data = self.graphql(op, obj(vec![("accountIds", Value::Array(vec![text(account)])), ("asOf", text(&day.to_string())), ("currency", text("CAD"))]))?;
-        let mut nodes = Vec::new();
-        for a in Node::root(&data).list("accounts").map_err(|m| mismatch(op, m))? {
-            let edges = a.obj("financials").and_then(|f| f.obj("current")).and_then(|c| c.obj("positionsAsOfDate")).and_then(|p| p.list("edges")).map_err(|m| mismatch(op, m))?;
-            for e in edges {
-                nodes.push(e.obj("node").map_err(|m| mismatch(op, m))?.value().clone());
+        let mut out = BTreeMap::new();
+        // twenty accounts a request, as the balances are asked
+        for chunk in accounts.chunks(20) {
+            let data = self.graphql(op, obj(vec![("accountIds", Value::Array(chunk.iter().map(|a| text(a)).collect())), ("asOf", text(&day.to_string())), ("currency", text("CAD"))]))?;
+            for a in Node::root(&data).list("accounts").map_err(|m| mismatch(op, m))? {
+                let id = a.text("id").map_err(|m| mismatch(op, m))?.to_string();
+                let edges = a.obj("financials").and_then(|f| f.obj("current")).and_then(|c| c.obj("positionsAsOfDate")).and_then(|p| p.list("edges")).map_err(|m| mismatch(op, m))?;
+                let mut nodes = Vec::new();
+                for e in edges {
+                    nodes.push(e.obj("node").map_err(|m| mismatch(op, m))?.value().clone());
+                }
+                out.insert(id, Value::Array(nodes));
             }
         }
-        Ok(Value::Array(nodes))
+        Ok(out)
     }
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {
         let mut out = Vec::new();

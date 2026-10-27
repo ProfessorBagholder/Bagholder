@@ -75,7 +75,8 @@ pub struct Stated {
 pub struct UnitsLine {
     pub instrument: InstrumentId,
     pub quantity: Dec,
-    /// The broker's own book value, kept as its statement, never a cost.
+    /// The broker's book value: what the units cost, as the holding shows it
+    /// (brief 79).
     pub book_value: Option<Money>,
     /// What the broker states the position is worth.
     pub value: Option<Money>,
@@ -520,6 +521,31 @@ impl Book {
                 Ok(())
             })
         })
+    }
+
+    /// The newest statement of an account's units as of `day`, its lines as they
+    /// were stored: none where none was.
+    pub fn units_on(&self, account: AccountId, as_of: jiff::civil::Date) -> Result<Option<Vec<UnitsLine>>> {
+        let id: Option<String> = self
+            .conn()
+            .query_row("SELECT id FROM statements WHERE account_id = ?1 AND kind = 'units' AND as_of_day = ?2 ORDER BY rowid DESC LIMIT 1", params![account.to_string(), day(as_of)], |r| r.get(0))
+            .optional()?;
+        let Some(id) = id else { return Ok(None) };
+        let mut st = self.conn().prepare_cached("SELECT instrument_id, quantity, book_value, book_value_currency, value, value_currency FROM statement_units WHERE statement_id = ?1")?;
+        type Line = (String, String, Option<String>, Option<String>, Option<String>, Option<String>);
+        let rows = st.query_map(params![id], |r| -> rusqlite::Result<Line> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)) })?;
+        let money = |a: Option<String>, c: Option<String>, column: &'static str| -> Result<Option<Money>> {
+            Ok(match (a, c) {
+                (Some(a), Some(c)) => Some(Money::new(text::dec("statement_units", column, &a)?, text::parsed("statement_units", column, &c, Currency::parse)?)),
+                _ => None,
+            })
+        };
+        let mut out = Vec::new();
+        for r in rows {
+            let (i, q, b, bc, v, vc) = r?;
+            out.push(UnitsLine { instrument: text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?, quantity: text::dec("statement_units", "quantity", &q)?, book_value: money(b, bc, "book_value")?, value: money(v, vc, "value")? });
+        }
+        Ok(Some(out))
     }
 
     /// Store a statement of units as of a day.

@@ -16,7 +16,7 @@ use crate::input::{BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, 
 use crate::families::{node_of, Families, Node};
 use crate::gap::Fig;
 use crate::ledger::{match_family, match_lots, Direction, MatchState, Matched, TripKey};
-use crate::positions::{build_positions, PositionFig};
+use crate::positions::{build_past_positions, build_positions, PositionFig};
 use crate::scope::{scope, Filters, Scoped};
 use crate::trades::{build_trades, TradeFig, TradeKey};
 
@@ -469,7 +469,7 @@ impl Engine {
         let i = &self.inputs;
         self.trades = build_trades(i, &self.matched, &self.identity);
         self.group_held = self.trades.iter().filter_map(|t| if let TradeKey::Group(_) = t.key { Some(t.trips.clone()) } else { None }).flatten().collect();
-        self.positions = build_positions(i, &self.matched, &self.identity, None, None);
+        self.positions = build_positions(i, &self.matched, &self.identity, None);
         self.cash = build_cashflow(i, &self.matched);
         self.paid = BTreeMap::new();
         for r in self.cash.iter().filter(|r| pays_cash(r)) {
@@ -546,7 +546,7 @@ impl Engine {
         market.quotes.clear();
         let inputs = Inputs { ledger, facts: i.facts.clone(), market, clock: Clock { today: day, ..i.clock.clone() } };
         let matched = match_lots(&inputs);
-        let positions = build_positions(&inputs, &matched, &self.identity, None, Some(day));
+        let positions = build_past_positions(&inputs, &matched, &self.identity, day);
         let p = std::sync::Arc::new(Past { day, matched, positions });
         cache.insert(day, std::sync::Arc::downgrade(&p));
         self.past.built.store(true, std::sync::atomic::Ordering::SeqCst);
@@ -640,7 +640,7 @@ impl Engine {
         // each past day a screen holds: the closes its holdings are priced by
         for p in self.past.held() {
             for h in &p.positions {
-                n.spans.entry(h.instrument).or_default().insert((h.opened_on, p.day));
+                n.spans.entry(h.instrument).or_default().insert((h.opened_on.unwrap_or(p.day), p.day));
             }
         }
         n
@@ -991,6 +991,16 @@ impl Engine {
                 };
                 self.equity.remove(&a);
                 self.equity.extend(build_equity(&self.inputs, Some(&BTreeSet::from([a]))));
+                // the account's holdings are what the broker states: built again
+                let was: Vec<PositionFig> = self.positions.iter().filter(|p| p.account == a).cloned().collect();
+                self.positions.retain(|p| p.account != a);
+                let now: Vec<PositionFig> = build_positions(&self.inputs, &self.matched, &self.identity, None).into_iter().filter(|p| p.account == a).collect();
+                let order = |p: &PositionFig| (p.account, p.instrument, p.direction);
+                for p in &now {
+                    let at = self.positions.partition_point(|x| order(x) <= order(p));
+                    self.positions.insert(at, p.clone());
+                }
+                diff(&mut moved, was.iter().map(|p| (position_entity(p), p)), now.iter().map(|p| (position_entity(p), p)));
                 diff(&mut moved, before_equity.iter().map(|e| (Entity::Equity(a), e)), self.equity.get(&a).map(|e| (Entity::Equity(a), e)));
                 let now_stated = self.inputs.market.brokers.get(&a);
                 diff(&mut moved, before_stated.as_ref().map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)), now_stated.map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)));
@@ -1493,7 +1503,7 @@ impl Engine {
                 true
             }
         });
-        let now: Vec<PositionFig> = shown.iter().flat_map(|i| build_positions(&self.inputs, &self.matched, &self.identity, Some(*i), None)).collect();
+        let now: Vec<PositionFig> = shown.iter().flat_map(|i| build_positions(&self.inputs, &self.matched, &self.identity, Some(*i))).collect();
         let order = |p: &PositionFig| (p.account, p.instrument, p.direction);
         for p in &now {
             let at = self.positions.partition_point(|x| order(x) <= order(p));
@@ -1554,7 +1564,7 @@ impl Engine {
     /// A price moved: that instrument's positions.
     fn reprice(&mut self, instrument: InstrumentId, moved: &mut Moved) {
         let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.instrument == instrument).cloned().collect();
-        let fresh = build_positions(&self.inputs, &self.matched, &self.identity, Some(instrument), None);
+        let fresh = build_positions(&self.inputs, &self.matched, &self.identity, Some(instrument));
         self.positions.retain(|p| p.instrument != instrument);
         self.positions.extend(fresh);
         self.positions.sort_by(|a, b| (a.account, a.instrument, a.direction).cmp(&(b.account, b.instrument, b.direction)));

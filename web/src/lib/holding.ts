@@ -33,7 +33,8 @@ export function holdingAsTrade(p: Position): Trade {
     get exit() { return p.last },
     get entryDate() { return p.opened },
     get lastDate() { return p.opened },
-    get holdDays() { return waits(p.held) ? 0 : p.held },
+    // none where the journal holds no lot of it
+    get holdDays() { return p.held == null || waits(p.held) ? 0 : p.held },
     get pnl() { return p.unreal },
     get pnlCad() { return p.unreal },
     get pnlPct() { return p.unrealPct },
@@ -44,6 +45,8 @@ export function holdingAsTrade(p: Position): Trade {
     get avg() { return p.avg },
     get mv() { return p.mv },
     get cost() { return p.cost },
+    // the currency of its book value, average and unrealized: the one Wealthsimple states
+    get bookCurrency() { return p.bookCurrency },
     get last() { return p.last },
     // the page shows the day's change as a percentage, as the market's rows state it
     get percentChange() { return p.percentChange == null ? null : p.percentChange * 100 },

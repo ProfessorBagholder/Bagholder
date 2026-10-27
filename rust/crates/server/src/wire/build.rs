@@ -246,6 +246,7 @@ pub(crate) fn position(inputs: &Inputs, names: &Names, p: &PositionFig, trade: S
         qty: fig_dec(&p.qty),
         avg: fig_dec(&p.avg),
         cost: fig_money(&p.book),
+        book_currency: p.book_currency.as_str().into(),
         last,
         mv: fig_money(&p.market),
         unreal: fig_money(&p.unrealized),
@@ -255,8 +256,8 @@ pub(crate) fn position(inputs: &Inputs, names: &Names, p: &PositionFig, trade: S
         },
         day_change: Fig::of(&p.day_change, |d| d.as_ref().map(dec)),
         percent_change,
-        opened: p.opened_on.to_string(),
-        held: Fig::of(&p.held_days, |d| *d),
+        opened: p.opened_on.map(|d| d.to_string()).unwrap_or_default(),
+        held: p.held_days.as_ref().map(|h| Fig::of(h, |d| *d)),
         grade: grade_word(p.journal.grade),
         thesis: p.journal.thesis.clone(),
         tags: p.journal.tags.clone(),
@@ -424,7 +425,7 @@ pub fn links(engine: &Engine) -> Links {
     let mut holding_of = BTreeMap::new();
     let mut trade_of = BTreeMap::new();
     for p in figs.positions {
-        if let Some(t) = by_trip.get(&p.key) {
+        if let Some(t) = p.key.as_ref().and_then(|k| by_trip.get(k)) {
             holding_of.insert(trade_id(t), position_id(p));
             trade_of.insert(position_id(p), trade_id(t));
         }
@@ -637,6 +638,7 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
                 qty: fig_dec(&p.qty),
                 avg: fig_dec(&p.avg),
                 cost: fig_money(&p.book),
+                book_currency: p.book_currency.as_str().into(),
                 mv: fig_money(&p.market),
                 per: fig_money(&h.rate.per),
                 ytd: partial(&h.ytd),

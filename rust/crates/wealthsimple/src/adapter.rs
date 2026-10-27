@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_book::mapping::Mapping;
-use bagholder_broker::{AccountStated, Activity, Answer, BookMoves, BrokerAdapter, DayValue, Failure, MovedWhat, Row, Units};
+use bagholder_broker::{AccountStated, Activity, Answer, BookMoves, BrokerAdapter, DayValue, Failure, MovedWhat, Positions, Row};
 use bagholder_core::json::Value;
 use bagholder_book::mapping::InstrumentDraft;
 use bagholder_core::instrument::Reference;
@@ -43,6 +43,12 @@ pub trait Source {
     fn net_worth_history(&mut self, accounts: &[String], outside: &[String], start: jiff::civil::Date, end: jiff::civil::Date) -> Answer<Option<Vec<Value>>>;
     /// The position nodes of an account as of a day.
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value>;
+    /// The position nodes of several accounts as of a day, by account: the
+    /// document takes a list of accounts, so a source that asks the network asks
+    /// them together; one that does not asks each.
+    fn positions_of(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
+        accounts.iter().map(|a| Ok((a.clone(), self.positions(a, day)?))).collect()
+    }
     /// The balances replies' accounts.
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>>;
     /// A margin account's `account` node of `FetchAccountCurrentMarginBuyingPowerV2`:
@@ -597,9 +603,14 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         let node = self.source.margin_rates(account)?;
         crate::read::margin_rates(&node, account).map(Some).map_err(mismatch)
     }
-    fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>> {
-        let nodes = self.source.positions(account, day)?;
-        crate::read::units(&nodes).map_err(mismatch)
+    fn positions(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>> {
+        let mut out = BTreeMap::new();
+        for (account, nodes) in self.source.positions_of(accounts, day)? {
+            let units = crate::read::units(&nodes).map_err(mismatch)?;
+            let cash = crate::read::cash_held(&nodes).map_err(mismatch)?;
+            out.insert(account, Positions { units, cash });
+        }
+        Ok(out)
     }
     fn instruments(&mut self, refs: &[Reference], day: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)> {
         // their securities' records a batch at a time, then options' underlyings

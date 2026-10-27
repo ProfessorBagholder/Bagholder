@@ -313,7 +313,7 @@
           </div>
         {:else}
           <div style="text-align:right">
-            <div class="tab" style="font-size:24px;font-weight:500;line-height:1.1;color:{color(trade.pnl)}">{money(trade.pnl, trade.currency)}</div>
+            <div class="tab" style="font-size:24px;font-weight:500;line-height:1.1;color:{color(trade.pnl)}">{money(trade.pnl, trade.bookCurrency ?? trade.currency)}</div>
             <div class="tab" style="font-size:12px;color:{color(trade.pnl)};margin-top:2px">{pct(trade.pnlPct)}</div>
           </div>
         {/if}
@@ -347,7 +347,7 @@
           {#if trade.holding}
             {@render fact('Qty', qty(trade.qty))}
             {@render fact('Avg', px(trade.avg ?? null))}
-            {@render fact('Book', money0(trade.cost ?? null, trade.currency))}
+            {@render fact('Book', money0(trade.cost ?? null, trade.bookCurrency ?? trade.currency))}
             {@render fact('Market', money0(trade.mv ?? null, trade.currency))}
           {:else}
             {@render fact('Open', trade.entryDate)}

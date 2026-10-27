@@ -302,6 +302,9 @@ pub struct App {
     /// a day an earlier build stored wrong is put right as the app starts, never a
     /// day later (`broker_reads`; the owner, 2026-10-27).
     pub history_restated: AtomicBool,
+    /// Each account and day whose holdings read as of the day stated cash other
+    /// than the balances, said in the log already (`broker_reads`, brief 79 §2.1).
+    pub holdings_cash_said: Mutex<std::collections::BTreeSet<(bagholder_core::AccountId, bagholder_core::jiff::civil::Date)>>,
     /// Fills of Bagholder's own orders whose Wealthsimple row the book does not
     /// hold yet, by Wealthsimple's order id, and when each was first seen waiting.
     pub fill_waits: Mutex<std::collections::BTreeMap<String, bagholder_core::jiff::Timestamp>>,
@@ -365,6 +368,7 @@ impl App {
             net,
             pull_asked: AtomicBool::new(false),
             history_restated: AtomicBool::new(false),
+            holdings_cash_said: Mutex::new(Default::default()),
             fill_waits: Mutex::new(std::collections::BTreeMap::new()),
             following: std::sync::atomic::AtomicU64::new(0),
         })

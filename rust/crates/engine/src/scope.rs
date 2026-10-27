@@ -287,10 +287,10 @@ pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
         && journal_matches(f, &p.journal, p.direction)
         && (f.outcomes.is_empty() || p.unrealized.as_ref().ok().and_then(sign_of).is_some_and(|o| f.outcomes.contains(&o)))
         && bound_keeps(f.price, p.avg.as_ref().ok().copied())
-        && bound_keeps(f.hold, p.held_days.as_ref().ok().map(|d| Dec::from_int(*d)))
+        && bound_keeps(f.hold, p.held_days.as_ref().and_then(|d| d.as_ref().ok()).map(|d| Dec::from_int(*d)))
         && bound_keeps(f.pnl, p.unrealized.as_ref().ok().map(|m| m.amount))
         && bound_keeps(f.qty, p.qty.as_ref().ok().copied())
-        && f.overlaps(today, p.opened_on, today)
+        && f.overlaps(today, p.opened_on.unwrap_or(today), today)
 }
 
 /// A sum of the stated members, and how many were left out. The sum is the
@@ -1589,10 +1589,11 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
             let annual: Fig<Money> = crate::gap::both(rate.annual_per_unit(), p.qty.clone(), |a, q| Ok(a.times(q)?));
             // a payout in another currency than the holding's is taken at the
             // latest rate, as any live figure is
-            let per_unit_annual = rate.annual_per_unit().and_then(|a| in_currency_live(inputs, a, p.currency));
-            let over = |a: Money, of: Dec, what: &str| money_ratio(a, Money::new(of, p.currency)).ok_or_else(|| Gaps::of(Gap::Arithmetic(format!("{} has no {what} to be a yield of", p.instrument))));
-            let yoc = crate::gap::both(per_unit_annual.clone(), p.avg.clone(), |a, avg| over(a, avg, "cost"));
-            let cy = crate::gap::both(per_unit_annual, p.mark.clone(), |a, m| over(a, m.price, "price"));
+            let per_unit_annual = |c: Currency| rate.annual_per_unit().and_then(|a| in_currency_live(inputs, a, c));
+            let over = |a: Money, of: Money, what: &str| money_ratio(a, of).ok_or_else(|| Gaps::of(Gap::Arithmetic(format!("{} has no {what} to be a yield of", p.instrument))));
+            // the cost in the currency the broker states it in, the price in the listing's
+            let yoc = crate::gap::both(per_unit_annual(p.book_currency), p.avg.clone(), |a, avg| over(a, Money::new(avg, p.book_currency), "cost"));
+            let cy = crate::gap::both(per_unit_annual(p.currency), p.mark.clone(), |a, m| over(a, Money::new(m.price, p.currency), "price"));
             IncomeHolding {
                 position: pi,
                 ytd: paid(&|r| r.day.year() == this_year),

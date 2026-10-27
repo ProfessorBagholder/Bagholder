@@ -4,7 +4,7 @@
 
 #![allow(dead_code)]
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde_json::{Map, Value};
 
@@ -103,6 +103,9 @@ pub struct Built {
     /// Each transaction label's id.
     pub tx: BTreeMap<String, TransactionId>,
     pub ids: Ids,
+    /// The accounts whose broker the case states holdings of: the others' broker
+    /// states what the journal holds (`engine`).
+    pub states_held: BTreeSet<AccountId>,
 }
 
 pub fn build(case: &Value) -> Built {
@@ -316,8 +319,12 @@ pub fn build(case: &Value) -> Built {
             .collect();
         market.benchmarks.insert(k, BenchmarkSeries { currency: ccy(s(&t, "currency").unwrap_or("CAD")), closes: days("closes"), dividends: days("dividends"), splits });
     }
+    let mut states_held = BTreeSet::new();
     for (a, b) in obj(case, "brokers") {
         let id = ids.account(&a);
+        if b.get("held").is_some() {
+            states_held.insert(id);
+        }
         let mut acct = BrokerAccount::default();
         // the currency the broker states the account's value in: CAD unless the case says
         let vc = ccy(s(&b, "currency").unwrap_or("CAD"));
@@ -356,7 +363,7 @@ pub fn build(case: &Value) -> Built {
     let bank = TimeZone::get("America/Toronto").unwrap();
     let now = case_now(case);
     let clock = Clock { today, now, home: TimeZone::get(s(case, "home").unwrap_or("America/Edmonton")).unwrap(), bank };
-    Built { inputs: Inputs { ledger, facts, market, clock }, tx, ids }
+    Built { inputs: Inputs { ledger, facts, market, clock }, tx, ids, states_held }
 }
 
 /// The `n`th row in the book's order of what the person keeps.
@@ -375,7 +382,41 @@ pub fn engine(b: &mut Built) -> Engine {
         delta.trades.insert(id, Some((rank(made + n), Trade { id, anchor: Anchor::Opening(Opening { transaction: key.opening, instrument: key.instrument }) })));
     }
     e.apply(Change::Ledger(delta));
+    // a holding is what its broker states (brief 79): for each account whose case
+    // states no holdings, a broker stating what the journal holds, so a case tests
+    // the journal's lots through the holdings it shows
+    for (a, (held, book)) in journal_held(&b.states_held, e.figures().matched) {
+        let stated = b.inputs.market.brokers.entry(a).or_default();
+        stated.held = held;
+        stated.held_book = book;
+        stated.held_as_of = Some(b.inputs.clock.today);
+        e.apply(Change::Broker(a, Some(stated.clone())));
+    }
     e
+}
+
+/// What the journal holds in each account not in `skip`: each instrument's open
+/// units (a short's negative), and their cost where the journal knows it whole.
+fn journal_held(skip: &BTreeSet<AccountId>, matched: &bagholder_engine::ledger::Matched) -> BTreeMap<AccountId, (BTreeMap<InstrumentId, Dec>, BTreeMap<InstrumentId, Money>)> {
+    use bagholder_engine::ledger::Direction;
+    let mut out: BTreeMap<AccountId, (BTreeMap<InstrumentId, Dec>, BTreeMap<InstrumentId, Money>)> = BTreeMap::new();
+    for ((a, i), book) in &matched.books {
+        if skip.contains(a) {
+            continue;
+        }
+        for d in [Direction::Long, Direction::Short] {
+            let q = book.lots.iter().filter(|l| l.direction == d).fold(Dec::ZERO, |s, l| s.checked_add(l.qty).unwrap());
+            if q.is_zero() {
+                continue;
+            }
+            let e = out.entry(*a).or_default();
+            e.0.insert(*i, if d == Direction::Short { q.neg() } else { q });
+            if let (Some(Ok(cost)), true) = (book.basis.get(&d).map(|b| b.cost.clone()), book.taint.is_empty()) {
+                e.1.insert(*i, cost);
+            }
+        }
+    }
+    out
 }
 
 

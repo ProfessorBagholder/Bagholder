@@ -362,7 +362,7 @@ fn step_text(s: &Step) -> String {
         // in whole percents, so a long pull changes the header a hundred times at most
         Step::Recording { done, of } => format!("Saving transactions… {}%", if *of == 0 { 100 } else { done * 100 / of }),
         Step::Balances => "Fetching balances…".into(),
-        Step::Holdings { account, n, of } => format!("Fetching holdings for {account} ({n} of {of})…"),
+        Step::Holdings => "Fetching holdings…".into(),
         Step::History { account, n, of } => format!("Fetching equity history for {account} ({n} of {of})…"),
     }
 }
@@ -520,6 +520,7 @@ fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: S
     for a in &read.accounts {
         f.broker_changed(*a)?;
     }
+    say_cash_differs(app, book, &read.cash_differs, bagholder_broker::BrokerAdapter::day(&adapter, now))?;
     // the debts held outside, read with the balances
     f.debts_changed()?;
     let (failed, lapsed) = failures(&read.failures);
@@ -535,6 +536,22 @@ fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: S
         log(&format!("bagholder: balances could not be read: {failed}"));
         Ok((Read::Failed, false))
     }
+}
+
+/// Each account whose cash, as the holdings read as of today states it, differs
+/// from what the balances state, said in the log once a day by the account's kind
+/// alone, with no amount and no id (brief 79 §2.1): whether that read states a
+/// fill made the same day is not recorded, and this is how it is learned. Never
+/// said on a page.
+fn say_cash_differs(app: &App, book: &Book, accounts: &[bagholder_core::AccountId], day: bagholder_core::jiff::civil::Date) -> Result<(), String> {
+    for a in accounts {
+        if !app.holdings_cash_said.lock().unwrap().insert((*a, day)) {
+            continue;
+        }
+        let kind = bagholder_core::account::account_name(None, &book.account(*a).map_err(|e| e.to_string())?.account_type);
+        log(&format!("bagholder: holdings as of {day}: a {kind} account's cash differs"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

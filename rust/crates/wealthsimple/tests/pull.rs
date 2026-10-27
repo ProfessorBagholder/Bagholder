@@ -67,18 +67,18 @@ fn a_pull_says_each_step_as_it_goes_every_account_by_name_and_counted() {
             Step::Activity { .. } => "activity",
             Step::Recording { .. } => "recording",
             Step::Balances => "balances",
-            Step::Holdings { .. } => "holdings",
+            Step::Holdings => "holdings",
             Step::History { .. } => "history",
         })
         .collect();
     kinds.dedup();
     assert_eq!(kinds, ["accounts", "activity", "recording", "balances", "holdings", "history"]);
     // each counted run goes 1..=of, every account named as the screens name it
-    for pick in [0u8, 1, 2] {
+    for pick in [0u8, 2] {
         let run: Vec<(String, usize, usize)> = steps
             .iter()
             .filter_map(|s| match (pick, s) {
-                (0, Step::Activity { account, n, of }) | (1, Step::Holdings { account, n, of }) | (2, Step::History { account, n, of }) => Some((account.clone(), *n, *of)),
+                (0, Step::Activity { account, n, of }) | (2, Step::History { account, n, of }) => Some((account.clone(), *n, *of)),
                 _ => None,
             })
             .collect();
@@ -652,8 +652,8 @@ impl bagholder_broker::BrokerAdapter for Unrecorded {
     fn buying_power(&mut self, accounts: &[String]) -> bagholder_broker::Answer<std::collections::BTreeMap<String, Result<Dec, String>>> {
         self.inner.buying_power(accounts)
     }
-    fn units(&mut self, account: &str, day: jiff::civil::Date) -> bagholder_broker::Answer<Vec<bagholder_broker::Units>> {
-        self.inner.units(account, day)
+    fn positions(&mut self, accounts: &[String], day: jiff::civil::Date) -> bagholder_broker::Answer<std::collections::BTreeMap<String, bagholder_broker::Positions>> {
+        self.inner.positions(accounts, day)
     }
     fn instruments(&mut self, refs: &[bagholder_core::instrument::Reference], day: jiff::civil::Date) -> Vec<(bagholder_core::instrument::Reference, bagholder_broker::Answer<bagholder_book::mapping::InstrumentDraft>)> {
         self.inner.instruments(refs, day)

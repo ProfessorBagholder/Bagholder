@@ -227,8 +227,8 @@ impl bagholder_broker::BrokerAdapter for ReadBefore {
     fn margin_rates(&mut self, account: &str) -> bagholder_broker::Answer<Option<std::collections::BTreeMap<bagholder_core::Currency, bagholder_core::Dec>>> {
         self.0.margin_rates(account)
     }
-    fn units(&mut self, account: &str, day: bagholder_core::jiff::civil::Date) -> bagholder_broker::Answer<Vec<bagholder_broker::Units>> {
-        self.0.units(account, day)
+    fn positions(&mut self, accounts: &[String], day: bagholder_core::jiff::civil::Date) -> bagholder_broker::Answer<std::collections::BTreeMap<String, bagholder_broker::Positions>> {
+        self.0.positions(accounts, day)
     }
     fn outside_accounts(&mut self) -> bagholder_broker::Answer<Option<Vec<bagholder_book::debts::OutsideDebt>>> {
         self.0.outside_accounts()

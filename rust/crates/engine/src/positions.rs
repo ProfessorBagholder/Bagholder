@@ -1,6 +1,8 @@
-//! Open positions (`SPEC.md` §2 Position): the lots still held in one account and
-//! instrument, one way. A position's id is the trade id of the round trip its
-//! first lot belongs to, so a note on it is the note on the trade it becomes.
+//! Open positions (`SPEC.md` §2 Position): what a broker states one account
+//! holds of one instrument, one way, valued (`crate::stated`, brief 79), and the
+//! journal's round trips open in it. A position's trade is the trade of the round
+//! trip its first lot belongs to, so a note on it is the note on the trade it
+//! becomes.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -37,8 +39,8 @@ pub struct Mark {
 #[derive(Clone, Debug, PartialEq)]
 pub struct PositionFig {
     /// The round trip of its first lot: its id, and the journal the holding
-    /// shows.
-    pub key: TripKey,
+    /// shows; none where the journal holds no lot of it.
+    pub key: Option<TripKey>,
     pub trade: Option<TradeId>,
     /// Every round trip open in it, oldest lot first, `key` first. A holding
     /// can carry several (a deposited coin beside bought ones, shares delivered
@@ -49,19 +51,22 @@ pub struct PositionFig {
     pub kind: InstrumentKind,
     pub currency: Currency,
     pub direction: Direction,
-    /// Σ lot quantity, exact.
+    /// The units its broker states it holds, exact (a short's as many as it owes).
     pub qty: Fig<Dec>,
     pub multiplier: Fig<Dec>,
-    /// The average cost of the open units, fees in: what they cost (long) or
-    /// brought in less the fees (short) (`crate::ledger::Basis`).
+    /// What its broker states the units cost (long) or brought in (short), in
+    /// the currency it states (`crate::stated`).
     pub book: Fig<Money>,
+    /// The currency of `book`, `avg` and `unrealized`.
+    pub book_currency: Currency,
+    /// What the journal's lots in it paid in fees.
     pub fees: Fig<Money>,
     /// Book ÷ (qty × multiplier).
     pub avg: Fig<Dec>,
     pub mark: Fig<Mark>,
     /// Qty × price × multiplier.
     pub market: Fig<Money>,
-    /// Market − book for a long, book − market for a short.
+    /// Market − book for a long, book − market for a short, in `book_currency`.
     pub unrealized: Fig<Money>,
     /// Qty × the day's change × multiplier, reversed for a short.
     pub day_change: Fig<Option<Money>>,
@@ -69,9 +74,10 @@ pub struct PositionFig {
     pub market_cad: Fig<Money>,
     pub unrealized_cad: Fig<Money>,
     pub day_change_cad: Fig<Option<Money>>,
-    /// Quantity-weighted days since each lot was opened.
-    pub held_days: Fig<i64>,
-    pub opened_on: Date,
+    /// Quantity-weighted days since each of the journal's lots in it was
+    /// opened; none where it holds none.
+    pub held_days: Option<Fig<i64>>,
+    pub opened_on: Option<Date>,
     pub lots: Vec<Lot>,
     pub fills: BTreeSet<TransactionId>,
     /// What the holding waits on.
@@ -139,10 +145,89 @@ pub fn current_price(inputs: &Inputs, instrument: InstrumentId) -> Option<Dec> {
     mark_of(inputs, instrument, info.instrument.kind, info.instrument.currency).ok().map(|m| m.price)
 }
 
-/// The open positions, in the order of their holdings; `only` one instrument's.
-/// Marked now, or, `as_of` a past day, at that day's close and that day's rate,
-/// from a match of the ledger to that day (`crate::engine::Past`).
-pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, only: Option<InstrumentId>, as_of: Option<Date>) -> Vec<PositionFig> {
+/// The open positions: the holdings each broker states (`crate::stated`), in the
+/// order of their accounts and instruments, each linked to the journal's round
+/// trips open in it; `only` one instrument's. Every amount is the broker's
+/// (brief 79 §1): the journal gives a holding its trade, its journal entry, its
+/// fills, when it was opened and the fees its lots paid, never an amount.
+pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, only: Option<InstrumentId>) -> Vec<PositionFig> {
+    let stated = inputs.market.brokers.iter().map(|(a, b)| crate::stated::Stated { account: *a, held: &b.held, book: &b.held_book });
+    let mut held = crate::stated::holdings(&crate::stated::Sources::of(inputs), stated, None);
+    if let Some(i) = only {
+        held.retain(|h| h.instrument == i);
+    }
+    held.into_iter().map(|h| linked(inputs, matched, identity, h)).collect()
+}
+
+/// A holding with the journal's round trips open in it the same way: the trade
+/// of its first lot, that trade's journal entry, the lots' fills and flags, when
+/// they were opened and the fees they paid. A holding the journal holds no lot of
+/// has none of them.
+fn linked(inputs: &Inputs, matched: &Matched, identity: &Identity, h: crate::stated::Holding) -> PositionFig {
+    let today = inputs.clock.today;
+    let lots: Vec<Lot> = matched.books.get(&(h.account, h.instrument)).map(|b| b.lots.iter().filter(|l| l.direction == h.direction).cloned().collect()).unwrap_or_default();
+    let key = lots.first().map(|l| l.trip.clone());
+    let mut trips: Vec<TripKey> = Vec::new();
+    for l in &lots {
+        if !trips.contains(&l.trip) {
+            trips.push(l.trip.clone());
+        }
+    }
+    let trade = key.as_ref().and_then(|k| identity.trade_of.get(k).copied());
+    let journal = trade.and_then(|t| inputs.ledger.journal.get(&JournalSubject::Trade(t)).cloned()).unwrap_or_default();
+    let mut fills = BTreeSet::new();
+    let mut flags = BTreeSet::new();
+    for l in &lots {
+        if let Some(t) = matched.trips.get(&l.trip) {
+            fills.extend(t.fills.iter().cloned());
+        }
+        flags.extend(l.flags.iter().map(|f| f.word()));
+    }
+    let fees: Fig<Money> = lots.iter().try_fold(Money::zero(h.currency), |a, l| a.add_to_fit(l.fee)).map_err(Gaps::from);
+    // quantity-weighted days since each lot was opened
+    let held_days: Option<Fig<i64>> = (!lots.is_empty()).then(|| {
+        let open = lots.iter().try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty)).map_err(Gaps::from)?;
+        let weighted = lots.iter().try_fold(Dec::ZERO, |a, l| a.add_to_fit(l.qty.checked_mul(Dec::from_int((today - l.day).get_days() as i64))?))?;
+        Ok(weighted.div_rounded(open, 0, Rounding::HalfEven)?.to_int()?)
+    });
+    PositionFig {
+        key,
+        trade,
+        trips,
+        account: h.account,
+        instrument: h.instrument,
+        kind: h.kind,
+        currency: h.currency,
+        direction: h.direction,
+        qty: Ok(h.qty),
+        multiplier: h.multiplier,
+        book: h.book,
+        book_currency: h.book_currency,
+        fees,
+        avg: h.avg,
+        mark: h.mark,
+        market: h.market,
+        unrealized: h.unrealized,
+        day_change: h.day_change,
+        book_cad: h.book_cad,
+        market_cad: h.market_cad,
+        unrealized_cad: h.unrealized_cad,
+        day_change_cad: h.day_change_cad,
+        held_days,
+        opened_on: lots.iter().map(|l| l.day).min(),
+        lots,
+        fills,
+        gaps: h.gaps,
+        flags,
+        journal,
+    }
+}
+
+/// The positions as of a past day, from a match of the ledger to that day
+/// (`crate::engine::Past`), marked at that day's close and rate.
+pub fn build_past_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, day: Date) -> Vec<PositionFig> {
+    let only: Option<InstrumentId> = None;
+    let as_of = Some(day);
     let today = inputs.clock.today;
     let rates = &inputs.facts.rates;
     let clock = &inputs.clock;
@@ -259,7 +344,7 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 }
             }
             out.push(PositionFig {
-                key,
+                key: Some(key),
                 trade,
                 trips,
                 account: *account,
@@ -273,6 +358,7 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 market_cad: cad(&market),
                 unrealized_cad: cad(&unrealized),
                 book: book_value,
+                book_currency: currency,
                 fees,
                 avg,
                 mark,
@@ -280,8 +366,8 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 unrealized,
                 day_change,
                 day_change_cad,
-                held_days,
-                opened_on: lots.iter().map(|l| l.day).min().unwrap_or(today),
+                held_days: Some(held_days),
+                opened_on: lots.iter().map(|l| l.day).min(),
                 fills,
                 gaps,
                 flags,

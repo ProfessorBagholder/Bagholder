@@ -95,10 +95,19 @@ pub struct Units {
     /// The broker's own reference for the instrument.
     pub instrument: Reference,
     pub quantity: Dec,
-    /// The broker's book value, kept as its statement, never a cost.
+    /// The broker's book value: what the units cost, as the holding shows it
+    /// (brief 79), never a cost the journal takes.
     pub book_value: Option<Money>,
     /// What the broker states the position is worth now.
     pub value: Option<Money>,
+}
+
+/// One account's positions as of a day, as its broker states them: each
+/// holding's units, and the cash in each currency the same read states.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Positions {
+    pub units: Vec<Units>,
+    pub cash: BTreeMap<Currency, Dec>,
 }
 
 /// An account's value and net deposits on a day.
@@ -137,8 +146,8 @@ pub enum Step {
     Recording { done: usize, of: usize },
     /// Cash and what margin can borrow.
     Balances,
-    /// One account's holdings, `n` of `of`.
-    Holdings { account: String, n: usize, of: usize },
+    /// Every account's holdings, read together.
+    Holdings,
     /// One account's value by day, `n` of `of`.
     History { account: String, n: usize, of: usize },
 }
@@ -232,7 +241,9 @@ pub trait BrokerAdapter {
     fn margin_rates(&mut self, _account: &str) -> Answer<Option<BTreeMap<Currency, Dec>>> {
         Ok(None)
     }
-    fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>>;
+    /// Each account's positions as of a day, read together: every account asked
+    /// for in as few requests as the broker takes.
+    fn positions(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>>;
     /// The person's accounts held outside the broker that the broker's own net
     /// worth feature states (`docs/plans/debts-held-outside-wealthsimple.md`):
     /// none from a broker that states none.

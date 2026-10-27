@@ -536,6 +536,12 @@ fn at(day: jiff::civil::Date, n: u32) -> String {
 }
 
 impl Generated {
+    /// An account's position nodes as of a day, as the positions read answers.
+    fn positions_in(&self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
+        let a = self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;
+        Ok(Value::Array(self.held_on(a, day).iter().map(|(id, q)| self.position(id, *q)).collect()))
+    }
+
     pub fn new(size: Size, today: jiff::civil::Date) -> Generated {
         Generated::shaped(size, today, &[])
     }
@@ -1638,8 +1644,13 @@ impl Source for Generated {
 
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
         self.asked += 1;
-        let a = self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;
-        Ok(Value::Array(self.held_on(a, day).iter().map(|(id, q)| self.position(id, *q)).collect()))
+        self.positions_in(account, day)
+    }
+
+    fn positions_of(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
+        // one request, as Wealthsimple's document takes every account at once
+        self.asked += 1;
+        accounts.iter().map(|a| Ok((a.clone(), self.positions_in(a, day)?))).collect()
     }
 
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {

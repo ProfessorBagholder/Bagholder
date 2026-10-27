@@ -480,7 +480,7 @@ mod tests {
         assert!(!held.positions.is_empty(), "the test book held something that day");
         assert_eq!(f.read(|e| e.past_built()), Some(true), "a past day worked out is said once");
         assert_eq!(f.read(|e| e.past_built()), Some(false));
-        let want: BTreeSet<(InstrumentId, bagholder_core::jiff::civil::Date)> = held.positions.iter().filter_map(|p| crate::read_sources::needs_of(&book, &bagholder_engine::needs::FactNeeds { spans: [(p.instrument, [(p.opened_on, day)].into())].into(), ..Default::default() }, today).unwrap().closes.first().map(|c| (c.listing.id, c.from))).collect();
+        let want: BTreeSet<(InstrumentId, bagholder_core::jiff::civil::Date)> = held.positions.iter().filter_map(|p| crate::read_sources::needs_of(&book, &bagholder_engine::needs::FactNeeds { spans: [(p.instrument, [(p.opened_on.unwrap_or(day), day)].into())].into(), ..Default::default() }, today).unwrap().closes.first().map(|c| (c.listing.id, c.from))).collect();
         assert!(!want.is_empty());
         assert_eq!(spans(f).into_iter().collect::<BTreeSet<_>>(), want, "each holding's closes from its first day held to that day");
         let cache = f.cache().unwrap();

@@ -246,12 +246,12 @@ fn run(path: &Path) -> Vec<String> {
                 c.words(&w("gaps"), v, gaps_words(&p.gaps));
             }
             if let Some(v) = want.get("held_days") {
-                if p.held_days != Ok(v.as_i64().unwrap()) {
+                if p.held_days != Some(Ok(v.as_i64().unwrap())) {
                     c.fail(format!("{}: expected {v}, got {:?}", w("held_days"), p.held_days));
                 }
             }
             if let Some(v) = s(&want, "opened_by") {
-                if p.key != (TripKey { opening: tx[v].clone(), instrument }) && p.key.opening != tx[v] {
+                if p.key.as_ref().is_none_or(|k| *k != (TripKey { opening: tx[v].clone(), instrument }) && k.opening != tx[v]) {
                     c.fail(format!("{}: expected the round trip opened by {v}", w("key")));
                 }
             }
@@ -683,7 +683,7 @@ fn run(path: &Path) -> Vec<String> {
                     TradeKey::Trip(k) => k.opening == tx[label],
                     _ => false,
                 });
-                let pos = f.positions.iter().find(|p| p.key.opening == tx[label]);
+                let pos = f.positions.iter().find(|p| p.key.as_ref().is_some_and(|k| k.opening == tx[label]));
                 let got = found.and_then(|t| t.trade).or(pos.and_then(|p| p.trade));
                 if got != Some(b.ids.trade(trade.as_str().unwrap())) {
                     c.fail(format!("round trip opened by {label}: expected trade {trade}, got {got:?}"));
@@ -742,7 +742,7 @@ fn run(path: &Path) -> Vec<String> {
                     c.figure(&k("change"), v, &p.mark.clone().and_then(|m| m.change.ok_or_else(Gaps::none)));
                 }
                 if let Some(v) = w.get("held_days") {
-                    if p.held_days != Ok(v.as_i64().unwrap()) {
+                    if p.held_days != Some(Ok(v.as_i64().unwrap())) {
                         c.fail(format!("{}: expected {v}, got {:?}", k("held_days"), p.held_days));
                     }
                 }
@@ -837,7 +837,7 @@ fn invariants(c: &mut Check, b: &Built, f: &bagholder_engine::engine::Figures) {
     if let Some(((a, i), _)) = sides.iter().find(|(_, d)| d.len() > 1) {
         c.fail(format!("invariant: {a} holds {i} both long and short"));
     }
-    let open: BTreeSet<&TripKey> = f.positions.iter().map(|p| &p.key).collect();
+    let open: BTreeSet<&TripKey> = f.positions.iter().filter_map(|p| p.key.as_ref()).collect();
     let named: BTreeSet<InstrumentId> = b.inputs.facts.adjustments.iter().flat_map(|(_, a)| a.legs.iter().flat_map(|l| [l.from, l.to])).flatten().collect();
     for t in f.trades.iter() {
         let TradeKey::Trip(k) = &t.key else { continue };
@@ -954,7 +954,11 @@ fn the_needs_name_every_rate_and_close_a_figure_waits_on_and_nothing_more() {
         let file: Value = serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
         for case in file.as_array().unwrap() {
             let name = format!("{} / {}", path.file_name().unwrap().to_string_lossy(), s(case, "name").unwrap());
-            let b = build(case);
+            let mut b = build(case);
+            // the holdings stated, as every case's are (`engine`)
+            engine(&mut b);
+            // what is held is what the brokers state (brief 79)
+            let stated: BTreeSet<InstrumentId> = b.inputs.market.brokers.values().flat_map(|x| x.held.iter().filter(|(_, q)| !q.is_zero()).map(|(i, _)| *i)).collect();
             // no rate given, then neither a rate nor a close nor a quote
             for without_market in [false, true] {
                 let mut bare = b.inputs.clone();
@@ -980,9 +984,8 @@ fn the_needs_name_every_rate_and_close_a_figure_waits_on_and_nothing_more() {
                     }
                 }
                 // every security held today whose rate a figure states or waits on
-                let today = b.inputs.clock.today;
                 for i in f.payers.keys() {
-                    let held = f.matched.units.keys().any(|(a, x)| x == i && !f.matched.units_on(*a, *i, today).is_ok_and(|q| q.is_zero()));
+                    let held = stated.contains(i);
                     let security = b.inputs.ledger.instruments.get(i).is_some_and(|x| x.instrument.kind == bagholder_core::instrument::InstrumentKind::Security);
                     seen += 1;
                     if held && security && !needs.payers.contains(i) {
@@ -999,12 +1002,10 @@ fn the_needs_name_every_rate_and_close_a_figure_waits_on_and_nothing_more() {
                         }
                     }
                 }
-                // every instrument held today is quoted, and nothing else: a coin
-                // only the broker states is valued as the broker states it
-                let held: BTreeSet<InstrumentId> = f.matched.units.keys().filter(|(a, x)| !f.matched.units_on(*a, *x, today).is_ok_and(|q| q.is_zero())).map(|(_, x)| *x).collect();
+                // every instrument held today is quoted, and nothing else
                 seen += 1;
-                if needs.held != held {
-                    failures.push(format!("{name}: held today {held:?}, the needs name {:?}", needs.held));
+                if needs.held != stated {
+                    failures.push(format!("{name}: held today {stated:?}, the needs name {:?}", needs.held));
                 }
                 // a contract past its expiry with nothing on the record waits on its
                 // underlying's close that day
