@@ -223,12 +223,6 @@ impl Bus {
         self.resync.lock().unwrap_or_else(|e| e.into_inner()).remove(&id)
     }
 
-    /// Whether any page is showing a subscription of one of `kinds` (the part of a
-    /// key before `:`): what a read made only for what is on screen asks.
-    pub fn showing(&self, kinds: &[&str]) -> bool {
-        self.streams.lock().unwrap_or_else(|e| e.into_inner()).values().any(|w| w.lock().unwrap_or_else(|e| e.into_inner()).keys().any(|k| kinds.contains(&k.split(':').next().unwrap_or(k))))
-    }
-
     pub fn watched(&self, key: &str) -> bool {
         self.streams.lock().unwrap_or_else(|e| e.into_inner()).values().any(|w| w.lock().unwrap_or_else(|e| e.into_inner()).contains_key(key))
     }
@@ -344,6 +338,10 @@ fn v_text(v: u64) -> String {
 impl Feed {
     pub fn open(app: Arc<App>) -> Feed {
         let bus = app.events.clone();
+        // a page open: quotes are owed, and the figure path looks at once whether one is due
+        if let Some(f) = app.figures.get() {
+            f.wake();
+        }
         let (registered, wanted) = Registered::new(&bus);
         Feed { app, _watching: Watching::new(&bus), registered, wanted, at: 0, base: 0, views: Default::default(), sent_docs: Default::default(), status: None, refused: Default::default() }
     }
@@ -680,22 +678,24 @@ mod tests {
         assert_eq!(reads(), first + 1, "a commit to the store they live in reads them again");
     }
 
-    /// What is held is quoted only while a page shows a holding's price: a page on
-    /// the Dashboard or the trades asks for no quote; one showing the holdings does.
+    /// What is held and followed is quoted while a page is open, whatever tab it
+    /// shows: a page on the Dashboard or the trades is owed quotes as one showing the
+    /// holdings is, so a tab opened later never waits on a quote pass; with no page
+    /// open, none are owed.
     #[test]
-    fn test_quotes_are_owed_only_to_a_page_showing_a_price() {
+    fn test_quotes_are_owed_while_a_page_is_open_whatever_it_shows() {
         let _g = crate::tests_common::guard();
         let app = crate::tests_common::app();
+        let before = app.events.watchers();
         let feed = Feed::open(app.clone());
-        let show = |keys: &[&str]| {
+        for keys in [&["status", "book", "dashboard", "notifications"][..], &["status", "book", "trades"], &["status", "book", "positions"], &[]] {
             assert!(app.events.watch(&app, feed.id(), keys.iter().map(|k| (k.to_string(), Want { params: serde_json::json!({}), have: None })).collect()));
-            app.events.showing(&crate::due::PRICED)
-        };
-        assert!(!show(&["status", "book", "dashboard", "notifications"]));
-        assert!(!show(&["status", "book", "trades"]));
-        for priced in ["positions", "exposure", "markets", "cashflow", "trade:x"] {
-            assert!(show(&["status", "book", priced]), "{priced}");
+            assert!(crate::due::quotes_owed(&app), "{keys:?}");
         }
-        assert!(!show(&[]));
+        drop(feed);
+        assert_eq!(app.events.watchers(), before, "the page gone, it owes nothing more");
+        if before == 0 {
+            assert!(!crate::due::quotes_owed(&app));
+        }
     }
 }

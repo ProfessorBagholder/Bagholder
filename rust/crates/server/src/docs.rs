@@ -202,12 +202,6 @@ fn filings_listing(q: &str) -> Result<bagholder_core::ListingKey, String> {
 
 /// A page has just started showing `key`.
 pub fn opened(app: &Arc<App>, key: &str) {
-    // a holding's price now on screen: the figure path looks at once whether it is due
-    if crate::due::PRICED.contains(&key.split(':').next().unwrap_or(key)) {
-        if let Some(f) = app.figures.get() {
-            f.wake();
-        }
-    }
     match key {
         "orders" => {
             crate::orders::kick_orders_refresh(app);
