@@ -58,7 +58,7 @@ impl Changes {
         self.added.is_empty() && self.changed.is_empty() && self.removed.is_empty()
     }
 
-    fn extend(&mut self, other: Changes) {
+    pub(crate) fn extend(&mut self, other: Changes) {
         self.added.extend(other.added);
         self.changed.extend(other.changed);
         self.removed.extend(other.removed);
@@ -241,6 +241,15 @@ impl Book {
             )
             .optional()?
             .ok_or_else(|| text::corrupt("record_revisions", "record_id", &id.to_string(), "a record with no revision"))
+    }
+
+    /// What `mapping` reads a record's latest payload as, whatever its state,
+    /// storing nothing: a superseded record's own units, which it holds no
+    /// transactions of.
+    pub fn mapped(&self, id: RecordId, mapping: &dyn Mapping) -> Result<crate::mapping::Mapped> {
+        let connection = self.record(id)?.connection;
+        let (payload, _) = self.latest_revision(id)?;
+        Ok(mapping.map(&MapContext { connection, record: id, zones: &self.zones }, &payload))
     }
 
     /// Derive a live record's transactions from `payload` again, replacing what
@@ -451,6 +460,17 @@ impl Book {
         Ok(())
     }
 
+    /// How many live records of the mapping's source were derived under an earlier
+    /// version of it: what `rederive` would derive again.
+    pub fn stale_records(&self, mapping: &dyn Mapping) -> Result<usize> {
+        let n: i64 = self.conn().query_row(
+            "SELECT count(*) FROM source_records WHERE source = ? AND state = 'live' AND derived_version < ?",
+            params![mapping.source().as_str(), mapping.version()],
+            |r| r.get(0),
+        )?;
+        Ok(n as usize)
+    }
+
     /// Derive again every live record of `mapping`'s source whose transactions or
     /// problems came from an older version of it, and say what moved. Records
     /// derived with this version already are left alone.
@@ -504,6 +524,24 @@ impl Book {
             // a removed event row no longer states a succession
             self.settle_successions()?;
             Ok(Changes { removed, ..Changes::default() })
+        })
+    }
+
+    /// Note on a removed record that it was taken back from what `version` wrote:
+    /// a revision of its payload naming that version under `takenBack`. A reading
+    /// that books again a row it once withdrew (one whose latest payload is the
+    /// row's) does not book it; the source stating it again stores it as ever.
+    pub fn note_taken_back(&self, record: RecordId, version: &str, at: jiff::Timestamp) -> Result<()> {
+        self.atomically(|| {
+            if self.record(record)?.state != RecordState::Removed {
+                return Err(BookError::Refused(format!("record {record} is not removed, so it is not taken back")));
+            }
+            let (latest, n) = self.latest_revision(record)?;
+            let bagholder_core::json::Value::Object(mut o) = bagholder_core::json::parse(&latest).map_err(|e| BookError::Refused(format!("record {record}'s payload is not JSON: {e}")))? else {
+                return Err(BookError::Refused(format!("record {record}'s payload is not an object")));
+            };
+            o.insert("takenBack".to_string(), bagholder_core::json::Value::String(version.to_string()));
+            self.add_revision(record, n + 1, &bagholder_core::json::Value::Object(o).canonical(), at)
         })
     }
 
@@ -728,6 +766,23 @@ impl Book {
         let mut stmt = self.conn().prepare_cached("SELECT id FROM source_records WHERE source = ? AND state = 'live' ORDER BY first_received_at, rowid")?;
         let ids = stmt.query_map([source.as_str()], |r| r.get::<_, String>(0))?;
         ids.map(|s| text::parsed("source_records", "id", &s?, RecordId::parse)).collect()
+    }
+
+    /// The live records of a source, each with when it was first received and when
+    /// it was last written (its latest revision's arrival).
+    pub fn live_records_written(&self, source: &SourceName) -> Result<Vec<(RecordId, jiff::Timestamp, jiff::Timestamp)>> {
+        let mut stmt = self.conn().prepare_cached(
+            "SELECT r.id, r.first_received_at, (SELECT v.received_at FROM record_revisions v WHERE v.record_id = r.id ORDER BY v.revision DESC LIMIT 1)
+               FROM source_records r WHERE r.source = ? AND r.state = 'live' ORDER BY r.first_received_at, r.rowid",
+        )?;
+        let rows = stmt.query_map([source.as_str()], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (id, first, last) = row?;
+            let at = |column: &'static str, v: &str| text::parsed("source_records", column, v, |t: &str| t.parse::<jiff::Timestamp>());
+            out.push((text::parsed("source_records", "id", &id, RecordId::parse)?, at("first_received_at", &first)?, at("received_at", &last)?));
+        }
+        Ok(out)
     }
 
     /// The records of a source it reported removed, each with its key.

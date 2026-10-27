@@ -488,7 +488,7 @@ fn in_account(inputs: &bagholder_engine::input::Inputs, a: bagholder_core::Accou
 }
 
 /// An instrument as the page names it: its bare ticker.
-fn symbol(inputs: &bagholder_engine::input::Inputs, i: bagholder_core::InstrumentId) -> String {
+pub(crate) fn symbol(inputs: &bagholder_engine::input::Inputs, i: bagholder_core::InstrumentId) -> String {
     let s = crate::wire::build::shown(inputs, i).symbol;
     if s.is_empty() { "An instrument with no name on record".into() } else { crate::orders::bare_symbol(&s) }
 }

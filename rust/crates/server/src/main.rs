@@ -191,6 +191,7 @@ fn serve() -> i32 {
         bagholder_core::log::set_sink(|line| logfile::write(line, bagholder_core::jiff::Timestamp::now()));
         let b = app::env_text("BAGHOLDER_BIND")?.unwrap_or_default().trim().to_string();
         let bind_host = if b.is_empty() { "127.0.0.1".to_string() } else { b };
+        let hosts = app::parse_hosts(&app::env_text("BAGHOLDER_HOSTS")?.unwrap_or_default())?;
         // a copy started for some work stops through its own stop when that work ends
         // (brief 64); one whose work has already ended is refused here, before anything
         let made = std::sync::Arc::new(std::sync::OnceLock::<std::sync::Arc<app::App>>::new());
@@ -204,9 +205,9 @@ fn serve() -> i32 {
                 }
             })?;
         }
-        Ok((home, root_dir()?, bind_host, port_choices()?, made))
+        Ok((home, root_dir()?, bind_host, hosts, port_choices()?, made))
     })();
-    let (home, root, bind_host, ports, made) = match started {
+    let (home, root, bind_host, hosts, ports, made) = match started {
         Ok(s) => s,
         Err(e) => {
             log(&format!("bagholder: {e}"));
@@ -226,6 +227,7 @@ fn serve() -> i32 {
         }
     };
     let a = app::App::new(home, root, bind_host.clone());
+    *a.hosts.lock().unwrap_or_else(|e| e.into_inner()) = hosts;
     // the watch on the work this copy was started for stops it from here on
     if made.set(a.clone()).is_err() {
         log("bagholder: the app was already bound to the work this copy was started for");
@@ -615,6 +617,8 @@ mod tests_types;
 mod tests_docs_golden;
 #[cfg(test)]
 mod tests_routes_golden;
+#[cfg(test)]
+mod tests_figures_golden;
 #[cfg(test)]
 mod tests_boundary;
 #[cfg(test)]

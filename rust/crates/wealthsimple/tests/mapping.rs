@@ -99,6 +99,49 @@ fn a_multi_leg_order_is_its_legs_and_their_cash() {
     assert!(buy.instrument.as_ref().unwrap().refs.iter().any(|r| r.scheme == RefScheme::Occ));
 }
 
+/// A multi-leg order with a fee: the fee comes out of the first leg's cash, so
+/// the legs' cash is the row's amount, what the account paid, and the leg's cash
+/// less its fee is its fills' value (the recorded order, its fee set by hand: every
+/// recorded one states none).
+#[test]
+fn a_multi_leg_order_s_fee_is_paid_out_of_its_legs_cash() {
+    let rec = replay(&fixtures());
+    let mut row = rec.source.rows.iter().find(|r| text(r, "type") == Some("OPTIONS_MULTILEG") && text(r, "unifiedStatus") == Some("COMPLETED")).unwrap().clone();
+    let mut order = json::parse(&std::fs::read_to_string(fixtures().join("multileg-48.json")).unwrap()).unwrap();
+    // the order as recorded nets to the row's amount with no fee
+    let net = Dec::parse(text(&row, "amount").unwrap()).unwrap();
+    let fee = dec("1.30");
+    if let json::Value::Object(o) = &mut order {
+        if let Some(json::Value::Object(d)) = o.get_mut("data") {
+            if let Some(json::Value::Object(m)) = d.get_mut("soOrdersMultilegOrder") {
+                m.insert("totalFee".into(), json::Value::String("1.30".into()));
+            }
+        }
+    }
+    if let json::Value::Object(r) = &mut row {
+        r.insert("amount".into(), json::Value::String(net.checked_sub(fee).unwrap().to_text()));
+    }
+    let dir = tempfile::tempdir().unwrap();
+    for e in std::fs::read_dir(fixtures()).unwrap() {
+        let p = e.unwrap().path();
+        let name = p.file_name().unwrap().to_string_lossy().into_owned();
+        if p.is_file() && !name.starts_with("multileg-") {
+            std::fs::copy(&p, dir.path().join(&name)).unwrap();
+        }
+    }
+    std::fs::write(dir.path().join("multileg-48.json"), order.canonical()).unwrap();
+    let mut rec = replay(dir.path());
+    let m = map_row(&mut rec, &row);
+    assert!(m.problems.is_empty(), "{:?}", m.problems);
+    let cash = m.legs.iter().try_fold(Dec::ZERO, |a, l| a.checked_add(l.cash.unwrap().amount)).unwrap();
+    assert_eq!(cash, net.checked_sub(fee).unwrap(), "the legs' cash is what the account was paid, less the fee");
+    let first = &m.legs[0];
+    assert_eq!(first.fee.unwrap().amount, fee);
+    // its cash less its fee is its fills' value: price × units × 100
+    let value = first.price.unwrap().amount.checked_mul(first.quantity.unwrap().abs()).unwrap().checked_mul(dec("100")).unwrap();
+    assert_eq!(first.cash.unwrap().amount.abs().checked_sub(fee).unwrap(), value);
+}
+
 #[test]
 fn an_order_that_filled_nothing_moves_nothing() {
     let rows = all();

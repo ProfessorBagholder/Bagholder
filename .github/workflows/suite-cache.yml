@@ -1,0 +1,57 @@
+# The compiled dependencies the pull requests' suites start from (`tests.yml`), saved after each
+# merge under the keys their jobs read: a pull request reads only its own caches and master's,
+# and no suite runs on master. Each job compiles what its jobs compile and runs nothing, and only
+# when master's cache lacks it: a dependency, the toolchain or the build profile changed. Its
+# own workflow, as no build here ships (`release.yml` holds only what does).
+name: Suite cache
+
+on:
+  push:
+    branches: [master]
+    paths:
+      - 'rust/**'
+      - '.github/workflows/tests.yml'
+      - '.github/workflows/suite-cache.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: suite-cache
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        key: [suite, demo-server]
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        id: cache
+        with:
+          workspaces: rust
+          shared-key: ${{ matrix.key }}
+      # what `tests.yml`'s rust and capacity-cases jobs build, with their flags
+      - name: The suite's builds
+        if: matrix.key == 'suite' && steps.cache.outputs.cache-hit != 'true'
+        env:
+          CI: "true"
+          RUSTFLAGS: "-D warnings"
+        run: |
+          cargo test --workspace --locked --no-run
+          cargo test --locked -p bagholder-server --bin bagholder --no-run
+          cargo test --locked -p bagholder-server --features demo,pull-broker --bin bagholder --no-run
+          cargo test --locked -p bagholder-server --features demo,pull-broker --test commands --no-run
+          cargo test --locked -p bagholder-wealthsimple --features demo --test generated --no-run
+          cargo clippy --locked -p bagholder-server -p bagholder-wealthsimple --features bagholder-server/demo,bagholder-server/pull-broker --bins --lib
+          cargo build --locked --bin bagholder
+          cargo clippy --locked --workspace --lib --bins --features bagholder-ws/standin
+        working-directory: rust
+      # what `tests.yml`'s browser and container jobs build
+      - name: The server with the made-up book
+        if: matrix.key == 'demo-server' && steps.cache.outputs.cache-hit != 'true'
+        run: cargo build --locked --bin bagholder --features demo
+        working-directory: rust

@@ -1,0 +1,1488 @@
+{
+ "data": {
+  "monthlyStatement": {
+   "id": "ex-statement-1",
+   "statementType": "brokerage_monthly_statement",
+   "data": {
+    "__typename": "BrokerageMonthlyStatementObject",
+    "custodianAccountId": "ex-custodian-1",
+    "isMultiCurrency": true,
+    "currentTransactions": [
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "ASSIGN",
+      "description": "XQA 72.00 USD CALL 2034-06-20: Assigned -1 contract (executed at 2034-03-03)",
+      "cashMovement": "0.0",
+      "balance": "25.25",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "ASSIGN",
+      "description": "XQB 72.00 USD CALL 2034-06-20: Assigned -1 contract (executed at 2034-03-03)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQB"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "BUY",
+      "description": "Purchase of 7.2177302134 XQC (executed at 2034-03-03)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQC"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "BUY",
+      "description": "Purchase of 7.2177302134 XQD (executed at 2034-03-03), FX Rate: 1.8536",
+      "cashMovement": "-0.06",
+      "balance": "25.19",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-05",
+      "transactionType": "BUY",
+      "description": "Purchase of 7.2177302134 XQE (executed at 2034-03-05), FX Rate: 1.8536",
+      "cashMovement": "-0.06",
+      "balance": "25.19",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-05",
+      "transactionType": "BUY",
+      "description": "XQG - Examplia Wobbleworks Plc.: Bought 4.8200 shares (executed at 2034-03-04)",
+      "cashMovement": "-0.06",
+      "balance": "25.13",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-09",
+      "transactionType": "BUY",
+      "description": "XQH - Examplia Wobbleworks Plc.: Bought 4.8200 shares (executed at 2034-03-08)",
+      "cashMovement": "-0.06",
+      "balance": "25.07",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-07",
+      "transactionType": "BUY",
+      "description": "XQJ - Examplia Wobbleworks Plc.: Bought 4.8200 shares at $3.00 per share (executed at 2034-03-06)",
+      "cashMovement": "-14.46",
+      "balance": "10.67",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-09",
+      "transactionType": "CONT",
+      "description": "Contribution (executed at 2034-03-09)",
+      "cashMovement": "0.06",
+      "balance": "10.73",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-17",
+      "transactionType": "CONT",
+      "description": "Contribution (executed at 2034-03-17)",
+      "cashMovement": "0.06",
+      "balance": "-1.06",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-11",
+      "transactionType": "CONT",
+      "description": "Deposit",
+      "cashMovement": "0.06",
+      "balance": "10.79",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-19",
+      "transactionType": "CORRECTION",
+      "description": "Cash correction (executed at 2034-03-19)",
+      "cashMovement": "-0.06",
+      "balance": "-1.12",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-25",
+      "transactionType": "DIV",
+      "description": "XQD - Examplia Wobbleworks Plc.: Cash dividend distribution, received at 2034-03-25",
+      "cashMovement": "0.06",
+      "balance": "-1.06",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-13",
+      "transactionType": "DIV",
+      "description": "XQE - Examplia Wobbleworks Plc.: Cash dividend distribution, received on 2034-03-13, record date of 2034-03-06",
+      "cashMovement": "0.06",
+      "balance": "10.85",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-27",
+      "transactionType": "DIV",
+      "description": "XQF - Examplia Wobbleworks Plc.: Cash dividend distribution, received on 2034-03-27, record date of 2034-03-20",
+      "cashMovement": "0.06",
+      "balance": "-1.00",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-29",
+      "transactionType": "DIV",
+      "description": "XQG - Examplia Wobbleworks Plc.: Stock dividend distribution, received at 2034-03-29",
+      "cashMovement": "0.06",
+      "balance": "-0.94",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-02",
+      "transactionType": "FEE",
+      "description": "ACCOUNTING_REIMBURSEMENT (executed at 2034-04-02)",
+      "cashMovement": "0.06",
+      "balance": "-0.88",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-15",
+      "transactionType": "FEE",
+      "description": "Fee for purchase of 7.2177302134 XQP (executed at 2034-03-15), FX Rate: 1.8536",
+      "cashMovement": "-0.06",
+      "balance": "10.79",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-17",
+      "transactionType": "FEE",
+      "description": "Fee for sale of 7.2177302134 XQR (executed at 2034-03-17), FX Rate: 1.8536",
+      "cashMovement": "-0.06",
+      "balance": "10.73",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-19",
+      "transactionType": "FEE",
+      "description": "Trading fee for purchase of 7.2177302134 XQU (executed at 2034-03-19), FX Rate: 1.8536",
+      "cashMovement": "-0.06",
+      "balance": "10.67",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-21",
+      "transactionType": "FEE",
+      "description": "Trading fee for sale of 7.2177302134 XQV (executed at 2034-03-21), FX Rate: 1.8536",
+      "cashMovement": "-0.06",
+      "balance": "10.61",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "FEE",
+      "description": "Withdrawal network fee charge of 7.2177302134 in XQW - Examplecoin",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQW"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-23",
+      "transactionType": "FPLINT",
+      "description": "Stock lending monthly interest payment",
+      "cashMovement": "0.06",
+      "balance": "10.67",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-10",
+      "transactionType": "FPLINT",
+      "description": "Stock lending monthly interest payment",
+      "cashMovement": "0.06",
+      "balance": "-0.82",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-25",
+      "transactionType": "FPLINT",
+      "description": "Stock lending monthly interest payment, FX Rate: 1.8536",
+      "cashMovement": "0.06",
+      "balance": "10.73",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-12",
+      "transactionType": "FPLINT",
+      "description": "Stock lending monthly interest payment, FX Rate: 1.8536",
+      "cashMovement": "0.06",
+      "balance": "-0.76",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-27",
+      "transactionType": "FXCONVERSION",
+      "description": "Convert CAD (executed at 2034-03-27) - $19USD = $35.22CAD",
+      "cashMovement": "35.22",
+      "balance": "45.95",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-29",
+      "transactionType": "INTCHARGED",
+      "description": "Margin Interest Charges for Example Period",
+      "cashMovement": "-0.06",
+      "balance": "45.89",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-14",
+      "transactionType": "LOAN",
+      "description": "XQE - Examplia Wobbleworks Plc.: 4.8200 Shares on loan (executed at 2034-04-14)",
+      "cashMovement": "0.0",
+      "balance": "-0.76",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "LOAN",
+      "description": "XQF - Examplia Wobbleworks Plc.: 4.8200 Shares on loan (executed at 2034-03-03)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQF"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-16",
+      "transactionType": "RECALL",
+      "description": "XQH - Examplia Wobbleworks Plc.: Loan of 4.8200 shares terminated (executed at 2034-04-16)",
+      "cashMovement": "0.0",
+      "balance": "-0.76",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-05",
+      "transactionType": "RECALL",
+      "description": "XQJ - Examplia Wobbleworks Plc.: Loan of 4.8200 shares terminated (executed at 2034-03-05)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQJ"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-18",
+      "transactionType": "REFER",
+      "description": "Referral bonus (2034-04-18)",
+      "cashMovement": "0.06",
+      "balance": "-0.70",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-31",
+      "transactionType": "SELL",
+      "description": "XQL - Examplia Wobbleworks Plc.: Sold 4.8200 shares (executed at 2034-03-30)",
+      "cashMovement": "0.06",
+      "balance": "45.95",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-20",
+      "transactionType": "SELL",
+      "description": "XQM - Examplia Wobbleworks Plc.: Sold 4.8200 shares (executed at 2034-04-19)",
+      "cashMovement": "0.06",
+      "balance": "-0.64",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-22",
+      "transactionType": "SELL",
+      "description": "XQN - Examplia Wobbleworks Plc.: Sold 4.8200 shares (executed at 2034-04-19), FX Rate: 1.8536",
+      "cashMovement": "0.06",
+      "balance": "-0.58",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-02",
+      "transactionType": "SELL",
+      "description": "XQP - Examplia Wobbleworks Plc.: Sold 4.8200 shares at $3.00 per share (executed at 2034-04-01)",
+      "cashMovement": "14.46",
+      "balance": "60.41",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "SELL",
+      "description": "Sale of 7.2177302134 XQT (executed at 2034-03-03)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQT"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-04",
+      "transactionType": "SELL",
+      "description": "Sale of 7.2177302134 XQU (executed at 2034-04-04), FX Rate: 1.8536",
+      "cashMovement": "0.06",
+      "balance": "60.47",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-24",
+      "transactionType": "SELL",
+      "description": "Sale of 7.2177302134 XQV (executed at 2034-04-24), FX Rate: 1.8536",
+      "cashMovement": "0.06",
+      "balance": "-0.52",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "STKDIS",
+      "description": "XQG - Examplia Wobbleworks Plc.: Distribution of -4.8200 shares (executed at 2034-03-03)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQG"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-06",
+      "transactionType": "STKDIS",
+      "description": "XQH - Examplia Wobbleworks Plc.: Distribution of 4.8200 shares (executed at 2034-05-06)",
+      "cashMovement": "0.0",
+      "balance": "3.35",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-07",
+      "transactionType": "STKDIS",
+      "description": "XQJ - Examplia Wobbleworks Plc.: Distribution of 4.8200 shares (executed at 2034-03-07)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQJ"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-07",
+      "transactionType": "STKREORG",
+      "description": "XQK - Examplia Wobbleworks Plc.: stock reorganization (executed at 2034-03-07)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQK"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-06",
+      "transactionType": "TRFIN",
+      "description": "Money transfer into the account (executed at 2034-04-06)",
+      "cashMovement": "0.06",
+      "balance": "60.53",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-08",
+      "transactionType": "TRFIN",
+      "description": "Money transfer into the account (executed at 2034-05-08)",
+      "cashMovement": "0.06",
+      "balance": "3.41",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-10",
+      "transactionType": "TRFIN",
+      "description": "Money transfer into the account (executed at 2034-05-10), FX Rate: 1.8536",
+      "cashMovement": "0.06",
+      "balance": "3.47",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "TRFIN",
+      "description": "XQP - Examplia Wobbleworks Plc.: Transfer of 4.8200 shares into the account (executed at 2034-03-04)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQP"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-12",
+      "transactionType": "TRFINTF",
+      "description": "Amalgamation transfer from Examplia Predecessorco: XQR - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQR into the account (executed at 2034-05-12)",
+      "cashMovement": "0.0",
+      "balance": "3.47",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-14",
+      "transactionType": "TRFINTF",
+      "description": "XQS - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQS into the account (executed at 2034-05-14)",
+      "cashMovement": "0.0",
+      "balance": "3.47",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-05",
+      "transactionType": "TRFINTF",
+      "description": "XQT - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQT into the account (executed at 2034-03-05)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQT"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-16",
+      "transactionType": "TRFINTF",
+      "description": "XQU - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQU into the account (executed at 2034-05-16), FX Rate: 1.8536",
+      "cashMovement": "0.0",
+      "balance": "3.47",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-08",
+      "transactionType": "TRFINTF",
+      "description": "Tax-free money transfer into the account (executed at 2034-04-08)",
+      "cashMovement": "0.06",
+      "balance": "60.59",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-10",
+      "transactionType": "TRFOUT",
+      "description": "Money transfer out of the account (executed at 2034-04-10)",
+      "cashMovement": "-0.06",
+      "balance": "60.53",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-18",
+      "transactionType": "TRFOUT",
+      "description": "Money transfer out of the account (executed at 2034-05-18)",
+      "cashMovement": "-0.06",
+      "balance": "3.41",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-20",
+      "transactionType": "TRFOUT",
+      "description": "Money transfer out of the account (executed at 2034-05-20), FX Rate: 1.8536",
+      "cashMovement": "-0.06",
+      "balance": "3.35",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-03",
+      "transactionType": "TRFOUT",
+      "description": "XQZ - Examplia Wobbleworks Plc.: Transfer of 4.8200 shares out of the account (executed at 2034-03-04)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQZ"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-22",
+      "transactionType": "TRFOUTTF",
+      "description": "XQA - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQA out of the account (executed at 2034-05-22)",
+      "cashMovement": "0.0",
+      "balance": "3.35",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-03-05",
+      "transactionType": "TRFOUTTF",
+      "description": "XQB - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQB out of the account (executed at 2034-03-06)",
+      "cashMovement": "0.0",
+      "balance": "39.9",
+      "unit": "XQB"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-12",
+      "transactionType": "WD",
+      "description": "Non-contribution withdrawal (executed at 2034-04-12)",
+      "cashMovement": "-0.06",
+      "balance": "60.47",
+      "unit": "$CAD"
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-05-26",
+      "transactionType": "WD",
+      "description": "Non-contribution withdrawal (executed at 2034-05-26)",
+      "cashMovement": "-0.06",
+      "balance": "3.29",
+      "unit": null
+     },
+     {
+      "__typename": "BrokerageMonthlyStatementTransactions",
+      "transactionDate": "2034-04-14",
+      "transactionType": "WD",
+      "description": "Withdrawal (executed at 2034-04-14)",
+      "cashMovement": "-0.06",
+      "balance": "60.41",
+      "unit": "$CAD"
+     }
+    ],
+    "activitiesPerCurrency": [
+     {
+      "currency": "CAD",
+      "currentTransactions": [
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "ASSIGN",
+        "description": "XQA 72.00 USD CALL 2034-06-20: Assigned -1 contract (executed at 2034-03-03)",
+        "cashMovement": "0.0",
+        "balance": "25.25",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "ASSIGN",
+        "description": "XQB 72.00 USD CALL 2034-06-20: Assigned -1 contract (executed at 2034-03-03)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQB"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "BUY",
+        "description": "Purchase of 7.2177302134 XQC (executed at 2034-03-03)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQC"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "BUY",
+        "description": "Purchase of 7.2177302134 XQD (executed at 2034-03-03), FX Rate: 1.8536",
+        "cashMovement": "-0.06",
+        "balance": "25.19",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-05",
+        "transactionType": "BUY",
+        "description": "Purchase of 7.2177302134 XQE (executed at 2034-03-05), FX Rate: 1.8536",
+        "cashMovement": "-0.06",
+        "balance": "25.19",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-05",
+        "transactionType": "BUY",
+        "description": "XQG - Examplia Wobbleworks Plc.: Bought 4.8200 shares (executed at 2034-03-04)",
+        "cashMovement": "-0.06",
+        "balance": "25.13",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-09",
+        "transactionType": "BUY",
+        "description": "XQH - Examplia Wobbleworks Plc.: Bought 4.8200 shares (executed at 2034-03-08)",
+        "cashMovement": "-0.06",
+        "balance": "25.07",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-07",
+        "transactionType": "BUY",
+        "description": "XQJ - Examplia Wobbleworks Plc.: Bought 4.8200 shares at $3.00 per share (executed at 2034-03-06)",
+        "cashMovement": "-14.46",
+        "balance": "10.67",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-09",
+        "transactionType": "CONT",
+        "description": "Contribution (executed at 2034-03-09)",
+        "cashMovement": "0.06",
+        "balance": "10.73",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-17",
+        "transactionType": "CONT",
+        "description": "Contribution (executed at 2034-03-17)",
+        "cashMovement": "0.06",
+        "balance": "-1.06",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-11",
+        "transactionType": "CONT",
+        "description": "Deposit",
+        "cashMovement": "0.06",
+        "balance": "10.79",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-19",
+        "transactionType": "CORRECTION",
+        "description": "Cash correction (executed at 2034-03-19)",
+        "cashMovement": "-0.06",
+        "balance": "-1.12",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-25",
+        "transactionType": "DIV",
+        "description": "XQD - Examplia Wobbleworks Plc.: Cash dividend distribution, received at 2034-03-25",
+        "cashMovement": "0.06",
+        "balance": "-1.06",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-13",
+        "transactionType": "DIV",
+        "description": "XQE - Examplia Wobbleworks Plc.: Cash dividend distribution, received on 2034-03-13, record date of 2034-03-06",
+        "cashMovement": "0.06",
+        "balance": "10.85",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-27",
+        "transactionType": "DIV",
+        "description": "XQF - Examplia Wobbleworks Plc.: Cash dividend distribution, received on 2034-03-27, record date of 2034-03-20",
+        "cashMovement": "0.06",
+        "balance": "-1.00",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-29",
+        "transactionType": "DIV",
+        "description": "XQG - Examplia Wobbleworks Plc.: Stock dividend distribution, received at 2034-03-29",
+        "cashMovement": "0.06",
+        "balance": "-0.94",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-02",
+        "transactionType": "FEE",
+        "description": "ACCOUNTING_REIMBURSEMENT (executed at 2034-04-02)",
+        "cashMovement": "0.06",
+        "balance": "-0.88",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-15",
+        "transactionType": "FEE",
+        "description": "Fee for purchase of 7.2177302134 XQP (executed at 2034-03-15), FX Rate: 1.8536",
+        "cashMovement": "-0.06",
+        "balance": "10.79",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-17",
+        "transactionType": "FEE",
+        "description": "Fee for sale of 7.2177302134 XQR (executed at 2034-03-17), FX Rate: 1.8536",
+        "cashMovement": "-0.06",
+        "balance": "10.73",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-19",
+        "transactionType": "FEE",
+        "description": "Trading fee for purchase of 7.2177302134 XQU (executed at 2034-03-19), FX Rate: 1.8536",
+        "cashMovement": "-0.06",
+        "balance": "10.67",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-21",
+        "transactionType": "FEE",
+        "description": "Trading fee for sale of 7.2177302134 XQV (executed at 2034-03-21), FX Rate: 1.8536",
+        "cashMovement": "-0.06",
+        "balance": "10.61",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "FEE",
+        "description": "Withdrawal network fee charge of 7.2177302134 in XQW - Examplecoin",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQW"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-23",
+        "transactionType": "FPLINT",
+        "description": "Stock lending monthly interest payment",
+        "cashMovement": "0.06",
+        "balance": "10.67",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-10",
+        "transactionType": "FPLINT",
+        "description": "Stock lending monthly interest payment",
+        "cashMovement": "0.06",
+        "balance": "-0.82",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-25",
+        "transactionType": "FPLINT",
+        "description": "Stock lending monthly interest payment, FX Rate: 1.8536",
+        "cashMovement": "0.06",
+        "balance": "10.73",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-12",
+        "transactionType": "FPLINT",
+        "description": "Stock lending monthly interest payment, FX Rate: 1.8536",
+        "cashMovement": "0.06",
+        "balance": "-0.76",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-27",
+        "transactionType": "FXCONVERSION",
+        "description": "Convert CAD (executed at 2034-03-27) - $19USD = $35.22CAD",
+        "cashMovement": "35.22",
+        "balance": "45.95",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-29",
+        "transactionType": "INTCHARGED",
+        "description": "Margin Interest Charges for Example Period",
+        "cashMovement": "-0.06",
+        "balance": "45.89",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-14",
+        "transactionType": "LOAN",
+        "description": "XQE - Examplia Wobbleworks Plc.: 4.8200 Shares on loan (executed at 2034-04-14)",
+        "cashMovement": "0.0",
+        "balance": "-0.76",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "LOAN",
+        "description": "XQF - Examplia Wobbleworks Plc.: 4.8200 Shares on loan (executed at 2034-03-03)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQF"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-16",
+        "transactionType": "RECALL",
+        "description": "XQH - Examplia Wobbleworks Plc.: Loan of 4.8200 shares terminated (executed at 2034-04-16)",
+        "cashMovement": "0.0",
+        "balance": "-0.76",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-05",
+        "transactionType": "RECALL",
+        "description": "XQJ - Examplia Wobbleworks Plc.: Loan of 4.8200 shares terminated (executed at 2034-03-05)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQJ"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-18",
+        "transactionType": "REFER",
+        "description": "Referral bonus (2034-04-18)",
+        "cashMovement": "0.06",
+        "balance": "-0.70",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-31",
+        "transactionType": "SELL",
+        "description": "XQL - Examplia Wobbleworks Plc.: Sold 4.8200 shares (executed at 2034-03-30)",
+        "cashMovement": "0.06",
+        "balance": "45.95",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-20",
+        "transactionType": "SELL",
+        "description": "XQM - Examplia Wobbleworks Plc.: Sold 4.8200 shares (executed at 2034-04-19)",
+        "cashMovement": "0.06",
+        "balance": "-0.64",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-22",
+        "transactionType": "SELL",
+        "description": "XQN - Examplia Wobbleworks Plc.: Sold 4.8200 shares (executed at 2034-04-19), FX Rate: 1.8536",
+        "cashMovement": "0.06",
+        "balance": "-0.58",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-02",
+        "transactionType": "SELL",
+        "description": "XQP - Examplia Wobbleworks Plc.: Sold 4.8200 shares at $3.00 per share (executed at 2034-04-01)",
+        "cashMovement": "14.46",
+        "balance": "60.41",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "SELL",
+        "description": "Sale of 7.2177302134 XQT (executed at 2034-03-03)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQT"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-04",
+        "transactionType": "SELL",
+        "description": "Sale of 7.2177302134 XQU (executed at 2034-04-04), FX Rate: 1.8536",
+        "cashMovement": "0.06",
+        "balance": "60.47",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-24",
+        "transactionType": "SELL",
+        "description": "Sale of 7.2177302134 XQV (executed at 2034-04-24), FX Rate: 1.8536",
+        "cashMovement": "0.06",
+        "balance": "-0.52",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "STKDIS",
+        "description": "XQG - Examplia Wobbleworks Plc.: Distribution of -4.8200 shares (executed at 2034-03-03)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQG"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-06",
+        "transactionType": "STKDIS",
+        "description": "XQH - Examplia Wobbleworks Plc.: Distribution of 4.8200 shares (executed at 2034-05-06)",
+        "cashMovement": "0.0",
+        "balance": "3.35",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-07",
+        "transactionType": "STKDIS",
+        "description": "XQJ - Examplia Wobbleworks Plc.: Distribution of 4.8200 shares (executed at 2034-03-07)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQJ"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-07",
+        "transactionType": "STKREORG",
+        "description": "XQK - Examplia Wobbleworks Plc.: stock reorganization (executed at 2034-03-07)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQK"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-06",
+        "transactionType": "TRFIN",
+        "description": "Money transfer into the account (executed at 2034-04-06)",
+        "cashMovement": "0.06",
+        "balance": "60.53",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-08",
+        "transactionType": "TRFIN",
+        "description": "Money transfer into the account (executed at 2034-05-08)",
+        "cashMovement": "0.06",
+        "balance": "3.41",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-10",
+        "transactionType": "TRFIN",
+        "description": "Money transfer into the account (executed at 2034-05-10), FX Rate: 1.8536",
+        "cashMovement": "0.06",
+        "balance": "3.47",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "TRFIN",
+        "description": "XQP - Examplia Wobbleworks Plc.: Transfer of 4.8200 shares into the account (executed at 2034-03-04)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQP"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-12",
+        "transactionType": "TRFINTF",
+        "description": "Amalgamation transfer from Examplia Predecessorco: XQR - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQR into the account (executed at 2034-05-12)",
+        "cashMovement": "0.0",
+        "balance": "3.47",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-14",
+        "transactionType": "TRFINTF",
+        "description": "XQS - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQS into the account (executed at 2034-05-14)",
+        "cashMovement": "0.0",
+        "balance": "3.47",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-05",
+        "transactionType": "TRFINTF",
+        "description": "XQT - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQT into the account (executed at 2034-03-05)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQT"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-16",
+        "transactionType": "TRFINTF",
+        "description": "XQU - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQU into the account (executed at 2034-05-16), FX Rate: 1.8536",
+        "cashMovement": "0.0",
+        "balance": "3.47",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-08",
+        "transactionType": "TRFINTF",
+        "description": "Tax-free money transfer into the account (executed at 2034-04-08)",
+        "cashMovement": "0.06",
+        "balance": "60.59",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-10",
+        "transactionType": "TRFOUT",
+        "description": "Money transfer out of the account (executed at 2034-04-10)",
+        "cashMovement": "-0.06",
+        "balance": "60.53",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-18",
+        "transactionType": "TRFOUT",
+        "description": "Money transfer out of the account (executed at 2034-05-18)",
+        "cashMovement": "-0.06",
+        "balance": "3.41",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-20",
+        "transactionType": "TRFOUT",
+        "description": "Money transfer out of the account (executed at 2034-05-20), FX Rate: 1.8536",
+        "cashMovement": "-0.06",
+        "balance": "3.35",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "TRFOUT",
+        "description": "XQZ - Examplia Wobbleworks Plc.: Transfer of 4.8200 shares out of the account (executed at 2034-03-04)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQZ"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-22",
+        "transactionType": "TRFOUTTF",
+        "description": "XQA - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQA out of the account (executed at 2034-05-22)",
+        "cashMovement": "0.0",
+        "balance": "3.35",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-05",
+        "transactionType": "TRFOUTTF",
+        "description": "XQB - Examplia Wobbleworks Plc.: Transfer of 4.8200 XQB out of the account (executed at 2034-03-06)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQB"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-12",
+        "transactionType": "WD",
+        "description": "Non-contribution withdrawal (executed at 2034-04-12)",
+        "cashMovement": "-0.06",
+        "balance": "60.47",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-26",
+        "transactionType": "WD",
+        "description": "Non-contribution withdrawal (executed at 2034-05-26)",
+        "cashMovement": "-0.06",
+        "balance": "3.29",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-14",
+        "transactionType": "WD",
+        "description": "Withdrawal (executed at 2034-04-14)",
+        "cashMovement": "-0.06",
+        "balance": "60.41",
+        "unit": "$CAD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-16",
+        "transactionType": "WHTFED",
+        "description": "Federal withholding tax (executed at 2034-04-16)",
+        "cashMovement": "-0.06",
+        "balance": "60.35",
+        "unit": "$CAD"
+       }
+      ],
+      "__typename": "BrokerageMonthlyStatementActivitiesPerCurrency"
+     },
+     {
+      "currency": "USD",
+      "currentTransactions": [
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-05",
+        "transactionType": "BUY",
+        "description": "XQG - Examplia Wobbleworks Plc.: Bought 4.8200 shares (executed at 2034-03-04)",
+        "cashMovement": "-0.06",
+        "balance": "25.13",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-07",
+        "transactionType": "BUY",
+        "description": "XQJ - Examplia Wobbleworks Plc.: Bought 4.8200 shares at $3.00 per share (executed at 2034-03-06)",
+        "cashMovement": "-14.46",
+        "balance": "10.67",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "BUY",
+        "description": "XQL - Examplia Wobbleworks Plc.: Bought 0.0000 shares at $3.00 per share (executed at 2034-03-02), FX Rate: 1.8536",
+        "cashMovement": "-14.46",
+        "balance": "10.79",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "BUY",
+        "description": "XQL - Examplia Wobbleworks Plc.: Bought 4.8200 shares at $3.00 per share (executed at 2034-03-02)",
+        "cashMovement": "0.0",
+        "balance": "10.79",
+        "unit": "XQL"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-05",
+        "transactionType": "BUYTOCLOSE",
+        "description": "XQM 72.00 USD CALL 2034-06-20: Bought 1 contract (executed at 2034-03-02)",
+        "cashMovement": "-5.0",
+        "balance": "5.79",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-07",
+        "transactionType": "BUYTOCLOSE",
+        "description": "XQN 72.00 USD CALL 2034-06-20: Bought 1 contract (executed at 2034-03-06), Fee: $3.7300",
+        "cashMovement": "-8.73",
+        "balance": "-2.94",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-11",
+        "transactionType": "BUYTOCLOSE",
+        "description": "XQP 72.00 USD CALL 2034-06-20: Bought 1 contract (executed at 2034-03-10), Fee: $3.7300",
+        "cashMovement": "-8.73",
+        "balance": "16.34",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-09",
+        "transactionType": "BUYTOCLOSE",
+        "description": "XQR 72.00 USD PUT 2034-06-20: Bought 1 contract (executed at 2034-03-08)",
+        "cashMovement": "-5.0",
+        "balance": "-7.94",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-11",
+        "transactionType": "BUYTOOPEN",
+        "description": "XQS 72.00 USD CALL 2034-06-20: Bought 1 contract (executed at 2034-03-10)",
+        "cashMovement": "-5.0",
+        "balance": "-12.94",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-13",
+        "transactionType": "BUYTOOPEN",
+        "description": "XQT 72.00 USD CALL 2034-06-20: Bought 1 contract (executed at 2034-03-10), Fee: $3.7300",
+        "cashMovement": "-8.73",
+        "balance": "-21.67",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-13",
+        "transactionType": "BUYTOOPEN",
+        "description": "XQU 72.00 USD CALL 2034-06-20: Bought 1 contract (executed at 2034-03-12), Fee: $3.7300",
+        "cashMovement": "-8.73",
+        "balance": "7.61",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-15",
+        "transactionType": "BUYTOOPEN",
+        "description": "XQV 72.00 USD PUT 2034-06-20: Bought 1 contract (executed at 2034-03-14), Fee: $3.7300",
+        "cashMovement": "-8.73",
+        "balance": "-30.40",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-15",
+        "transactionType": "BUYTOOPEN",
+        "description": "XQW 72.00 USD PUT 2034-06-20: Bought 1 contract (executed at 2034-03-14), Fee: $3.7300",
+        "cashMovement": "-8.73",
+        "balance": "-1.12",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-13",
+        "transactionType": "DIV",
+        "description": "XQE - Examplia Wobbleworks Plc.: Cash dividend distribution, received on 2034-03-13, record date of 2034-03-06",
+        "cashMovement": "0.06",
+        "balance": "10.85",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-31",
+        "transactionType": "EXPIRY",
+        "description": "XQH 72.00 USD CALL 2034-06-20: Expired -1 contract (executed at 2034-03-31)",
+        "cashMovement": "0.0",
+        "balance": "-0.94",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "EXPIRY",
+        "description": "XQJ 72.00 USD CALL 2034-06-20: Expired -1 contract (executed at 2034-03-03)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQJ"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-05",
+        "transactionType": "EXPIRY",
+        "description": "XQK 72.00 USD CALL 2034-06-20: Expired 1 contract (executed at 2034-03-05)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQK"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "EXPIRY",
+        "description": "XQL 72.00 USD PUT 2034-06-20: Expired 1 contract (executed at 2034-03-03)",
+        "cashMovement": "0.0",
+        "balance": "39.9",
+        "unit": "XQL"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-23",
+        "transactionType": "FPLINT",
+        "description": "Stock lending monthly interest payment",
+        "cashMovement": "0.06",
+        "balance": "10.67",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-17",
+        "transactionType": "FXCONVERSION",
+        "description": "Convert USD (executed at 2034-03-17) - $19USD = $35.22CAD",
+        "cashMovement": "-19.0",
+        "balance": "-49.40",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-29",
+        "transactionType": "INTCHARGED",
+        "description": "Margin Interest Charges for Example Period",
+        "cashMovement": "-0.06",
+        "balance": "45.89",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-19",
+        "transactionType": "NRT",
+        "description": "Non-resident tax (executed at 2034-03-19)",
+        "cashMovement": "-0.06",
+        "balance": "-49.46",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-31",
+        "transactionType": "SELL",
+        "description": "XQL - Examplia Wobbleworks Plc.: Sold 4.8200 shares (executed at 2034-03-30)",
+        "cashMovement": "0.06",
+        "balance": "45.95",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-02",
+        "transactionType": "SELL",
+        "description": "XQP - Examplia Wobbleworks Plc.: Sold 4.8200 shares at $3.00 per share (executed at 2034-04-01)",
+        "cashMovement": "14.46",
+        "balance": "60.41",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-21",
+        "transactionType": "SELL",
+        "description": "XQS - Examplia Wobbleworks Plc.: Sold 0.0000 shares at $3.00 per share (executed at 2034-03-17), FX Rate: 1.8536",
+        "cashMovement": "14.46",
+        "balance": "-35.00",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-21",
+        "transactionType": "SELL",
+        "description": "XQS - Examplia Wobbleworks Plc.: Sold 4.8200 shares at $3.00 per share (executed at 2034-03-17)",
+        "cashMovement": "0.0",
+        "balance": "-35.00",
+        "unit": "XQS"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-23",
+        "transactionType": "SELLTOCLOSE",
+        "description": "XQX 72.00 USD CALL 2034-06-20: Sold 1 contract (executed at 2034-03-22)",
+        "cashMovement": "5.0",
+        "balance": "-30.00",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-25",
+        "transactionType": "SELLTOCLOSE",
+        "description": "XQY 72.00 USD CALL 2034-06-20: Sold 1 contract (executed at 2034-03-22), Fee: $3.7300",
+        "cashMovement": "1.27",
+        "balance": "-28.73",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-28",
+        "transactionType": "SELLTOCLOSE",
+        "description": "XQZ 72.00 USD CALL 2034-06-20: Sold 1 contract (executed at 2034-04-27), Fee: $3.7300",
+        "cashMovement": "1.27",
+        "balance": "0.81",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-30",
+        "transactionType": "SELLTOCLOSE",
+        "description": "XQA 72.00 USD PUT 2034-06-20: Sold 1 contract (executed at 2034-04-29), Fee: $3.7300",
+        "cashMovement": "1.27",
+        "balance": "2.08",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-27",
+        "transactionType": "SELLTOOPEN",
+        "description": "XQB 72.00 USD CALL 2034-06-20: Sold 1 contract (executed at 2034-03-26)",
+        "cashMovement": "5.0",
+        "balance": "-23.73",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-29",
+        "transactionType": "SELLTOOPEN",
+        "description": "XQC 72.00 USD CALL 2034-06-20: Sold 1 contract (executed at 2034-03-28), Fee: $3.7300",
+        "cashMovement": "1.27",
+        "balance": "-22.46",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-05-02",
+        "transactionType": "SELLTOOPEN",
+        "description": "XQD 72.00 USD CALL 2034-06-20: Sold 1 contract (executed at 2034-05-01), Fee: $3.7300",
+        "cashMovement": "1.27",
+        "balance": "3.35",
+        "unit": null
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-31",
+        "transactionType": "SELLTOOPEN",
+        "description": "XQE 72.00 USD PUT 2034-06-20: Sold 1 contract (executed at 2034-03-28)",
+        "cashMovement": "5.0",
+        "balance": "-17.46",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-06",
+        "transactionType": "TRFIN",
+        "description": "Money transfer into the account (executed at 2034-04-06)",
+        "cashMovement": "0.06",
+        "balance": "60.53",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-10",
+        "transactionType": "TRFOUT",
+        "description": "Money transfer out of the account (executed at 2034-04-10)",
+        "cashMovement": "-0.06",
+        "balance": "60.53",
+        "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-04-12",
+        "transactionType": "WD",
+        "description": "Non-contribution withdrawal (executed at 2034-04-12)",
+        "cashMovement": "-0.06",
+        "balance": "60.47",
+        "unit": "$USD"
+       }
+      ],
+      "__typename": "BrokerageMonthlyStatementActivitiesPerCurrency"
+     }
+    ]
+   },
+   "__typename": "Statement"
+  }
+ }
+}

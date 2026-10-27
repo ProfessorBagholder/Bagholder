@@ -487,7 +487,8 @@
       "S (TFSA): book USD 1000 - 500 = 500 and 10 X (s1, s2). No holds. Cash 500 = broker 500; units 10 X = broker 10 X as of 2026-01-07. No difference.",
       "T (cash): book CAD 1000 (t1). Hold: buy stating 100 -> 100. Net 1000 - 100 = 900 vs broker 850: differs. The only statement is the one the read covers (01-07 15:00, before the read at 16:00); none made after the read states 850 again, so it is pending. own 900.00, broker 850.00. differences 1, pending 1.",
       "U (cash): book CAD 1000 (u1). Hold: withdrawal, amount unstated -> CAD check waits. 1000 vs broker 600: differs, pending. own 1000.00, broker 600.00. differences 1, pending 1.",
-      "V: cash 3,000 − 100 (one long W bought) = 2,900 USD; the working sale of 3 W contracts closes the 1 long and opens 2: hold = (3,000 collateral − 150 premium) × 2/3 = 1,900 (SPEC: the premium's share, by contracts, of those it opens); book net 2,900 − 1,900 = 1,000.00 against the broker's 1,100.00: one difference; no statement after the read states 1,100 again, so it is pending."
+      "V: cash 3,000 − 100 (one long W bought) = 2,900 USD; the working sale of 3 W contracts closes the 1 long and opens 2: hold = (3,000 collateral − 150 premium) × 2/3 = 1,900 (SPEC: the premium's share, by contracts, of those it opens); book net 2,900 − 1,900 = 1,000.00 against the broker's 1,100.00: one difference; no statement after the read states 1,100 again, so it is pending.",
+      "SD (cash): book CAD 1000 (sd1). Hold: withdrawal stating 100 (a card spend not yet final, whose row states its amount) -> 100. Net 1000 - 100 = 900 = broker 900, which is net of the spend. No difference."
     ],
     "today": "2026-01-08",
     "accounts": [
@@ -523,6 +524,9 @@
       {
         "id": "V",
         "registration": "tfsa"
+      },
+      {
+        "id": "SD"
       }
     ],
     "instruments": [
@@ -666,6 +670,15 @@
         "instrument": "W",
         "qty": "1",
         "cash": "-100"
+      },
+      {
+        "id": "sd1",
+        "account": "SD",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "deposit",
+        "cash": "1000",
+        "currency": "CAD"
       }
     ],
     "brokers": {
@@ -828,6 +841,23 @@
             "premium": "150"
           }
         ]
+      },
+      "SD": {
+        "cash": {
+          "CAD": "900"
+        },
+        "cash_read": {
+          "CAD": "900"
+        },
+        "as_of": "2026-01-07T15:00:00Z",
+        "activity_read_at": "2026-01-07T16:00:00Z",
+        "cash_read_holds": [
+          {
+            "kind": "withdrawal",
+            "currency": "CAD",
+            "amount": "100"
+          }
+        ]
       }
     },
     "expect": {
@@ -913,6 +943,12 @@
               "pending": true
             }
           ]
+        },
+        {
+          "account": "SD",
+          "differences": 0,
+          "pending_differences": 0,
+          "cash": []
         }
       ]
     }

@@ -81,6 +81,10 @@ impl Rounding {
 impl Dec {
     pub const ZERO: Dec = Dec(Decimal::ZERO);
     pub const ONE: Dec = Dec(Decimal::ONE);
+    /// The largest exponent scientific notation is expanded for: far past the
+    /// places and digits a `Dec` holds either way, so a larger one is no value a
+    /// `Dec` can be, and expanding it would only build a string that long.
+    pub const EXPONENT_CAP: i64 = 4096;
 
     /// A whole number.
     pub fn from_int(n: i64) -> Dec {
@@ -134,7 +138,7 @@ impl Dec {
         }
         let exp: i64 = exponent.parse().map_err(|_| malformed())?;
         // far past any place a `Dec` holds: only a zero is still a value
-        if exp.abs() > 4096 {
+        if exp.abs() > Dec::EXPONENT_CAP {
             let zero = mantissa.bytes().all(|b| matches!(b, b'-' | b'0' | b'.'));
             return if zero { Ok(Dec::ZERO) } else { Err(DecError::Overflow) };
         }

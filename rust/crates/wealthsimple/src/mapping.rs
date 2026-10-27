@@ -103,8 +103,15 @@ impl Mapping for WealthsimpleMapping {
     ///    between the two accounts that day is not this one (brief 76's shapes,
     ///    an account retired with its USD moved on both sides and its CAD by
     ///    its arrival).
+    /// 17: a multi-leg order's fee is paid out of its first leg's cash, so its
+    ///    legs' cash comes to what the account paid, as a single fill's does
+    ///    (it stood beside the cash, and the book's cash was its fee high).
+    /// 18: a card spend from the person's cash (SPEND) is a card purchase once
+    ///    final, and while not final holds the amount its row states, which
+    ///    Wealthsimple's stated cash already leaves out (a pending spend the
+    ///    book held as nothing, 2026-10-26).
     fn version(&self) -> u32 {
-        16
+        18
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -222,7 +229,7 @@ fn rule(ty: &str, sub: Option<&str>) -> Option<Rule> {
         ("CRYPTO_TRANSFER", Some("TRANSFER_OUT")) => r(Kind::TransferOut, U::Out, C::None, true),
         ("CRYPTO_STAKING_REWARD", _) => r(Kind::StakingReward, U::In, C::None, true),
         ("CRYPTO_STAKING_ACTION", _) => r(Kind::StakingMove, U::None, C::None, true),
-        ("CREDIT_CARD", Some("PURCHASE")) => r(Kind::CardPurchase, U::None, C::Paid, false),
+        ("CREDIT_CARD", Some("PURCHASE")) | ("SPEND", _) => r(Kind::CardPurchase, U::None, C::Paid, false),
         ("CREDIT_CARD", Some("REFUND")) => r(Kind::CardRefund, U::None, C::Received, false),
         ("CREDIT_CARD", Some("PAYMENT")) => r(Kind::TransferIn, U::None, C::Received, false),
         ("CREDIT_CARD_PAYMENT", _) => r(Kind::TransferOut, U::None, C::Paid, false),
@@ -322,8 +329,10 @@ fn map_record(ctx: &MapContext, v: &Value) -> Result<Mapped, Failed> {
 /// rest); a put sold is cash-secured outside margin at strike × multiplier ×
 /// contracts less the premium (43198629134235), which the engine applies to the
 /// contracts it opens; money leaving the account is reserved in an amount not
-/// stated (360058451453). A sell holds nothing: the units Wealthsimple states
-/// are not net of a working sell (a recorded reply, 2026-10-03), nor its cash.
+/// stated (360058451453), except a card spend, whose authorized amount its row
+/// states and Wealthsimple's stated cash leaves out (2026-10-26). A sell holds
+/// nothing: the units Wealthsimple states are not net of a working sell (a
+/// recorded reply, 2026-10-03), nor its cash.
 fn hold(root: &Node, row: &Row) -> Result<Option<HoldDraft>, Failed> {
     if crate::adapter::settled(row.status) != Some(false) {
         return Ok(None);
@@ -354,6 +363,7 @@ fn hold(root: &Node, row: &Row) -> Result<Option<HoldDraft>, Failed> {
             other => return Err(row.node.field("contractType")?.mismatch(format!("expected call or put, found {other:?}")).into()),
         },
         ("WITHDRAWAL", _) | ("P2P_PAYMENT", Some("SEND")) | ("INTERNAL_TRANSFER" | "LEGACY_INTERNAL_TRANSFER", Some("SOURCE")) | ("INSTITUTIONAL_TRANSFER_INTENT", Some("TRANSFER_OUT")) => Some(draft(HoldKind::Withdrawal, None, None, None, None)),
+        ("SPEND", _) => Some(draft(HoldKind::Withdrawal, row.amount.map(Dec::abs), None, None, None)),
         _ => None,
     })
 }
@@ -567,8 +577,13 @@ fn multi_leg(root: &Node, row: &Row, base: &Base, out: &mut Mapped) -> Result<()
             return Ok(());
         }
     }
+    // the fee is paid out of the first leg's cash, as a single fill's cash carries
+    // its fee: the legs' cash then comes to the row's amount, what the account paid
     if let (Some(f), Some(first)) = (fee, drafts.first_mut()) {
         let currency = first.cash.map(|c| c.currency).unwrap_or(Currency::USD);
+        if let Some(c) = first.cash.as_mut() {
+            c.amount = c.amount.checked_sub(f).map_err(|e| Problem::new("unreadable", e.to_string()))?;
+        }
         first.fee = Some(Money::new(f.abs(), currency));
     }
     out.legs.extend(drafts);

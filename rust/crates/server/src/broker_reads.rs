@@ -423,6 +423,8 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     let applied = f.pulled(now, &report.stated_for);
     end_steps(app);
     applied?;
+    // a mapping version refused before, tried again with what the broker states now
+    f.retry_refused(now)?;
     // each month whose statement the book does not reconcile with, said in the header
     let unreconciled = f.read(|e| [crate::status::unreconciled(e, &report.statements.unreconciled), crate::status::feed_only(e, &report.statements.feed_only)].concat()).unwrap_or_default();
     let said = unreconciled.join(" ");

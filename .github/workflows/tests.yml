@@ -1,9 +1,13 @@
-# Every suite, on every pull request and every push to master that touches anything but markdown,
-# or the markdown a test reads. Nothing ran on a pull request before this: a branch was only ever as
+# Every suite, once, on every pull request that touches anything but markdown, or the markdown a
+# test reads: never again on master for the same code once merged (the owner, 2026-10-26: "you should
+# not be re-running duplicate and triplicate things ever, only when absolutely required as a final
+# step"). The suites on Windows and macOS are that final step, run on the commit a release is cut
+# from (`release.yml`), and nothing is published without them. Nothing ran on a pull request before this: a branch was only ever as
 # tested as whoever remembered to run it. The server and the page are one product -- the page is
-# built into the server -- so a pull request is green only when both are. The tests read three
-# markdown files (SPEC.md for its rule ids, docs/spec-ids.md, and docs/architecture.md for the cost
-# budget), so a change to one of them runs everything; any other documentation runs nothing.
+# built into the server -- so a pull request is green only when both are. The tests read the
+# markdown files the paths below name (SPEC.md for its rule ids, docs/spec-ids.md, docs/architecture.md
+# for the cost budget, the recorded statement forms' README), so a change to one of them runs
+# everything; any other documentation runs nothing.
 name: Tests
 
 on:
@@ -15,15 +19,7 @@ on:
       - 'docs/spec-ids.md'
       - 'docs/architecture.md'
       - 'CLAUDE.md'
-  push:
-    branches: [master]
-    paths:
-      - '**'
-      - '!**.md'
-      - 'SPEC.md'
-      - 'docs/spec-ids.md'
-      - 'docs/architecture.md'
-      - 'CLAUDE.md'
+      - 'rust/crates/wealthsimple/tests/replies/wealthsimple-statements/README.md'
   workflow_dispatch:
 
 permissions:
@@ -41,9 +37,14 @@ jobs:
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      # the compiled dependencies, which master saves after each merge (`release.yml`,
+      # `suite-cache`): a pull request reads only its own caches and master's, and no suite
+      # runs on master, so a pull request saves none
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
+          shared-key: suite
+          save-if: false
       # the lock committed is the one a release builds with (`release.yml` and the
       # image build `--locked`): one that cargo would rewrite fails here, before any
       # step can rewrite it
@@ -54,12 +55,15 @@ jobs:
       # cache (`server/tests/start_failures.rs`)
       - name: strace
         run: sudo apt-get update && sudo apt-get install -y strace
-      # a warning fails the build: the workspace is kept warning-free
+      # a warning fails the build: the workspace is kept warning-free; the suite runs
+      # on a temp folder of its own, and a test that leaves anything there fails it
       - name: The Rust suite
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
-        run: cargo test --workspace --locked
+        run: |
+          cargo test --workspace --locked --no-run
+          ../bin/check-test-leftovers.sh cargo test --workspace --locked -- --skip capacity::tests
         working-directory: rust
       # the developer's subcommands (`bagholder demo`, `pull-broker`), each behind a
       # feature no release build enables: their own tests, built with them
@@ -89,54 +93,35 @@ jobs:
           if [ -n "$hits" ]; then echo "$bin carries a developer's subcommand:"; echo "$hits" | sed -n 1,20p; exit 1; fi
         working-directory: rust
       # no failure discarded outside tests: the workspace's clippy lints (Cargo.toml),
-      # the tests' own code left out, where dropping a result is the test's business
+      # the tests' own code left out, where dropping a result is the test's business,
+      # and the stand-in Wealthsimple (`standin.rs`, built only under its feature) in:
+      # the gate CLAUDE.md names, run here so it is one
       - name: No discarded failure
         env:
           RUSTFLAGS: "-D warnings"
-        run: cargo clippy --locked --workspace --lib --bins
+        run: cargo clippy --locked --workspace --lib --bins --features bagholder-ws/standin
         working-directory: rust
 
-  # The same suite on a Mac, and the test a sandboxed local run cannot hold: the notification
-  # applet, built with osacompile, which needs Apple Events (#[ignore]d with that reason, so it
-  # runs here by name on every push, whoever ran what locally).
-  rust-macos:
-    runs-on: macos-latest
+  # The server's capacity cases, each building made-up books (`capacity::tests`), beside the
+  # suite rather than inside it: the suite's slowest part, run once, in parallel.
+  capacity-cases:
+    runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      # master's, as the suite's (above)
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
-      - name: The Rust suite
+          shared-key: suite
+          save-if: false
+      - name: The capacity cases
         env:
           CI: "true"
-        run: cargo test --workspace --locked
-        working-directory: rust
-      # the one test kept out of the suite for the machine it needs: the notification
-      # applet, built with osacompile (the capture tests read the owner's own data,
-      # kept outside the repository, and are run by hand)
-      - name: The notification applet, on macOS
-        env:
-          CI: "true"
-        run: cargo test --locked -p bagholder-server -- --ignored --exact notify::tests::test_the_mac_applet_is_built_once_under_bagholders_name_and_icon
-        working-directory: rust
-
-  # Windows has no system time zone database, so the model reads the copy built into
-  # jiff there: the model's tests (the zones and every shared case) run where that holds.
-  rust-windows:
-    runs-on: windows-latest
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
-        with:
-          workspaces: rust
-      - name: The model's suite
-        env:
-          CI: "true"
-        run: cargo test --locked -p bagholder-model
+          RUSTFLAGS: "-D warnings"
+        run: cargo test --locked -p bagholder-server --bin bagholder capacity::tests
         working-directory: rust
 
   web:
@@ -171,10 +156,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      # master's, as the suite's (the rust job)
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
-          shared-key: browser
+          shared-key: demo-server
+          save-if: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
@@ -270,10 +257,12 @@ jobs:
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      # master's, as the suite's (the rust job)
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
-          shared-key: browser
+          shared-key: demo-server
+          save-if: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
@@ -287,6 +276,8 @@ jobs:
       - name: The server and the made-up book
         run: cargo build --locked --bin bagholder --features demo
         working-directory: rust
+      # not under bin/check-test-leftovers.sh yet: the end-to-end servers' temp
+      # folders are their own matter, and the browser run failed under the check (#589)
       - name: The browser tests
         run: npm run e2e
         working-directory: web

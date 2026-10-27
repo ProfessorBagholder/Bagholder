@@ -111,6 +111,44 @@ fn a_removed_superseding_record_brings_nothing_back() {
     assert_eq!((problems[0].0, problems[0].1.code.as_str()), (b.record, "superseding-record-removed"));
 }
 
+/// A replacement taken back (2.10.9's statement fills, `docs/decisions.md`
+/// 2026-10-26): the record it replaced is live again with its own transactions,
+/// the trade and its note go back to it, the link is gone, and the replacement is
+/// removed, noted taken back, its revisions kept.
+#[test]
+fn a_replacement_taken_back_gives_the_record_it_replaced_its_trade_and_note_back() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let feed = Spelled::v(1);
+    let statement = Spelled { source: "statement", version: 1 };
+    let fill = f.store(&feed, "order-1", &legs(vec![buy("a1", share("CA0000000001", "QNC"), "100", "-150", "2026-01-02T15:00:00Z")]));
+    let trade = f.book.open_trade(&f.opens(fill.record), t0()).unwrap();
+    f.book.set_journal(JournalSubject::Trade(trade), &note("breakout"), t0()).unwrap();
+    let text = legs(vec![buy("a1", share("CA0000000001", "QNC"), "300", "-450", "2026-01-02T15:00:00Z")]).to_string();
+    let row = f.book.store_superseding(&statement, &f.incoming("row-1", &text), &[fill.record], "the broker's statement states the fill otherwise", t0()).unwrap();
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(row.record)));
+
+    // only the source the replaced record is of brings it back
+    assert!(f.book.withdraw(row.record, &statement, t0()).is_err());
+    f.book.withdraw(row.record, &feed, t0()).unwrap();
+    f.book.note_taken_back(row.record, "2.10.9", t0()).unwrap();
+
+    assert_eq!(f.book.record(fill.record).unwrap().state, RecordState::Live);
+    assert_eq!(f.book.record(row.record).unwrap().state, RecordState::Removed);
+    assert_eq!(f.book.trade(trade).unwrap().anchor, Anchor::Opening(f.opens(fill.record)));
+    assert_eq!(f.book.journal(JournalSubject::Trade(trade)).unwrap().unwrap().thesis, "breakout");
+    assert!(f.book.superseded_by(fill.record).unwrap().is_empty());
+    assert!(f.book.replaced(row.record).unwrap().is_empty());
+    assert!(f.book.first_superseded_for("the broker's statement states the fill otherwise").unwrap().is_none());
+    assert!(f.book.problems().unwrap().is_empty(), "nothing is said of it");
+    let revisions = f.book.revisions(row.record).unwrap();
+    assert_eq!(revisions.len(), 2, "what the statement said is kept");
+    assert!(revisions[1].2.contains("\"takenBack\":\"2.10.9\""), "{}", revisions[1].2);
+    // the feed's units and cash, once
+    let held = positions(&f.book.transactions().unwrap()).unwrap();
+    assert_eq!(held.values().copied().collect::<Vec<_>>(), vec![d("100")]);
+}
+
 #[test]
 fn what_the_person_entered_gives_way_to_a_sourced_record() {
     let f = Fixture::new();

@@ -83,6 +83,19 @@ fn brokerage_statement(rows: &[(&str, &str, &str, &str, &str)]) -> Value {
     .unwrap()
 }
 
+/// A brokerage statement in the document's shape, of these rows in each currency's list.
+fn statement_in(cad: &[(&str, &str, &str, &str, &str)], usd: &[(&str, &str, &str, &str, &str)]) -> Value {
+    let list = |rows: &[(&str, &str, &str, &str, &str)], unit: &str| -> String {
+        rows.iter().map(|(d, code, desc, cash, bal)| format!(r#"{{"transactionDate":"{d}","transactionType":"{code}","description":"{desc}","cashMovement":"{cash}","balance":"{bal}","unit":"{unit}","__typename":"BrokerageMonthlyStatementTransactions"}}"#)).collect::<Vec<_>>().join(",")
+    };
+    let (c, u) = (list(cad, "$CAD"), list(usd, "$USD"));
+    let top = [c.as_str(), u.as_str()].iter().filter(|l| !l.is_empty()).copied().collect::<Vec<_>>().join(",");
+    json::parse(&format!(
+        r#"{{"id":"s","statementType":"brokerage_monthly_statement","data":{{"__typename":"BrokerageMonthlyStatementObject","custodianAccountId":"b","isMultiCurrency":true,"currentTransactions":[{top}],"activitiesPerCurrency":[{{"currency":"CAD","currentTransactions":[{c}],"__typename":"x"}},{{"currency":"USD","currentTransactions":[{u}],"__typename":"x"}}]}},"__typename":"Statement"}}"#
+    ))
+    .unwrap()
+}
+
 #[test]
 fn a_cash_statement_s_rows_are_in_the_account_s_own_currency() {
     let v = cash_statement(&[("2025-06-26", "TRFIN", "Transfer in", "35650.0", "35821.69")]);
@@ -171,7 +184,7 @@ fn a_sign_in_that_kept_no_device_id_is_refused_naming_the_request_and_asks_nothi
 
 // -- reconciliation ----------------------------------------------------------------
 
-/// A feed row: one cash movement, as the activity feed states it.
+/// A feed row: one cash movement, or a fill (`FeedFill`), as the activity feed states it.
 struct Feed;
 
 impl Mapping for Feed {
@@ -181,8 +194,12 @@ impl Mapping for Feed {
     fn version(&self) -> u32 {
         1
     }
-    fn map(&self, _ctx: &MapContext, payload: &str) -> Mapped {
-        cash_leg(payload)
+    fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
+        if payload.contains("\"qty\"") {
+            FeedFill.map(ctx, payload)
+        } else {
+            cash_leg(payload)
+        }
     }
 }
 
@@ -459,6 +476,11 @@ impl World {
 
     /// Each kept statement's fills whose units the statement states otherwise, taking the feed's place.
     fn fills(&mut self, failures: &mut Vec<(String, Failure)>) -> usize {
+        self.units_step(failures).0
+    }
+
+    /// The units step: the fills it took, and those it gave back.
+    fn units_step(&mut self, failures: &mut Vec<(String, Failure)>) -> (usize, usize) {
         let keys: BTreeMap<AccountId, Vec<String>> = [(self.lira, self.lira_keys.clone()), (self.cash, vec!["cash-1".to_string()])].into_iter().collect();
         bagholder_broker::statements::fills(&self.book, &mut self.broker, self.conn, &keys, at(NOW), failures).unwrap()
     }
@@ -1235,4 +1257,176 @@ fn same_day_fills_of_one_amount_are_paired_by_their_nearest_units_and_another_co
     // a fill taken from its row keeps it: the next read pairs nothing again
     assert_eq!(w.fills(&mut failures), 0);
     assert_eq!(w.units_of(w.lira, "BTC"), dec("0.0004532900"));
+}
+
+/// A conversion out of a USD sub-account, booked from its statement as "Money
+/// transfer out of the account" while the feed stated no side paid, and then the
+/// feed's record stating its side paid (the owner's 🚀 Trading, 2026-10-26: five
+/// such, the USD twice in the book). Every month after it disagrees, so no month
+/// is proven and the walk's own withdrawal never reaches it. Before the walk, the
+/// statement's copy of a row the feed states is withdrawn: the movement stands once.
+#[test]
+fn a_movement_booked_from_a_statement_beside_one_alike_the_feed_states_stays() {
+    let mut w = World::new();
+    // April: two contributions alike on one day, the feed listing one
+    w.feed("lira-1", "2025-04-07", "deposit", "500");
+    let april = statement_in(&[("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "500.0", "500.00"), ("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "500.0", "1000.00")], &[]);
+    let months: [(&str, Option<Value>); 3] = [("2025-04-01", Some(april.clone())), ("2025-05-01", Some(statement_in(&[], &[]))), ("2025-06-01", Some(statement_in(&[], &[])))];
+    for (m, v) in months {
+        let read = w.book.broker_read(w.conn, "statement:lira-1", at(NOW)).unwrap();
+        w.book.keep_monthly_statement(w.conn, "lira-1", day(m), &v.as_ref().map_or("null".to_string(), |v| v.canonical()), &read).unwrap();
+        w.month("lira-1", m, v);
+    }
+    // the other booked from the statement by an earlier walk, as its first row
+    let row = statement::rows(&april, Currency::CAD).unwrap().remove(0);
+    let (key, payload) = (statement::key("lira-1", day("2025-04-01"), 0), statement::payload("lira-1", day("2025-04-01"), 0, &row).canonical());
+    let booked = w.book.store(&statement::StatementMapping, &Incoming { connection: Some(w.conn), source_key: &key, payload: &payload, refs: vec![] }, at(NOW)).unwrap().record;
+    let lira = w.lira;
+    // and a dollar more than the book holds, from July, which no statement covers
+    // yet: the walk reads
+    w.states_in(lira, &[("CAD", "1001")]);
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!((done.withdrawn, w.book_cash_in(lira, "CAD")), (0, dec("1000")), "{done:?}");
+    assert_eq!(w.book.record(booked).unwrap().state, RecordState::Live);
+}
+
+#[test]
+fn a_movement_booked_from_a_statement_that_the_feed_now_states_is_withdrawn_and_stands_once() {
+    let mut w = World::new();
+    // the account behind two of the broker's ids: its own, and its USD sub-account's
+    w.lira_keys = vec!["lira-1".into(), "lira-usd".into()];
+    w.book.add_account_ref(w.lira, &AccountRef::new(ws(), "lira-usd")).unwrap();
+    // April: USD deposited into the sub-account, CAD into the account
+    w.feed_in("lira-1", "2025-04-07", "deposit", "500", "USD");
+    w.feed("lira-1", "2025-04-07", "deposit", "1000");
+    let may_usd = statement_in(&[], &[("2025-05-12", "TRFOUT", "Money transfer out of the account (executed at 2025-05-12)", "-200.0", "300.00")]);
+    // May: 200 USD converted to 270 CAD, the feed stating the side received alone
+    w.feed("lira-1", "2025-05-12", "currency-conversion", "270");
+    w.feed("lira-1", "2025-06-03", "interest", "1");
+    // every month read and kept by the walks before: the sub-account's until it
+    // merged into the account, then none
+    let months: [(&str, &str, Option<Value>); 6] = [
+        ("lira-usd", "2025-04-01", Some(statement_in(&[], &[("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "500.0", "500.00")]))),
+        ("lira-1", "2025-04-01", Some(statement_in(&[("2025-04-07", "CONT", "Contribution (executed at 2025-04-07)", "1000.0", "1000.00")], &[]))),
+        ("lira-usd", "2025-05-01", Some(may_usd.clone())),
+        ("lira-1", "2025-05-01", Some(statement_in(&[("2025-05-12", "TRFIN", "Money transfer into the account (executed at 2025-05-12)", "270.0", "1270.00")], &[]))),
+        ("lira-usd", "2025-06-01", None),
+        ("lira-1", "2025-06-01", Some(statement_in(&[("2025-06-03", "FPLINT", "Stock lending monthly interest payment", "1.0", "1271.00")], &[]))),
+    ];
+    for (k, m, v) in months {
+        let read = w.book.broker_read(w.conn, &format!("statement:{k}"), at(NOW)).unwrap();
+        w.book.keep_monthly_statement(w.conn, k, day(m), &v.as_ref().map_or("null".to_string(), |v| v.canonical()), &read).unwrap();
+        w.month(k, m, v);
+    }
+    // the side paid as an earlier walk booked it from the statement, when the feed's
+    // record stated none
+    let row = statement::rows(&may_usd, Currency::CAD).unwrap().remove(0);
+    let (key, payload) = (statement::key("lira-usd", day("2025-05-01"), 0), statement::payload("lira-usd", day("2025-05-01"), 0, &row).canonical());
+    let booked = w.book.store(&statement::StatementMapping, &Incoming { connection: Some(w.conn), source_key: &key, payload: &payload, refs: vec![] }, at(NOW)).unwrap().record;
+    let lira = w.lira;
+    w.states_in(lira, &[("CAD", "1271"), ("USD", "300")]);
+    assert_eq!(w.book_cash_in(lira, "USD"), dec("300"));
+    // the feed's record now states its side paid: the USD twice
+    w.feed_in("lira-1", "2025-05-12", "currency-conversion", "-200", "USD");
+    assert_eq!(w.book_cash_in(lira, "USD"), dec("100"), "twice");
+    let mut failures = vec![];
+    let done = w.run(&mut failures);
+    assert!(failures.is_empty(), "{failures:?}");
+    assert_eq!(w.book_cash_in(lira, "USD"), dec("300"), "once: {done:?}");
+    assert_eq!(w.book.record(booked).unwrap().state, RecordState::Removed);
+    assert_eq!(w.book_cash_in(lira, "CAD"), dec("1271"));
+    // and the walk after books nothing again: the feed holds the row
+    let done = w.run(&mut failures);
+    assert_eq!((done.booked, w.book_cash_in(lira, "USD")), (0, dec("300")), "{done:?}");
+}
+
+/// A fill the statement writes on two rows, as the recorded form does: its cash
+/// on a row stating no units, its units on a row of their own at no cash.
+fn split(m: &str, buy: bool, units: &str, price: &str, executed: &str, cash: &str, balance: &str) -> [(String, String, String, String, String); 2] {
+    let (code, verb) = if buy { ("BUY", "Bought") } else { ("SELL", "Sold") };
+    let head = format!("XQL - Examplia Wobbleworks Plc.: {verb}");
+    [
+        (m.into(), code.into(), format!("{head} 0.0000 shares at ${price} per share (executed at {executed}), FX Rate: 1.3500"), cash.into(), balance.into()),
+        (m.into(), code.into(), format!("{head} {units} shares at ${price} per share (executed at {executed})"), "0.0".into(), balance.into()),
+    ]
+}
+
+/// A month kept of these rows: its statement.
+fn kept_rows(w: &mut World, m: &str, rows: &[(String, String, String, String, String)]) -> Value {
+    let rows: Vec<(&str, &str, &str, &str, &str)> = rows.iter().map(|(a, b, c, d, e)| (a.as_str(), b.as_str(), c.as_str(), d.as_str(), e.as_str())).collect();
+    kept(w, m, &rows);
+    brokerage_statement(&rows)
+}
+
+/// The units step reads no fill from a row stating no units: the feed's units of
+/// a purchase and a sale the statement writes on two rows each stand.
+#[test]
+fn a_fill_whose_cash_the_statement_writes_on_a_row_of_no_units_keeps_the_feed_s_units() {
+    let mut w = World::new();
+    let bought = w.fill("lira-1", "2025-06-02T15:00:00Z", "buy", "XQL", "482", "-1446.00");
+    let sold = w.fill("lira-1", "2025-06-09T15:00:00Z", "sell", "XQL", "-200", "640.00");
+    let mut rows = split("2025-06-03", true, "482.0000", "3.00", "2025-06-02", "-1446.00", "-1446.00").to_vec();
+    rows.extend(split("2025-06-10", false, "200.0000", "3.20", "2025-06-09", "640.00", "-806.00"));
+    kept_rows(&mut w, "2025-06-01", &rows);
+    let mut failures = vec![];
+    assert_eq!(w.units_step(&mut failures), (0, 0), "{failures:?}");
+    assert!(failures.is_empty(), "{failures:?}");
+    for r in [bought, sold] {
+        assert_eq!(w.book.record(r).unwrap().state, RecordState::Live);
+    }
+    assert_eq!(w.units_of(w.lira, "XQL"), dec("282"), "the feed's units, bought and sold");
+}
+
+/// A fill of no units an earlier step took from such a row, in the feed's place,
+/// gives its place back at the next read: the feed's record is live again, with
+/// its own units; read again, nothing changes.
+#[test]
+fn a_fill_of_no_units_an_earlier_step_took_gives_the_feed_s_record_its_place_back() {
+    let mut w = World::new();
+    let bought = w.fill("lira-1", "2025-06-02T15:00:00Z", "buy", "XQL", "482", "-1446.00");
+    let rows = split("2025-06-03", true, "482.0000", "3.00", "2025-06-02", "-1446.00", "-1446.00");
+    let kept = kept_rows(&mut w, "2025-06-01", &rows);
+    // as the step before wrote it: the cash row read as a fill of no units, in the feed's place
+    took_in_the_feed_s_place(&mut w, bought, &kept, Dec::ZERO);
+    assert_eq!(w.units_of(w.lira, "XQL"), Dec::ZERO, "the step before's fill of no units");
+    let mut failures = vec![];
+    assert_eq!(w.units_step(&mut failures), (0, 1), "{failures:?}");
+    assert_eq!(w.book.record(bought).unwrap().state, RecordState::Live);
+    assert_eq!(w.units_of(w.lira, "XQL"), dec("482"), "the feed's own units again");
+    assert_eq!(w.units_step(&mut failures), (0, 0), "read again, nothing changes");
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+/// A statement fill in the feed's place, as the step before wrote one: of the kept
+/// statement's first row, at `quantity`.
+fn took_in_the_feed_s_place(w: &mut World, feed: bagholder_core::RecordId, kept: &Value, quantity: Dec) {
+    let t = w.book.transactions_of(feed).unwrap().pop().unwrap();
+    let instrument = t.instrument.unwrap();
+    let security = w.book.own_refs(instrument).unwrap().into_iter().find(|r| matches!(r.scheme, bagholder_core::instrument::RefScheme::BrokerSecurity(_))).unwrap();
+    let info = w.book.instruments().unwrap().into_iter().find(|i| i.id == instrument).unwrap();
+    let row = w.broker.statement_rows("lira-1", kept).unwrap().remove(0);
+    let fill = bagholder_broker::statements::Fill { account: "lira-1".into(), month: day("2025-06-01"), position: 0, row, quantity, security, kind: info.kind, currency: info.currency, feed: t };
+    let (key, payload) = w.broker.fill_record(&fill).unwrap();
+    let incoming = Incoming { connection: Some(w.conn), source_key: &key, payload: &payload.canonical(), refs: vec![] };
+    w.book.store_superseding(&statement::StatementMapping, &incoming, &[feed], "the broker's statement states the units the fill executed", at(NOW)).unwrap();
+}
+
+/// A statement fill in the feed's place whose row now reads as the feed's own
+/// units (a feed row read again can state other units than it did) gives the feed's
+/// record its place back: the statement states nothing otherwise any more.
+#[test]
+fn a_statement_fill_whose_row_reads_as_the_feed_s_own_units_gives_the_feed_s_record_its_place_back() {
+    let mut w = World::new();
+    let bought = w.fill("lira-1", "2025-06-02T15:00:00Z", "buy", "XQM", "482", "-1446.00");
+    let kept = kept_rows(&mut w, "2025-06-01", &[("2025-06-03".into(), "BUY".into(), "XQM - Examplia Wobbleworks Plc.: Bought 482.0000 shares (executed at 2025-06-02)".into(), "-1446.00".into(), "-1446.00".into())]);
+    took_in_the_feed_s_place(&mut w, bought, &kept, dec("482"));
+    assert_eq!(w.book.record(bought).unwrap().state, RecordState::Superseded);
+    let mut failures = vec![];
+    assert_eq!(w.units_step(&mut failures), (0, 1), "{failures:?}");
+    assert_eq!(w.book.record(bought).unwrap().state, RecordState::Live);
+    assert_eq!(w.units_of(w.lira, "XQM"), dec("482"));
+    assert_eq!(w.units_step(&mut failures), (0, 0), "read again, nothing changes");
+    assert!(failures.is_empty(), "{failures:?}");
 }
