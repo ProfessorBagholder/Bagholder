@@ -5,6 +5,7 @@
 
 use std::path::{Path, PathBuf};
 
+use bagholder_book::statements::AccountDay;
 use bagholder_book::Book;
 use bagholder_broker::pull::{pull, Report};
 use bagholder_core::account::{AccountRef, AccountStatus};
@@ -135,6 +136,40 @@ fn a_pull_with_one_new_trade_asks_only_what_the_trade_needs_besides() {
     assert!(third.failures.is_empty(), "{:?}", third.failures);
     assert_eq!(third.records_new, 1);
     assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances", "net worth"]);
+}
+
+/// A day an earlier read stored wrong is stated again by the next day's pull:
+/// the daily history is read whole, and each day is kept as Wealthsimple states
+/// it now. 2.10.2 read an account behind two ids on one of them and stored years
+/// of its days at nothing; reading only the days after the last one stored, no
+/// pull read them again, and the charts lost the account until its newest days.
+#[test]
+fn a_day_an_earlier_read_stored_wrong_is_stated_again_by_the_next_day_s_pull() {
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at("2026-09-25T20:00:00Z")).unwrap();
+    // a day's pull of the recorded replies; the recorded history ends on 2026-09-23
+    let day_s_pull = |today: &str| {
+        let now = format!("{today}T20:00:00Z");
+        let mut ws = Wealthsimple::new(Replay::read(&dir()).unwrap().taken_before_statements());
+        let r = pull(&book, &mut ws, connection(&book, &now), today.parse().unwrap(), at(&now), &mut |_| {}).unwrap();
+        assert!(!r.failures.iter().any(|(part, _)| part.starts_with("history")), "{:?}", r.failures);
+        r
+    };
+    day_s_pull("2026-09-25");
+    let account = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+    let stated = book.stated(account).unwrap().days;
+    // an earlier build's read of the account: every day from a date on, at nothing
+    let from: jiff::civil::Date = "2024-03-01".parse().unwrap();
+    let spoiled: Vec<AccountDay> = stated.range(from..).map(|(day, (v, n))| AccountDay { day: *day, net_value: Money::zero(v.currency), net_deposits: Money::zero(n.currency) }).collect();
+    let wrong = stated.range(from..).filter(|(_, (v, n))| !(v.amount.is_zero() && n.amount.is_zero())).count();
+    assert!(wrong > 500, "the stretch spoiled holds what the account held: {wrong}");
+    let read = book.broker_read(connection(&book, "2026-09-25T21:00:00Z"), "history", at("2026-09-25T21:00:00Z")).unwrap();
+    book.store_account_days(account, &spoiled, &read).unwrap();
+    assert_ne!(book.stated(account).unwrap().days, stated);
+    // the next day's pull states every one of them again, and no day is new
+    let next = day_s_pull("2026-09-26");
+    assert_eq!(book.stated(account).unwrap().days, stated);
+    assert_eq!((next.days_restated, next.days_stored), (wrong, 0));
 }
 
 /// The accounts list's edges in an accounts reply.
