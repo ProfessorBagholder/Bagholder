@@ -4,7 +4,7 @@ Brief 79 (amended 2026-10-27). Line numbers are from master at dcd86f17 (2.11.5)
 
 ## For the owner to decide
 
-Nothing. One visible change follows from the rule rather than from a choice, and the Architect should confirm it before the build: a holding listed outside Canada shows its **Book** and **Avg** in Canadian dollars, as Wealthsimple's positions read states them (§2.2). Today the page shows them in the listing's currency, worked out by Bagholder.
+**The currency of Book and Avg for a holding listed outside Canada.** The rule is that the figures are the ones Wealthsimple shows the person (brief §1), so it is the currency Wealthsimple shows the owner for their US holdings' book value. The Architect asked the owner on 2026-10-27. The plan shows the currency they name (§2.2). Nothing else waits on it.
 
 ## What exists today
 
@@ -22,9 +22,19 @@ For each line of the read:
 - **book value** is the read's `bookValue`, in the currency it states (§2.2);
 - **average cost** is book value over units;
 - **market value** is units times Bagholder's quote for the listing (times the contract's multiplier for an option), the quote being the only figure of Bagholder's own;
-- **unrealized** is market value in Canadian dollars less book value.
+- **unrealized** is market value less book value, in the book value's currency (market value converted at today's rate where the two differ).
 
 Allocation, exposure, the heatmap, net worth's holdings, the Cashflow holdings table and projected income are built from these holdings, as they are from the journal's today.
+
+**"Held" follows Wealthsimple's holdings everywhere**, not only on the screens §6 lists:
+- **What gets quoted, and which securities' payers are read:** `needs` takes its held listings from the stated holdings, not from `Matched.units` (`engine/src/needs.rs:92-104`), so a holding moved in with no trades is quoted and valued.
+- **The held lists** for news, filings, short interest and the exposure refresh: `MarketBase.positions` (`model/src/context.rs:51`, `:63-88`) is built from the positions document, so they follow it (`server/src/feeds.rs:269`, `:481`, `:1056`, `:1240`; `filings.rs:307-309`, `:566`).
+- **The notifications' "held" scopes** (`releasesHeld`, `disclosuresHeld`, `server/src/notify.rs:31-32`) read those lists.
+
+What stays on the journal, and why:
+- **The currencies a trade is converted in** from its first day held (`needs.rs:96-99`): the journal's own CAD results need them.
+- **`payer_rate`'s held-on** (`engine/src/cashflow.rs:251`): whether units were held the day before an ex-date decides a distribution's form, which is the journal reading payments against its trades, not an amount shown.
+- **A bracket's sold total** (`server/src/orders/brackets.rs:130-162`): a sum of the fills since it armed, which are Wealthsimple's own records.
 
 **A holding links to the journal, never the other way.** Where the journal has an open round trip in the same account and listing, the holding carries that trip's id, so its thesis, grade, tags and executions open from it as now. A holding the journal has no open trip for (moved in, or the journal reads it differently) shows Wealthsimple's figures with no journal link. A trip the journal has open where Wealthsimple states nothing held is not a holding; it stays in Trades, the journal's.
 
@@ -40,13 +50,17 @@ Allocation, exposure, the heatmap, net worth's holdings, the Cashflow holdings t
 - It is the same read, parsed the same way, for today and for every past day (§2.4): one mechanism.
 - The document takes a list of accounts (`accounts(ids: $accountIds)`, as the balances read's does), so asking every account costs one request, chunked by 20 as the balances are (`client.rs:316-320`). Today it is sent one account at a time (`client.rs:303-314`); the build sends the list.
 
-**Not settled by any recording:** whether a read asked as of today states a fill made today. No reply was recorded for the day it was asked. The read states each currency's cash beside the units (`read::cash_held`, `read.rs:151-161`), so the build logs, never shows, when that cash differs from the balances read's cash of the same pass: one log line per account and day, with no amounts. The owner's use of the release is the check (brief §3): a holding that lags a fill is a recorded form to add, never a header line.
+**Not settled by any recording:** whether a read asked as of today states a fill made today. No reply was recorded for the day it was asked. The read states each currency's cash beside the units (`read::cash_held`, `read.rs:151-161`), so the build logs, never shows, when that cash differs from the balances read's cash of the same pass. The line carries no amount and no id: the account's kind, the day and "differs", once per account and day. The owner's use of the release is the check (brief §3): a holding that lags a fill is a recorded form to add, never a header line.
 
-### 2.2 Book value: in Canadian dollars, as asked
+**The fallback, named and not built:** if the owner reports a lag, units now come from the balances read's security quantities (`sec-s`, `sec-o`, `sec-z`, skipped today at `read.rs:184`), recorded first.
+
+### 2.2 Book value: in the currency Wealthsimple shows
 
 The read is asked with `currency: "CAD"` (`client.rs:305`), the argument of `financials.current` (`graphql/FetchHoldingsExportPositionsAsOfDate.graphql:6`). In every recorded node `bookValue` is in Canadian dollars, a listing outside Canada's too. Its amount stays the same from day to day while the units do, so it is the cost converted when bought, not at each day's rate. The book value of the `sec-c-usd` line is not units times a rate and is never read (`cash_held` reads the quantity only).
 
-**Decided:** book value and average cost are shown as stated, in Canadian dollars. Whether `currencyOverride` (in the document, never sent) would state the listing's own currency is not recorded, and is not tried.
+**Decided by the owner's answer:** book value and average cost are shown in the currency Wealthsimple shows them.
+- **Canadian dollars:** as the read states them now; nothing more is asked.
+- **The listing's currency:** this plan's one open point. Whether `currencyOverride` (in the document, never sent) states the listing's own currency is not recorded. Nothing reads it until a reply of that form is recorded. Until then the build shows the book value as the read states it, in Canadian dollars, and its PR says so.
 
 ### 2.3 The cash shown: unchanged
 
@@ -58,10 +72,10 @@ A past day's units, book value and cash are the positions read as of that day: i
 
 **When a day is read:**
 - **A past Portfolio** (`portfolio_as_of`, `scope.rs:1397-1464`) asks for its day when it opens and the book does not hold it: one request for every account. Until it is answered the screen shows what it shows for a figure not yet read today.
-- **The net worth history** needs each past day's cash for two things: what a margin account owes (`owed_of`, `scope.rs:1076-1110`), and what an account with no stated daily value holds. The days it lacks are read in the background, newest first, one request a second for every account at once, while the app runs; each is kept. A day not yet read draws as the history draws a day it has no figure for now. Account values on past days are already Wealthsimple's daily figures (`scope.rs:1407`) and are unchanged.
+- **The net worth history** needs each past day's cash for two things: what a margin account owes (`owed_of`, `scope.rs:1076-1110`), and what an account with no stated daily value holds. The days it lacks are read on demand: only while a page shows the net worth history, as the market sources read only for what a page shows (`docs/architecture.md` §13). Newest first, one request a second, every account in each. It pauses when no page shows the history, and each day read is kept. A day not yet read draws as the history draws a day it has no figure for now. Account values on past days are already Wealthsimple's daily figures (`scope.rs:1407`) and are unchanged.
 - Margin, buying power and outside debts on a past day stay none, as now (`scope.rs:1451-1457`).
 
-**The cost, stated:** one request per past day for every account together, once for the life of the book.
+**The bound:** one request per past day, every account in it, once for the life of the book; and never while no page shows a past day.
 
 ### 2.5 Coins
 
@@ -118,7 +132,8 @@ The current read wins (no migration). The first pull under this build withdraws 
 3. **No sentence says the figures differ.** The header's text table, the routes golden, and a scan of the server's strings for every phrase the comparing lines used ("states", "the book holds", "does not reconcile", "no statement lists"). **Plant:** the units line restored fails it.
 4. **The journal stands.** The figures golden's diff names every journal figure that moves; only the coin fills a statement superseded may move, each named in the PR. Over every recorded form at twelve seeds, the journal leaves no "took more" line and no row unplaced or kept with a problem.
 5. **A past day is Wealthsimple's and is read once.** A past Portfolio's units, book value and cash equal the stand-in's positions as of that day; opened twice, the read is made once. **Plant:** `CashByDay` restored fails the cash.
-6. **Units now follow a fill within one pass.** The stand-in fills an order today: the next balances pass's positions read as of today states it, and the holding shows it. One request for every account. **Plant:** the read asked as of yesterday fails it.
+6. **Bagholder takes units now from the read asked as of today.** The stand-in fills an order today: the next balances pass asks the positions read as of today, for every account in one request, and the holding shows the stand-in's answer. This proves Bagholder's side only. The stand-in answers as of today in the recorded positions form; whether Wealthsimple's read includes a fill made the same day is not recorded (§2.1), and the PR says so. **Plant:** the read asked as of yesterday fails it.
+8. **A holding with no journal trip is held.** The stand-in states a holding no activity row names: it is quoted, counted as held by `needs`, and listed in `MarketBase.positions` and the filings' held list. **Plant:** `needs` taking its held listings from `Matched.units` fails it.
 7. **Statement records are withdrawn by the first read.** A book holding a statement fill that superseded a feed record, and a statement cash booking: after the first pull the feed record is live with its trades, and nothing of source `wealthsimple-statement` is live. **Plant:** the withdrawal removed fails it.
 
 **Removed with their code:** `wealthsimple/tests/statements.rs` (44 tests), `forms.rs` (8), `take_back.rs` (1); eight statement tests in `wealthsimple/tests/pull.rs`; the `pull_broker` walk test; `engine/tests/past.rs` (2) and `past_range.json` (3 cases); the check's cases (7 of 11 in `returns_filters_checks.json`, `cases.rs:617-653`); `status.rs`' two compare tests (515-598); the gate's tests (`figures.rs:1130-1225`, `:2007-2096`); `capacity.rs:1476`; `due.rs:461`.
@@ -128,7 +143,7 @@ The current read wins (no migration). The first pull under this build withdraws 
 ## 6. What the person sees change
 
 - **Every holding's units, book value, average and unrealized are Wealthsimple's** on the Portfolio, Cashflow, the order ticket's Sell quantity and Max, net worth, exposure, the heatmap and the agents' `positions` tool.
-- **A listing outside Canada shows Book and Avg in Canadian dollars** (§2.2). Market value stays in the listing's currency, and unrealized is in Canadian dollars.
+- **A listing outside Canada shows Book and Avg in the currency the owner names** (§2.2). Market value stays in the listing's currency, and unrealized is in Canadian dollars.
 - **A holding moved in with no trades** shows, with no journal link.
 - **The header's units lines are gone.**
 - **A past Portfolio** opens on a day not yet read with what it shows for a figure not yet read, then fills in.
@@ -139,10 +154,10 @@ The current read wins (no migration). The first pull under this build withdraws 
 
 ## Not included
 
-As brief §7: the "took N more" line; the journal's deposited lots and the opening-balance form; fees and execution days from statements; dropping the statement tables; brief 75's PR 4 and PR 5; anything else on the page. Also not included: asking the positions read with `currencyOverride`, and any read of the balances read's security entries.
+As brief §7: the "took N more" line; the journal's deposited lots and the opening-balance form; fees and execution days from statements; dropping the statement tables; brief 75's PR 4 and PR 5; anything else on the page. Also not included: asking the positions read with `currencyOverride`, unless the owner names the listing's currency (§2.2); and the fallback of §2.1, reading the balances read's security entries.
 
 ## Order
 
-1. This plan, reviewed.
+1. This plan, reviewed (the Architect's go with five conditions, 2026-10-27, each above).
 2. One build PR doing §1 to §3 and §7 with §5's tests, released MINOR.
-3. **The release check** on a copy of the owner's book, on their Mac, read-only: each holding's units and book value on the page equal the book's stored positions read, every comparing line gone, reported per line as identical, new or worse. No session reads the sign-in or what it returns.
+3. **The release check** on a copy of the owner's book, on their Mac, read-only, as the canary always has: each holding's units and book value on the page against the book's stored positions read, and every comparing line gone. It reports per line identical, new or worse, with no figure; the session reads no figure itself. No session reads the sign-in or what it returns.
