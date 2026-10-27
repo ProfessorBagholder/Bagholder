@@ -175,6 +175,19 @@ pub fn open(app: &Arc<App>, rt: &tokio::runtime::Handle) {
         if v == "1" {
             if let Err(e) = switch_on(app, rt) {
                 crate::app::log(&format!("bagholder: the agents' address could not open again: {e}"));
+                return;
+            }
+            // and the tunnel the person chose, so every agent can reach it again after
+            // an update or a restart (brief 80 §5.1); their own proxy is theirs to run
+            let tunnelled = store(app).and_then(|a| setup(&a)).map(|s| s.is_some_and(|s| s.provider != Provider::Own));
+            match tunnelled {
+                Ok(true) => {
+                    if let Err(e) = tunnel_up(app) {
+                        crate::app::log(&format!("bagholder: the agents' tunnel could not start again: {e}"));
+                    }
+                }
+                Ok(false) => {}
+                Err(e) => crate::app::log(&format!("bagholder: the agents' tunnel could not be read: {e}")),
             }
         }
     }
@@ -240,16 +253,22 @@ async fn choose(State(state): State<AppState>, Required(asked): Required<Setup>)
 
 async fn start_tunnel(State(state): State<AppState>) -> Api<OkOr> {
     let app = state.app.clone();
-    let done = blocking(move || -> Result<(), String> {
+    let done = blocking(move || tunnel_up(&app)).await?;
+    Ok(Json(done.map_or_else(OkOr::err, |()| OkOr::ok())))
+}
+
+/// The tunnel the person chose, started for the address: from the panel, and again
+/// when Bagholder starts with Agents on.
+fn tunnel_up(app: &Arc<App>) -> Result<(), String> {
         let port = app.agents.port().ok_or("Switch Agents on first.")?;
-        let s = setup(&store(&app)?)?.ok_or("Choose a tunnel first.")?;
+        let s = setup(&store(app)?)?.ok_or("Choose a tunnel first.")?;
         let program = s.provider.program().ok_or("Your own proxy is yours to run: point it at the address shown.")?;
         let path = tunnel::find(s.provider).ok_or_else(|| format!("{program} is not installed on this computer: follow its first step."))?;
         if s.provider == Provider::Tailscale {
             app.agents.look_at_tailscale();
         }
         let command = tunnel::command(&s, &path.display().to_string(), port).ok_or("This tunnel has no command.")?;
-        let (signal, weak, provider) = (app.events.clone(), Arc::downgrade(&app), s.provider);
+        let (signal, weak, provider) = (app.events.clone(), Arc::downgrade(app), s.provider);
         let checking = Arc::new(std::sync::atomic::AtomicBool::new(false));
         // each line the tunnel writes is told to the page, and, until a check has
         // found the address answering, checks it again: the tunnel writes as it
@@ -264,9 +283,6 @@ async fn start_tunnel(State(state): State<AppState>) -> Api<OkOr> {
         app.agents.set_ready(None);
         app.events.signal();
         Ok(())
-    })
-    .await?;
-    Ok(Json(done.map_or_else(OkOr::err, |()| OkOr::ok())))
 }
 
 /// The address checked on a thread of its own, one check at a time, until one finds
