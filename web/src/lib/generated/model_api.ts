@@ -121,8 +121,7 @@ linked: number,
 ambiguous: Array<RowNote>, ambiguousRows: number, 
 /**
  * Rows kept with a problem, counted in no figure until it is resolved: the first
- * `REPORT_NOTES` by line, and how many there are. Every one is in the book, and
- * the header says them (`status::unread_rows`).
+ * `REPORT_NOTES` by line, and how many there are. Every one is in the book.
  */
 problems: Array<RowNote>, problemRows: number, 
 /**

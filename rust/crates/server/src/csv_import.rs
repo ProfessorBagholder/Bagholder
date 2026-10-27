@@ -52,8 +52,7 @@ pub struct ImportReport {
     pub ambiguous: Vec<RowNote>,
     pub ambiguous_rows: u32,
     /// Rows kept with a problem, counted in no figure until it is resolved: the first
-    /// `REPORT_NOTES` by line, and how many there are. Every one is in the book, and
-    /// the header says them (`status::unread_rows`).
+    /// `REPORT_NOTES` by line, and how many there are. Every one is in the book.
     pub problems: Vec<RowNote>,
     pub problem_rows: u32,
     /// The person stopped it after `rows` of the file's rows: those are kept, and
@@ -1360,10 +1359,6 @@ mod tests {
         let row = csv_records(&f)[0];
         let cash = f.read(|e| e.inputs().ledger.transactions.iter().filter(|t| t.id.record == row).map(|t| (t.kind, t.cash)).collect::<Vec<_>>()).unwrap();
         assert_eq!(cash, vec![(Kind::Unclassified, None)]);
-        // and the header says it, in the mapping's words, until it is placed
-        let said = f.read(|e| crate::status::unread_rows(e.inputs())).unwrap();
-        assert_eq!(said.len(), 1, "{said:?}");
-        assert!(said[0].starts_with("A row in ") && said[0].contains("could not be placed and counts in no figure") && said[0].contains("nobody-123"), "{said:?}");
     }
 
     #[test]

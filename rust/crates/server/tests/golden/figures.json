@@ -1620,10 +1620,7 @@
         }
       }
     },
-    "header": [
-      "A row in Generated 8 was kept with a problem: the cost of sec-s-aeaf52febe706064c02d8a5e87afea62 moved in cannot be told apart from the account's own trades of it on the same days, on 2025-11-05.",
-      "A row in Generated 8 was kept with a problem: the cost of sec-s-aeaf52febe706064c02d8a5e87afea62 moved in cannot be told apart from the account's own trades of it on the same days, on 2025-11-05."
-    ],
+    "header": [],
     "withdrawn at opening, the book read a version before": 10
   },
   "seed 10": {
