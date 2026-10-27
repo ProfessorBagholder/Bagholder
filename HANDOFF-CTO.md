@@ -121,8 +121,16 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
   - **the tunnel guard's inherited signal mask is cleared** (the tunnel outlived the server; `tests/tunnel_guard.rs`);
   - clippy is clean;
   - the docs and the owner's 2026-10-27 decision are in.
+- **The live test, 2026-10-27 (the owner's yes; a made-up book; everything stopped and removed afterwards):**
+  - **Funnel:** this server's Traefik holds 443, so Funnel's 443 traffic reached Traefik, with its self-signed certificate. The app now finds a program on 443 at the tailnet address and uses 8443 (cdb43d00). On 8443: WebFetch from outside reached it, the app's check said Ready, and an MCP session over `/mcp/key` listed the 4 tools and read trades.
+  - **Claude.ai did not reach Funnel on 8443:** nothing arrived at the listener, watched with `ss`. The same copy through a temporary no-account Cloudflare link on 443 (the owner approved it; HOME isolated, so the old cert was never used) connected. Claude.ai signed in with OAuth (CIMD client "claude.ai"; I approved code JAEAJM on the local API after matching it). A fresh cloud session using the owner's claude.ai Bagholder connector called lists, trades and positions with no errors. **End-to-end proven.**
+  - **To fix in #639:**
+    - (a) When 443 is taken, the panel must say that Claude.ai did not reach Funnel on 8443 in testing; free 443 or choose another tunnel. Today it moves to 8443 and shows Ready.
+    - (b) The `positions` answer was ~83,000 characters (Claude saved it to a file): make it compact.
+    - (c) Run the check by itself once the tunnel is up (today it is a button).
+  - **A leftover found, on master too:** `localmodel::spawn` (market/src/localmodel.rs) starts the llamafile summarizer as a plain child. Both test copies left one running after the server exited (killed by me). Its own PR: run it through the guard, as the tunnel is, with a test like `tests/tunnel_guard.rs`.
+  - **The shared cargo target:** worktrees share artifacts across checkouts (same metadata hash), so another checkout can leave a stale crate; `touch crates/*/src/lib.rs` forces a rebuild.
 - **Left:**
-  - the live Tailscale test (waiting on the owner's yes to use Funnel here);
   - the measurements (plan §5: archive size with and without rmcp's feature, build time, tunnel memory, a capacity row for an HTTP read through the listener);
   - Cloudflare's, ngrok's and zrok's steps still name commands (the owner wants no terminal);
   - the conformance job: running `@modelcontextprotocol/conformance` here was refused by the permission check ("Code from External"), so it is not included; say so in the PR;
