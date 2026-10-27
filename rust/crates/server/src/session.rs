@@ -40,33 +40,37 @@ fn set_error(app: &Arc<App>, msg: &str) {
 }
 
 /// What the session code is told of the sign-in. It alone sets "connected", which
-/// means it holds a token Wealthsimple issued that has not lapsed
-/// (`docs/plans/stage-money.md`, part C: one writer).
+/// means it holds a sign-in Wealthsimple issued and has not refused
+/// (`docs/plans/stage-money.md`, part C: one writer). Only Wealthsimple ends one:
+/// an access token past its expiry is renewed by the refresh, and no answer says
+/// nothing of the sign-in.
 pub enum Heard {
+    /// A sign-in saved by an earlier run, found at start: it stands until
+    /// Wealthsimple is asked.
+    Saved,
     /// Wealthsimple issued a token, or answered a request signed with one.
     Issued,
     /// Wealthsimple refused the sign-in, or there is none: connect again.
     Lapsed(String),
     /// Wealthsimple could not be asked (no answer, a refusal of the request, not of
-    /// the sign-in): connected stays while the token held has not expired.
+    /// the sign-in): the sign-in stands as it was.
     NotAsked(String),
 }
 
-/// The one writer of "connected", and of the error the sign-in leaves.
+/// The one writer of "connected", and of the error the sign-in leaves. A sign-in
+/// that ends is said in the log, with why.
 pub fn heard(app: &Arc<App>, h: Heard) {
-    let held_live = || load_session(app).ok().flatten().is_some_and(|s| !s.access_token.is_empty() && !bagholder_ws::session::token_expired(&s, now_unix()));
-    let live = matches!(h, Heard::NotAsked(_)) && held_live();
     let mut st = app.state.lock().unwrap();
     match h {
-        Heard::Issued => st.connected = true,
+        Heard::Saved | Heard::Issued => st.connected = true,
         Heard::Lapsed(why) => {
+            if st.connected {
+                crate::app::log(&format!("bagholder sign-in: ended: {}", if why.is_empty() { "no saved sign-in" } else { &why }));
+            }
             st.connected = false;
             st.error = why;
         }
-        Heard::NotAsked(why) => {
-            st.connected = st.connected && live;
-            st.error = why;
-        }
+        Heard::NotAsked(why) => st.error = why,
     }
 }
 
@@ -281,7 +285,12 @@ pub fn delete_session(app: &Arc<App>) -> Result<(), String> {
 /// pulled is the book's (`broker_reads::run`), not the session's.
 pub fn boot_session(app: &Arc<App>) {
     let mut sess = match load_session(app) {
-        Ok(Some(s)) => s,
+        Ok(Some(s)) => {
+            if !s.refresh_token.is_empty() {
+                heard(app, Heard::Saved);
+            }
+            s
+        }
         Ok(None) => {
             heard(app, Heard::Lapsed(String::new()));
             return;
