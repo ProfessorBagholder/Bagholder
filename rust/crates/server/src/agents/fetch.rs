@@ -214,6 +214,22 @@ impl Outside {
     }
 }
 
+/// The addresses a DNS-over-HTTPS JSON answer (RFC 8427's shape, as 1.1.1.1 and
+/// 8.8.8.8 write it) gives: its A (1) and AAAA (28) records; a CNAME's own line is
+/// followed by its answer, and is not an address.
+pub fn dns_json(body: &[u8]) -> Result<Vec<IpAddr>, String> {
+    let v: serde_json::Value = serde_json::from_slice(body).map_err(|e| format!("answered what is not DNS JSON: {e}"))?;
+    let mut got = Vec::new();
+    for a in v.get("Answer").and_then(|a| a.as_array()).into_iter().flatten() {
+        if matches!(a.get("type").and_then(|t| t.as_u64()), Some(1) | Some(28)) {
+            if let Some(ip) = a.get("data").and_then(|d| d.as_str()).and_then(|d| d.parse::<IpAddr>().ok()) {
+                got.push(ip);
+            }
+        }
+    }
+    Ok(got)
+}
+
 /// Public DNS over HTTPS: Cloudflare's 1.1.1.1 and Google's 8.8.8.8, both asked,
 /// each at its own address, and the answers of either taken.
 pub struct PublicDns;
@@ -228,17 +244,7 @@ impl Resolve for PublicDns {
             for ty in ["A", "AAAA"] {
                 let url = format!("https://{server}/{}?name={host}&type={ty}", if server == "dns.google" { "resolve" } else { "dns-query" });
                 match bagholder_net::client::get_at(&machine_clock(), to, &url, &[("Accept", "application/dns-json")], FETCH_LIMIT, 64 * 1024) {
-                    Ok(r) if r.status == 200 => {
-                        let v: serde_json::Value = serde_json::from_slice(&r.body).map_err(|e| format!("{server} answered what is not DNS JSON: {e}"))?;
-                        for a in v.get("Answer").and_then(|a| a.as_array()).into_iter().flatten() {
-                            // record types 1 (A) and 28 (AAAA); a CNAME's own line is followed by its answer
-                            if matches!(a.get("type").and_then(|t| t.as_u64()), Some(1) | Some(28)) {
-                                if let Some(ip) = a.get("data").and_then(|d| d.as_str()).and_then(|d| d.parse::<IpAddr>().ok()) {
-                                    got.push(ip);
-                                }
-                            }
-                        }
-                    }
+                    Ok(r) if r.status == 200 => got.extend(dns_json(&r.body).map_err(|e| format!("{server} {e}"))?),
                     Ok(r) => said.push(format!("{server} answered {}", r.status)),
                     Err(e) => said.push(format!("{server}: {e}")),
                 }
@@ -388,5 +394,21 @@ mod tests {
         assert!(started.elapsed() < Duration::from_millis(1000), "waited {:?}", started.elapsed());
         assert!(said.contains("not resolved within"), "{said}");
         assert!(get.asked.lock().unwrap().is_empty());
+    }
+
+    /// Public DNS's answers as 1.1.1.1 and 8.8.8.8 wrote them, recorded
+    /// 2026-10-27 (`tests/replies/public-dns`): A and AAAA records read, a CNAME's
+    /// line passed over, an answer with none giving none (brief 80 §7.2).
+    #[test]
+    fn public_dns_answers_are_read_as_recorded() {
+        let read = |f: &str| dns_json(&std::fs::read(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/replies/public-dns").join(f)).unwrap()).unwrap();
+        let ips = |l: &[&str]| l.iter().map(|a| a.parse::<IpAddr>().unwrap()).collect::<Vec<_>>();
+        assert_eq!(read("cloudflare-one.one.one.one-A.json"), ips(&["1.1.1.1", "1.0.0.1"]));
+        assert_eq!(read("cloudflare-one.one.one.one-AAAA.json"), ips(&["2606:4700:4700::1111", "2606:4700:4700::1001"]));
+        assert_eq!(read("cloudflare-www.github.com-A.json"), ips(&["20.29.134.23"]));
+        assert_eq!(read("google-www.github.com-A.json"), ips(&["140.82.114.4"]));
+        assert!(read("cloudflare-www.github.com-AAAA.json").is_empty(), "a CNAME alone is no address");
+        assert!(read("google-www.github.com-AAAA.json").is_empty());
+        assert!(dns_json(b"<html>blocked</html>").is_err());
     }
 }

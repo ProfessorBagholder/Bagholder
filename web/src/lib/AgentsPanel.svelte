@@ -137,17 +137,19 @@
   }
 
   const address = $derived(st?.address ?? '')
-  /** each agent's own steps, with its address, and for a key the key made for it */
-  async function copyFor(agent: string) {
+  /** the key just made for `name` and `way`, while it is shown: keys are named by the person, and a key for one way in never serves the other */
+  const keyFor = (name: string, way: 'mcp' | 'api') => (made && made.name === name && made.way === way ? made.key : null)
+  /** each agent's own steps, with its address, and for a key the key the person made for it, or the step that makes one: copying never makes a key, and copies within the click */
+  function copyFor(agent: string) {
     if (!address) return
     if (agent === 'claude') copy(`In Claude.ai: Settings → Connectors → Add custom connector. URL: ${address}/mcp. Then approve the code Bagholder shows on your computer.`, agent)
     else if (agent === 'chatgpt') copy(`In ChatGPT (and Dots through it): add a connector with the MCP server URL ${address}/mcp, sign in, and approve the code Bagholder shows on your computer.`, agent)
     else if (agent === 'muse') {
-      const k = made?.name === 'Muse' ? made : await makeKey('Muse', 'api')
-      if (k) copy(`In Muse, add a custom connector. API description: ${address}/api/agents/openapi.json. Authorization: Bearer ${k.key}`, agent)
+      const k = keyFor('Muse', 'api')
+      copy(`In Muse, add a custom connector. API description: ${address}/api/agents/openapi.json. Authorization: Bearer ${k ?? 'followed by a key: make one named Muse for the JSON API in Bagholder\'s Agents panel'}`, agent)
     } else if (agent === 'grok') {
-      const k = made?.name === 'Grok Bot' ? made : await makeKey('Grok Bot', 'mcp')
-      if (k) copy(`In Grok Bot, add a remote MCP server. URL: ${address}/mcp/key. Header: Authorization: Bearer ${k.key}`, agent)
+      const k = keyFor('Grok Bot', 'mcp')
+      copy(`In Grok Bot, add a remote MCP server. URL: ${address}/mcp/key. Header: Authorization: Bearer ${k ?? 'followed by a key: make one named Grok Bot for MCP in Bagholder\'s Agents panel'}`, agent)
     }
   }
   /** a line the tunnel wrote, with each https link in it one to open: a sign-in, or the page that lets Funnel on */

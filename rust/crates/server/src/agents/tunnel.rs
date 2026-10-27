@@ -7,7 +7,6 @@
 //! The only module of the agents' code that starts a process.
 
 use std::collections::VecDeque;
-use std::io::BufRead;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -592,7 +591,9 @@ fn reach_with(ctx: &Ctx, provider: Provider, value: &str) -> Ready {
         Ok(a) => a,
         Err(_) => return local(),
     };
-    let Some(ip) = answers.iter().copied().find(|a| fetch::public(*a)) else { return local() };
+    // every answer public, none this machine's own (brief 80 §7.1): one of its own
+    // is this computer asking itself, which says nothing of the public path
+    let Some(ip) = answers.first().copied().filter(|_| answers.iter().all(|a| fetch::public(*a))) else { return local() };
     if let Err(e) = fetched(SocketAddr::new(ip, port)) {
         // a machine may not reach its own address the public way (Tailscale's relay
         // does not carry a node's own traffic back to it): where this computer

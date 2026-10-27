@@ -153,8 +153,11 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
     // each check runs for its route's own methods alone: any other method is 405, asked of no one
     use axum::middleware::from_fn_with_state as check_with;
     use axum::routing::post_service;
-    let signed_in = Router::new().route("/mcp", post_service(mcp_service()).get_service(mcp_service()).route_layer(check_with(ctx.clone(), oauth_bearer)));
-    let with_key = Router::new().route("/mcp/key", post_service(mcp_service()).get_service(mcp_service()).route_layer(check_with(ctx.clone(), mcp_key)));
+    // one service per path, GET and POST alike: a session the POST opened is the
+    // GET's to stream (brief 80 §6.1)
+    let (signed_in_mcp, key_mcp) = (mcp_service(), mcp_service());
+    let signed_in = Router::new().route("/mcp", post_service(signed_in_mcp.clone()).get_service(signed_in_mcp).route_layer(check_with(ctx.clone(), oauth_bearer)));
+    let with_key = Router::new().route("/mcp/key", post_service(key_mcp.clone()).get_service(key_mcp).route_layer(check_with(ctx.clone(), mcp_key)));
     let api = Router::new()
         .route("/api/agents/trades", get(api::trades).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/trade", get(api::trade).route_layer(check_with(ctx.clone(), api_key)))
@@ -282,8 +285,10 @@ pub fn bearer(headers: &HeaderMap) -> Option<String> {
     scheme.eq_ignore_ascii_case("bearer").then(|| token.trim().to_string()).filter(|t| !t.is_empty())
 }
 
-/// Who a checked bearer is, or the answer refusing it.
-async fn admitted(ctx: Arc<Ctx>, req: Request, next: Next, check: fn(&Ctx, Option<&str>) -> Result<String, Response>) -> Response {
+/// Who a checked bearer is, or the answer refusing it. `per_request`: each request
+/// is a read, charged here (the JSON API); over MCP each tool call is, charged as it
+/// reads (`Served::reading`), so initializing, listing and notifications take none.
+async fn admitted(ctx: Arc<Ctx>, req: Request, next: Next, check: fn(&Ctx, Option<&str>) -> Result<String, Response>, per_request: bool) -> Response {
     let token = bearer(req.headers());
     let c = ctx.clone();
     let who = tokio::task::spawn_blocking(move || check(&c, token.as_deref())).await.unwrap_or_else(|_| Err(said(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Bagholder failed to answer.")));
@@ -291,7 +296,7 @@ async fn admitted(ctx: Arc<Ctx>, req: Request, next: Next, check: fn(&Ctx, Optio
         Ok(a) => a,
         Err(r) => return r,
     };
-    if let Err(retry) = rate(&ctx, &agent) {
+    if let Err(retry) = if per_request { rate(&ctx, &agent) } else { Ok(()) } {
         let c = ctx.clone();
         let a = agent.clone();
         logged(tokio::task::spawn_blocking(move || refused(&c, &a, "over the rate")).await);
@@ -304,18 +309,18 @@ async fn admitted(ctx: Arc<Ctx>, req: Request, next: Next, check: fn(&Ctx, Optio
 
 /// `/mcp`: an access token of a grant, for this address's `/mcp`.
 async fn oauth_bearer(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response {
-    admitted(ctx, req, next, oauth::access).await
+    admitted(ctx, req, next, oauth::access, false).await
 }
 
 /// `/mcp/key`: a key made for MCP. No sign-in is offered: a client given a key is
 /// never sent into one.
 async fn mcp_key(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response {
-    admitted(ctx, req, next, |c, t| key(c, t, "mcp")).await
+    admitted(ctx, req, next, |c, t| key(c, t, "mcp"), false).await
 }
 
 /// The JSON API: a key made for it.
 async fn api_key(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response {
-    admitted(ctx, req, next, |c, t| key(c, t, "api")).await
+    admitted(ctx, req, next, |c, t| key(c, t, "api"), true).await
 }
 
 /// A key of `way`, not withdrawn: its id.
@@ -365,11 +370,16 @@ impl super::tools::Reader for Served {
         (self.0.read)()
     }
 
-    fn reading(&self, caller: Option<&Caller>, tool: &str, args: &serde_json::Value) {
-        let Some(c) = caller else { return };
+    fn reading(&self, caller: Option<&Caller>, tool: &str, args: &serde_json::Value) -> Result<(), String> {
+        let Some(c) = caller else { return Ok(()) };
+        if let Err(retry) = rate(&self.0, &c.agent) {
+            refused(&self.0, &c.agent, "over the rate");
+            return Err(format!("Too many reads: ask again in {retry} seconds."));
+        }
         let r = bagholder_book::agents::Read { agent: c.agent.clone(), at: self.0.now(), tool: Some(tool.to_string()), arguments: Some(cut(&args.to_string())), refusal: None };
         if let Err(e) = self.0.store().and_then(|s| s.log(&r).map_err(|e| e.to_string())) {
             crate::app::log(&format!("bagholder: an agent's read could not be logged: {e}"));
         }
+        Ok(())
     }
 }

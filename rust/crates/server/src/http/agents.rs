@@ -463,6 +463,29 @@ mod tests {
         crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], bagholder_core::jiff::Timestamp::now()).unwrap();
     }
 
+    /// Clear's Agents kind removes the four settings and stops the listener and the
+    /// tunnel: nothing is left to answer an agent (the plan's test, brief 80 §6.5).
+    #[test]
+    fn clearing_the_agents_stops_the_listener_and_the_tunnel_and_removes_their_settings() {
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+        switch_on(&app, rt.handle()).unwrap();
+        let a = store(&app).unwrap();
+        let now = bagholder_core::jiff::Timestamp::now();
+        let s = Setup { provider: Provider::Own, name: "agents.example.com".into(), funnel_port: None, sends_host: None };
+        a.set_setting(agents::TUNNEL, Some(&serde_json::to_string(&s).unwrap()), now).unwrap();
+        a.set_setting(agents::HOST, Some("agents.example.com"), now).unwrap();
+        assert!(app.agents.port().is_some());
+        crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], now).unwrap();
+        assert!(app.agents.port().is_none(), "the listener stopped");
+        assert!(app.agents.tunnels().state().running.is_none(), "no tunnel runs");
+        let a = store(&app).unwrap();
+        for key in bagholder_book::agents::SETTINGS {
+            assert_eq!(a.setting(key).unwrap(), None, "{key} is gone");
+        }
+    }
+
     /// A port in the page's own range is never kept for the agents' address, whoever
     /// chose it (brief 80 §4.3).
     #[test]

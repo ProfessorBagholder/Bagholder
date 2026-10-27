@@ -82,3 +82,50 @@ describe('the Agents panel with Tailscale chosen', () => {
     expect(step?.textContent).not.toContain('Done')
   })
 })
+
+describe('Copy steps for an agent', () => {
+  afterEach(() => {
+    status.data = null as unknown as Status
+    vi.unstubAllGlobals()
+  })
+
+  // brief 80 §8.1: copying never makes a key; it uses the key the person made for
+  // that agent and way in, or says to make one; a key for the other way in never serves
+  it('uses the key made for that agent and way in, never makes one', async () => {
+    const posted: string[] = []
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url)
+      if (init?.method === 'POST') posted.push(path)
+      if (path.includes('/api/agents/keys')) {
+        const asked = JSON.parse(String(init?.body ?? '{}'))
+        return new Response(JSON.stringify({ ok: true, id: 'k1', name: asked.name, way: asked.way, key: `bh${asked.way}_made` }))
+      }
+      return new Response(JSON.stringify({ ok: true, lines: [] }))
+    })
+    vi.stubGlobal('fetch', fetch)
+    const copied: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (t: string) => void copied.push(t) } })
+    status.data = { agents: { ...agents([]), address: 'https://agents.example.com', ready: { state: 'ready' } } } as unknown as Status
+    const { container, getByRole, getByLabelText } = render(AgentsPanel)
+    flushSync()
+    await fireEvent.click(getByRole('button', { name: /(Copy steps for|Copied:) Muse/ }))
+    expect(posted.filter((p) => p.includes('/api/agents/keys'))).toEqual([])
+    expect(copied.at(-1)).toContain('make one named Muse for the JSON API')
+    // a key made for Muse over MCP does not serve its JSON API steps
+    await fireEvent.input(getByLabelText('Key name'), { target: { value: 'Muse' } })
+    await fireEvent.change(getByLabelText('Way in'), { target: { value: 'mcp' } })
+    await fireEvent.click(getByRole('button', { name: 'Make key' }))
+    await vi.waitFor(() => expect(container.textContent).toContain('bhmcp_made'))
+    await fireEvent.click(getByRole('button', { name: /(Copy steps for|Copied:) Muse/ }))
+    expect(copied.at(-1)).not.toContain('bhmcp_made')
+    // the one made for its JSON API does
+    await fireEvent.input(getByLabelText('Key name'), { target: { value: 'Muse' } })
+    await fireEvent.change(getByLabelText('Way in'), { target: { value: 'api' } })
+    await fireEvent.click(getByRole('button', { name: 'Make key' }))
+    await vi.waitFor(() => expect(container.textContent).toContain('bhapi_made'))
+    await fireEvent.click(getByRole('button', { name: /(Copy steps for|Copied:) Muse/ }))
+    expect(copied.at(-1)).toContain('Authorization: Bearer bhapi_made')
+    expect(posted.filter((p) => p.includes('/api/agents/keys'))).toHaveLength(2)
+  })
+})
+

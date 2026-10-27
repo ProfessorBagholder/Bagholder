@@ -455,11 +455,27 @@ impl AgentsBook {
 
     // ---- settings ----
 
+    /// One of the agents' own settings (`SETTINGS`): no other of the book's is read
+    /// or written through this handle (brief 80 §6.4).
     pub fn setting(&self, key: &str) -> Result<Option<String>> {
+        own(key)?;
         self.book.setting(key)
     }
 
     pub fn set_setting(&self, key: &str, value: Option<&str>, at: jiff::Timestamp) -> Result<()> {
+        own(key)?;
         self.book.set_setting(key, value, at)
+    }
+}
+
+/// The agents' own settings, the only ones their handle reads or writes: on or
+/// off, the listener's port, the tunnel chosen, the public name.
+pub const SETTINGS: [&str; 4] = ["agents.on", "agents.port", "agents.tunnel", "agents.host"];
+
+fn own(key: &str) -> Result<()> {
+    if SETTINGS.contains(&key) {
+        Ok(())
+    } else {
+        Err(BookError::Refused(format!("{key} is not one of the agents' settings")))
     }
 }

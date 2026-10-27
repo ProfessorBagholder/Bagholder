@@ -135,9 +135,12 @@ pub struct Caller {
 pub trait Reader: Send + Sync {
     /// The server to read, else what stands in the way, in words.
     fn server(&self) -> Result<ReadOnly, String>;
-    /// A read about to be made for `caller` (none on this machine's stdio): kept in
-    /// the agent's log, its arguments and never its answer.
-    fn reading(&self, _caller: Option<&Caller>, _tool: &str, _args: &Value) {}
+    /// A read about to be made for `caller` (none on this machine's stdio): charged to
+    /// the agent's rate, then kept in its log, its arguments and never its answer;
+    /// refused, what to say instead.
+    fn reading(&self, _caller: Option<&Caller>, _tool: &str, _args: &Value) -> Result<(), String> {
+        Ok(())
+    }
 }
 
 /// The MCP server: four tools, each a read of the running Bagholder.
@@ -162,8 +165,7 @@ impl Tools {
     async fn run(&self, ctx: &RequestContext<RoleServer>, tool: &'static str, args: Value, read: impl FnOnce(&ReadOnly) -> Result<Value, String> + Send + 'static) -> Result<CallToolResult, ErrorData> {
         let (reader, who) = (self.reader.clone(), caller(ctx));
         let got = tokio::task::spawn_blocking(move || {
-            reader.reading(who.as_ref(), tool, &args);
-            reader.server().and_then(|r| read(&r))
+            reader.reading(who.as_ref(), tool, &args).and_then(|()| reader.server().and_then(|r| read(&r)))
         })
         .await
         .unwrap_or_else(|e| Err(e.to_string()));

@@ -55,6 +55,8 @@ impl Get for Documents {
 
 struct Harness {
     ctx: Arc<Ctx>,
+    /// Built once, as the listener builds it: an MCP session lives in its services.
+    router: axum::Router,
     clock: Arc<Mutex<Timestamp>>,
     home: tempfile::TempDir,
     rt: tokio::runtime::Runtime,
@@ -78,7 +80,8 @@ fn harness_with(outside: Outside, read: Arc<dyn Fn() -> Result<crate::mcp::ReadO
         one_check: Default::default(),
     };
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
-    Harness { ctx: Arc::new(ctx), clock, home, rt }
+    let ctx = Arc::new(ctx);
+    Harness { router: router(ctx.clone()), ctx, clock, home, rt }
 }
 
 fn documents() -> Arc<Documents> {
@@ -135,7 +138,7 @@ impl Harness {
         }
         let mut req = req.body(Body::from(body)).unwrap();
         req.extensions_mut().insert(ConnectInfo(peer.parse::<SocketAddr>().unwrap()));
-        let r = router(self.ctx.clone());
+        let r = self.router.clone();
         self.rt.block_on(async move {
             let res = r.oneshot(req).await.unwrap();
             let (parts, body) = res.into_parts();
@@ -204,6 +207,37 @@ impl Harness {
             h.push(("authorization", a));
         }
         self.ask("POST", path, &h, body.to_string().into_bytes())
+    }
+
+    /// An MCP session at `path`: initialized, its id.
+    fn mcp_session(&self, path: &str, bearer: &str) -> String {
+        let a = self.mcp(path, Some(bearer));
+        assert_eq!(a.status, StatusCode::OK, "{}", a.text());
+        let id = a.header("mcp-session-id");
+        assert!(!id.is_empty(), "a session id");
+        let note = json!({ "jsonrpc": "2.0", "method": "notifications/initialized" });
+        let r = self.mcp_post(path, bearer, &id, note);
+        assert!(r.status.is_success(), "{}", r.status);
+        id
+    }
+
+    /// One JSON-RPC message in an MCP session.
+    fn mcp_post(&self, path: &str, bearer: &str, session: &str, body: Value) -> Answer {
+        let auth = format!("Bearer {bearer}");
+        let h = [("content-type", "application/json"), ("accept", "application/json, text/event-stream"), ("authorization", auth.as_str()), ("mcp-session-id", session), ("mcp-protocol-version", "2025-06-18")];
+        self.ask("POST", path, &h, body.to_string().into_bytes())
+    }
+
+    /// A request's status alone, its body never read: a stream that does not end.
+    fn status_only(&self, method: &str, uri: &str, headers: &[(&str, &str)]) -> StatusCode {
+        let mut req = Request::builder().method(method).uri(uri).header("host", HOST);
+        for (k, v) in headers {
+            req = req.header(*k, *v);
+        }
+        let mut req = req.body(Body::empty()).unwrap();
+        req.extensions_mut().insert(ConnectInfo("127.0.0.1:50000".parse::<SocketAddr>().unwrap()));
+        let r = self.router.clone();
+        self.rt.block_on(async move { r.oneshot(req).await.unwrap().status() })
     }
 
     fn key(&self, way: &str) -> String {
@@ -825,6 +859,40 @@ fn the_61st_call_before_sign_in_in_a_minute_is_refused() {
     assert_eq!(h.get("/.well-known/oauth-protected-resource").status, StatusCode::OK);
 }
 
+/// The allowance before sign-in is every caller's together, on every route before
+/// sign-in: spent on one, the next call on each of the others is refused too (brief
+/// 80 §9).
+#[test]
+fn the_allowance_before_sign_in_holds_on_every_route_before_it() {
+    let routes: [(&str, &str); 7] = [
+        ("GET", "/.well-known/oauth-protected-resource"),
+        ("GET", "/.well-known/oauth-authorization-server"),
+        ("POST", "/oauth/register"),
+        ("GET", "/oauth/authorize"),
+        ("POST", "/oauth/token"),
+        ("GET", "/agents/check/abc"),
+        ("GET", "/api/agents/openapi.json"),
+    ];
+    for (method, path) in routes {
+        let h = harness();
+        for _ in 0..BEFORE_SIGN_IN_PER_MINUTE {
+            h.get("/.well-known/oauth-authorization-server");
+        }
+        let a = h.ask(method, path, &[("content-type", "application/json")], if method == "POST" { b"{}".to_vec() } else { vec![] });
+        assert_eq!(a.status, StatusCode::TOO_MANY_REQUESTS, "{method} {path}");
+    }
+}
+
+/// The bounds are the plan's numbers (brief 73, 1; brief 80 §9).
+#[test]
+fn the_bounds_are_the_plan_s_numbers() {
+    assert_eq!(PENDING_KEPT, 5);
+    assert_eq!(UNAPPROVED_KEPT, 20);
+    assert_eq!(BEFORE_SIGN_IN_PER_MINUTE, 60);
+    assert_eq!(BODY_LIMIT, 16 * 1024);
+    assert_eq!(REQUEST_LIFE, SignedDuration::from_mins(10));
+}
+
 #[test]
 fn a_body_over_16_kib_is_refused() {
     let h = harness();
@@ -951,6 +1019,83 @@ fn the_11th_read_in_a_burst_is_refused_and_the_log_keeps_arguments_never_answers
     h.ask("GET", "/api/agents/lists", &[("authorization", "Bearer bhj_nope")], vec![]);
     assert!(listener::strangers(&h.ctx).contains(&("with a wrong key".to_string(), 1)));
     assert!(h.store().reads("", 10).unwrap().is_empty());
+}
+
+/// One MCP service per path: a session the POST opened is the GET's to stream,
+/// and a session it did not open is not (brief 80 §6.1).
+#[test]
+fn a_session_opened_by_post_is_the_get_s_to_stream() {
+    let h = harness();
+    let key = h.key("mcp");
+    let session = h.mcp_session("/mcp/key", &key);
+    let auth = format!("Bearer {key}");
+    assert_eq!(h.status_only("GET", "/mcp/key", &[("accept", "text/event-stream"), ("authorization", &auth), ("mcp-session-id", &session)]), StatusCode::OK);
+    assert_ne!(h.status_only("GET", "/mcp/key", &[("accept", "text/event-stream"), ("authorization", &auth), ("mcp-session-id", "no-such-session")]), StatusCode::OK);
+}
+
+/// Over MCP each tool call is a read, charged to the agent's rate and kept in its
+/// log, over /mcp and /mcp/key alike; initializing, listing and notifications are
+/// not (brief 80 §6.2, §6.3).
+#[test]
+fn over_mcp_each_tool_call_is_a_read_and_nothing_else_is() {
+    for path in ["/mcp", "/mcp/key"] {
+        let h = harness();
+        let (bearer, agent) = if path == "/mcp" {
+            let (access, _, grant) = h.sign_in();
+            (access, grant)
+        } else {
+            let k = h.key("mcp");
+            (k, h.store().keys().unwrap()[0].id.clone())
+        };
+        let session = h.mcp_session(path, &bearer);
+        for n in 0..3 * READS_BURST as u64 {
+            let r = h.mcp_post(path, &bearer, &session, json!({ "jsonrpc": "2.0", "id": 100 + n, "method": "tools/list", "params": {} }));
+            assert_eq!(r.status, StatusCode::OK, "{path}: list {n}");
+        }
+        let call = |n: u64| h.mcp_post(path, &bearer, &session, json!({ "jsonrpc": "2.0", "id": 200 + n, "method": "tools/call", "params": { "name": "trade", "arguments": { "id": "t-1" } } }));
+        for n in 0..READS_BURST as u64 {
+            let r = call(n);
+            assert_eq!(r.status, StatusCode::OK, "{path}: read {n}");
+            assert!(!r.text().contains("Too many reads"), "{path}: read {n}: {}", r.text());
+        }
+        assert!(call(99).text().contains("Too many reads"), "{path}: the read past the burst");
+        let log = approve::log(&h.store(), &agent).unwrap();
+        assert_eq!(log.iter().filter(|l| l.tool.as_deref() == Some("trade")).count(), READS_BURST as usize, "{path}: {log:?}");
+        assert!(log.iter().any(|l| l.refusal.as_deref() == Some("over the rate")), "{path}");
+    }
+}
+
+/// The agents' handle reads and writes their four settings alone (brief 80 §6.4).
+#[test]
+fn the_agents_handle_reads_and_writes_their_own_settings_alone() {
+    let h = harness();
+    let s = h.store();
+    for key in bagholder_book::agents::SETTINGS {
+        assert!(s.setting(key).is_ok(), "{key}");
+        assert!(s.set_setting(key, Some("x"), h.ctx.now()).is_ok(), "{key}");
+    }
+    for key in ["watch.folder", "statements.said", "agents.other", "agents"] {
+        assert!(s.setting(key).is_err(), "read {key}");
+        assert!(s.set_setting(key, Some("x"), h.ctx.now()).is_err(), "wrote {key}");
+    }
+}
+
+/// An agent's log keeps its newest `READS_KEPT` lines (the plan's 1,000).
+#[test]
+fn an_agent_s_log_keeps_its_newest_thousand_lines() {
+    assert_eq!(bagholder_book::agents::READS_KEPT, 1_000);
+    let h = harness();
+    let _made = h.key("api");
+    let agent = h.store().keys().unwrap()[0].id.clone();
+    let s = h.store();
+    for n in 0..1_005 {
+        h.advance(SignedDuration::from_secs(1));
+        s.log(&bagholder_book::agents::Read { agent: agent.clone(), at: h.ctx.now(), tool: Some("trades".into()), arguments: Some(format!("{{\"n\":{n}}}")), refusal: None }).unwrap();
+    }
+    let lines = s.reads(&agent, 5_000).unwrap();
+    assert_eq!(lines.len(), 1_000);
+    assert!(lines.iter().all(|l| l.arguments.as_deref() != Some("{\"n\":4}")), "the oldest went");
+    assert!(lines.iter().any(|l| l.arguments.as_deref() == Some("{\"n\":1004}")), "the newest stayed");
 }
 
 // ---- the tunnels ----
@@ -1086,8 +1231,15 @@ fn reach_with(system: &str, public: Option<&str>, funnel: bool, provider: tunnel
 }
 
 fn reach_through(system: &str, public: Option<&str>, funnel: bool, provider: tunnel::Provider, closed: &[&str]) -> (tunnel::Ready, Vec<SocketAddr>) {
+    // public DNS's answers, comma-separated
+    struct Answers(Vec<IpAddr>);
+    impl Resolve for Answers {
+        fn resolve(&self, _host: &str, _port: u16) -> Result<Vec<IpAddr>, String> {
+            Ok(self.0.clone())
+        }
+    }
     let public_dns: Arc<dyn Resolve> = match public {
-        Some(p) => Arc::new(PublicAnswer(p.parse().unwrap())),
+        Some(p) => Arc::new(Answers(p.split(',').map(|a| a.parse().unwrap()).collect())),
         None => Arc::new(Unreachable),
     };
     // the context the stand-in reaches; the check's value is opened on it
@@ -1117,6 +1269,11 @@ fn the_check_takes_the_public_path() {
     // from here, and never Ready
     let (ready, went) = reach_with("100.101.102.103", Some("10.1.2.3"), true, tunnel::Provider::Tailscale);
     assert_eq!(went, vec![SocketAddr::from(([100, 101, 102, 103], 443))]);
+    assert_eq!(ready, tunnel::Ready::Unconfirmed { said: tunnel::UNCONFIRMED.into() });
+    // and every answer must be public: one that is not, beside a public one, and the
+    // public path is not taken (brief 80 §7.1)
+    let (ready, went) = reach_with("100.101.102.103", Some("93.184.215.14,10.1.2.3"), true, tunnel::Provider::Tailscale);
+    assert_eq!(went, vec![SocketAddr::from(([100, 101, 102, 103], 443))], "never the public answer");
     assert_eq!(ready, tunnel::Ready::Unconfirmed { said: tunnel::UNCONFIRMED.into() });
 }
 
@@ -1170,6 +1327,11 @@ fn with_public_dns_unreachable_the_check_is_never_ready() {
 fn the_openapi_description_matches_its_routes() {
     let d = api::description(&format!("https://{HOST}"));
     assert_eq!(d["openapi"], "3.1.0");
+    // the document's own parts, as OpenAPI 3.1 requires and a client reads them
+    assert!(d["info"]["title"].is_string() && d["info"]["version"] == crate::app::APP_VERSION, "{}", d["info"]);
+    assert_eq!(d["servers"][0]["url"], format!("https://{HOST}"));
+    assert_eq!(d["components"]["securitySchemes"]["key"]["scheme"], "bearer");
+    assert_eq!(d["security"][0]["key"], json!([]), "every route asks for a key");
     let paths = d["paths"].as_object().unwrap();
     let api_routes: Vec<&str> = ROUTES.iter().map(|(p, _)| *p).filter(|p| p.starts_with("/api/agents/") && !p.ends_with("openapi.json")).collect();
     assert_eq!(paths.keys().map(String::as_str).collect::<Vec<_>>().len(), api_routes.len());
