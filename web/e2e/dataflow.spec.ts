@@ -198,6 +198,8 @@ test('a tab under filters it was never read with shows its last state until the 
 const BUDGET = {
   'opening a tab': { requests: 1, messages: 1 },
   'changing a filter': { requests: 1, messages: 6 },
+  // the filters show the holdings while open: closing them says the page no longer does
+  'closing the filters': { requests: 1, messages: 0 },
   'a minute idle': { requests: 0, messages: 0 },
 }
 
@@ -232,7 +234,11 @@ test('each interaction keeps within its request budget', async ({ page }) => {
     await page.locator('.pill', { hasText: '1Y' }).click()
     await expect(page.locator('.chip', { hasText: 'Date' })).toContainText('1Y')
   })
-  await page.keyboard.press('Escape')
+  // measured on its own, so its watch is never counted in the minute that follows
+  await measure('closing the filters', async () => {
+    await page.keyboard.press('Escape')
+    await expect(page.locator('.pop')).toBeHidden()
+  })
   await measure('a minute idle', async () => {
     await page.waitForTimeout(60_000)
   })
