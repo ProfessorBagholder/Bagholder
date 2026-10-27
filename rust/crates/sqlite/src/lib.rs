@@ -138,10 +138,8 @@ mod commit_tests {
     /// reader there reads the rows as they were (brief 19, change 4).
     #[test]
     fn a_reader_woken_by_the_signal_sees_what_the_commit_wrote() {
-        let dir = std::env::temp_dir().join(format!("bh-sqlite-commit-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("s.db");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.db");
         crate::open_db(&path).unwrap().execute_batch("CREATE TABLE t (x INTEGER)").unwrap();
         let seen: Arc<Mutex<Vec<i64>>> = Arc::new(Mutex::new(vec![]));
         let (s2, p2) = (seen.clone(), path.clone());
@@ -158,17 +156,15 @@ mod commit_tests {
     /// The hook takes over SQLite's automatic checkpoint: the log is still kept short.
     #[test]
     fn the_log_is_checkpointed_as_sqlite_would() {
-        let dir = std::env::temp_dir().join(format!("bh-sqlite-checkpoint-{}", std::process::id()));
-        let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("s.db");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("s.db");
         let c = crate::open_db_hooked(&path, Some(Arc::new(|| {}))).unwrap();
         c.execute_batch("CREATE TABLE t (x BLOB)").unwrap();
         let blob = vec![0u8; 8192];
         for _ in 0..3000 {
             c.execute("INSERT INTO t VALUES (?1)", [&blob]).unwrap();
         }
-        let wal = std::fs::metadata(dir.join("s.db-wal")).map(|m| m.len()).unwrap_or(0);
+        let wal = std::fs::metadata(dir.path().join("s.db-wal")).map(|m| m.len()).unwrap_or(0);
         let page: i64 = c.query_row("PRAGMA page_size", [], |r| r.get(0)).unwrap();
         // without checkpoints 3000 rows of 8 KiB would leave a log of some 24 MB;
         // checkpointed, writing restarts at its start once a checkpoint completes

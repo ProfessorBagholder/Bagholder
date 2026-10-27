@@ -142,11 +142,14 @@ jobs:
           CI: "true"
         run: cargo test --workspace --locked --no-run
         working-directory: rust
+      # on a temp folder of its own: a test that leaves anything there fails it
       - name: The Rust suite
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
           CI: "true"
-        run: cargo test --workspace --locked -- --skip capacity::tests
+        run: |
+          cargo test --workspace --locked --no-run
+          ../bin/check-test-leftovers.sh cargo test --workspace --locked -- --skip capacity::tests
         working-directory: rust
       # the test a sandboxed local run cannot hold: the notification applet, built with
       # osacompile, which needs Apple Events (#[ignore]d with that reason)
@@ -176,11 +179,15 @@ jobs:
           CI: "true"
         run: cargo test --locked -p bagholder-model --no-run
         working-directory: rust
+      # on a temp folder of its own: a test that leaves anything there fails it
       - name: The model's suite
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
           CI: "true"
-        run: cargo test --locked -p bagholder-model
+        shell: bash
+        run: |
+          cargo test --locked -p bagholder-model --no-run
+          ../bin/check-test-leftovers.sh cargo test --locked -p bagholder-model
         working-directory: rust
 
   # the release's image, made from the Linux archives' own binaries

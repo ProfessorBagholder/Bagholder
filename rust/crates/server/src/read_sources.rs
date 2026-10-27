@@ -484,10 +484,9 @@ mod tests {
 
     #[test]
     fn source_health_prints_each_state_and_each_last_outcome() {
-        let dir = std::env::temp_dir().join(format!("bh-health-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let dir = tempfile::tempdir().unwrap();
         let now: Timestamp = "2026-09-24T20:00:00Z".parse().unwrap();
-        let (cache, _) = MarketCache::open(&dir.join("market.db"), crate::app::APP_VERSION, now).unwrap();
+        let (cache, _) = MarketCache::open(&dir.path().join("market.db"), crate::app::APP_VERSION, now).unwrap();
         let row = |source: &'static str, outcome: OutcomeKind, minutes: i64, shape: Option<&str>| OutcomeRow {
             source: SourceName::named(source),
             host: "example.com".into(),
@@ -512,6 +511,5 @@ mod tests {
         for line in ["alpha: working", "bravo: refusing", "charlie: failing", "delta: shape-changed", "echo: unasked", "  refused ", "  answered ", "  mismatch ", "  not-carried "] {
             assert!(report.contains(line), "{line:?} not in:\n{report}");
         }
-        std::fs::remove_dir_all(&dir).unwrap();
     }
 }
