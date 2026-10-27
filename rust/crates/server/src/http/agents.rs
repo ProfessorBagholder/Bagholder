@@ -227,14 +227,48 @@ async fn start_tunnel(State(state): State<AppState>) -> Api<OkOr> {
             app.agents.look_at_tailscale();
         }
         let command = tunnel::command(&s, &path.display().to_string(), port).ok_or("This tunnel has no command.")?;
-        let signal = app.events.clone();
-        app.agents.tunnels().start(s.provider, tunnel::guarded(&command)?, Arc::new(move || signal.signal()))?;
+        let (signal, weak, provider) = (app.events.clone(), Arc::downgrade(&app), s.provider);
+        let checking = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // each line the tunnel writes is told to the page, and, until a check has
+        // found the address answering, checks it again: the tunnel writes as it
+        // comes up, so the address is checked as soon as it can answer
+        let on_line = move || {
+            signal.signal();
+            if let Some(app) = weak.upgrade() {
+                check_while_coming_up(&app, provider, &checking);
+            }
+        };
+        app.agents.tunnels().start(s.provider, tunnel::guarded(&command)?, Arc::new(on_line))?;
         app.agents.set_ready(None);
         app.events.signal();
         Ok(())
     })
     .await?;
     Ok(Json(done.map_or_else(OkOr::err, |()| OkOr::ok())))
+}
+
+/// The address checked on a thread of its own, one check at a time, until one finds
+/// it answering (Ready, or confirmed from the agent where the public path is closed
+/// to this computer).
+fn check_while_coming_up(app: &Arc<App>, provider: Provider, checking: &Arc<std::sync::atomic::AtomicBool>) {
+    use std::sync::atomic::Ordering;
+    if matches!(app.agents.ready(), Some(Ready::Ready | Ready::Unconfirmed { .. })) || checking.swap(true, Ordering::SeqCst) {
+        return;
+    }
+    let Some(ctx) = app.agents.ctx() else {
+        checking.store(false, Ordering::SeqCst);
+        return;
+    };
+    let (app, done) = (app.clone(), checking.clone());
+    let started = std::thread::Builder::new().name("agents-check".into()).spawn(move || {
+        app.agents.set_ready(Some(tunnel::reach(&ctx, provider)));
+        app.events.signal();
+        done.store(false, Ordering::SeqCst);
+    });
+    if let Err(e) = started {
+        checking.store(false, Ordering::SeqCst);
+        crate::app::log(&format!("bagholder: the agents' address could not be checked: {e}"));
+    }
 }
 
 async fn stop_tunnel(State(state): State<AppState>) -> Api<OkOr> {
@@ -325,4 +359,41 @@ async fn log(State(state): State<AppState>, Params(q): Params<LogAsked>) -> Api<
     let agent = q.agent.ok_or_else(|| ApiError::BadRequest("Which agent's log?".into()))?;
     let lines = blocking(move || store(&app).and_then(|a| approve::log(&a, &agent))).await?;
     lines.map(|lines| Json(AgentLog { lines })).map_err(ApiError::Failed)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// As the tunnel comes up, the address is checked on a thread of its own, once at
+    /// a time, and no more once a check has found it answering.
+    #[test]
+    fn the_address_is_checked_as_the_tunnel_comes_up_until_it_answers() {
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+        switch_on(&app, rt.handle()).unwrap();
+        app.agents.set_host("", None);
+        let checking = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        // no address known yet: the check runs, and says so
+        check_while_coming_up(&app, Provider::Own, &checking);
+        let until = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        while app.agents.ready().is_none() && std::time::Instant::now() < until {
+            std::thread::yield_now();
+        }
+        assert_eq!(app.agents.ready(), Some(Ready::Failed { said: "The address is not known yet.".into() }));
+        // one already running: no second
+        checking.store(true, std::sync::atomic::Ordering::SeqCst);
+        app.agents.set_ready(None);
+        check_while_coming_up(&app, Provider::Own, &checking);
+        assert_eq!(app.agents.ready(), None, "a check in flight is not started again");
+        // found answering: never checked again
+        checking.store(false, std::sync::atomic::Ordering::SeqCst);
+        app.agents.set_ready(Some(Ready::Ready));
+        check_while_coming_up(&app, Provider::Own, &checking);
+        assert!(!checking.load(std::sync::atomic::Ordering::SeqCst));
+        assert_eq!(app.agents.ready(), Some(Ready::Ready));
+        app.agents.switch_off();
+        crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], bagholder_core::jiff::Timestamp::now()).unwrap();
+    }
 }
