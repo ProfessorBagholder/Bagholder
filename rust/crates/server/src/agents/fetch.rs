@@ -83,12 +83,17 @@ pub trait Get: Send + Sync {
     fn get(&self, to: SocketAddr, url: &str, headers: &[(&str, &str)]) -> Result<bagholder_net::client::Response, String>;
 }
 
+/// The machine's clock, which a guarded fetch's deadline is kept on.
+fn machine_clock() -> std::sync::Arc<dyn bagholder_net::Clock> {
+    std::sync::Arc::new(bagholder_net::SystemClock)
+}
+
 /// The network.
 pub struct Net;
 
 impl Get for Net {
     fn get(&self, to: SocketAddr, url: &str, headers: &[(&str, &str)]) -> Result<bagholder_net::client::Response, String> {
-        bagholder_net::client::get_at(to, url, headers, FETCH_LIMIT, DOCUMENT_LIMIT + 1).map_err(|e| e.to_string())
+        bagholder_net::client::get_at(&machine_clock(), to, url, headers, FETCH_LIMIT, DOCUMENT_LIMIT + 1).map_err(|e| e.to_string())
     }
 }
 
@@ -172,7 +177,7 @@ impl Resolve for PublicDns {
             let mut got = Vec::new();
             for ty in ["A", "AAAA"] {
                 let url = format!("https://{server}/{}?name={host}&type={ty}", if server == "dns.google" { "resolve" } else { "dns-query" });
-                match bagholder_net::client::get_at(to, &url, &[("Accept", "application/dns-json")], FETCH_LIMIT, 64 * 1024) {
+                match bagholder_net::client::get_at(&machine_clock(), to, &url, &[("Accept", "application/dns-json")], FETCH_LIMIT, 64 * 1024) {
                     Ok(r) if r.status == 200 => {
                         let v: serde_json::Value = serde_json::from_slice(&r.body).map_err(|e| format!("{server} answered what is not DNS JSON: {e}"))?;
                         for a in v.get("Answer").and_then(|a| a.as_array()).into_iter().flatten() {

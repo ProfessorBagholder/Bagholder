@@ -216,6 +216,11 @@ pub struct TailscaleSays {
     pub https: bool,
     pub funnel: bool,
     pub name: Option<String>,
+    /// This machine's first address on its tailnet.
+    pub address: Option<String>,
+    /// Whether another program answers on 443 at that address: Funnel's traffic on
+    /// 443 would reach it, not Bagholder, so Funnel serves on 8443.
+    pub https_port_taken: bool,
     /// Why Tailscale could not be asked, in its words (its app not running, say).
     pub said: String,
 }
@@ -248,8 +253,16 @@ pub fn read_tailscale_status(v: &serde_json::Value) -> TailscaleSays {
         https: caps.contains(&"https"),
         funnel: caps.contains(&"funnel"),
         name: me.and_then(|s| s.get("DNSName")).and_then(|n| n.as_str()).map(|n| n.trim_end_matches('.').to_ascii_lowercase()).filter(|n| !n.is_empty()),
+        address: me.and_then(|s| s.get("TailscaleIPs")).and_then(|a| a.as_array()).into_iter().flatten().filter_map(|a| a.as_str()).find(|a| a.parse::<std::net::IpAddr>().is_ok()).map(str::to_string),
+        https_port_taken: false,
         said: String::new(),
     }
+}
+
+/// Whether a program answers at `to`: 443 at Tailscale's address for this machine,
+/// asked while no tunnel of Bagholder's runs.
+pub fn answers(to: SocketAddr) -> bool {
+    std::net::TcpStream::connect_timeout(&to, std::time::Duration::from_millis(500)).is_ok()
 }
 
 /// How many of a tunnel's last lines are kept to show.
@@ -611,7 +624,13 @@ fn reach_with(ctx: &Ctx, provider: Provider, value: &str) -> Ready {
     };
     let Some(ip) = answers.iter().copied().find(|a| fetch::public(*a)) else { return local() };
     if let Err(e) = fetched(SocketAddr::new(ip, port)) {
-        return Ready::Failed { said: e };
+        // a machine may not reach its own address the public way (Tailscale's relay
+        // does not carry a node's own traffic back to it): where this computer
+        // reaches it, it is asked from here, and never Ready
+        return match local() {
+            unconfirmed @ Ready::Unconfirmed { .. } => unconfirmed,
+            _ => Ready::Failed { said: e },
+        };
     }
     let (seen, funnel) = ctx.check.lock().unwrap_or_else(|e| e.into_inner()).as_ref().map_or((false, false), |c| (c.seen, c.funnel));
     if !seen {

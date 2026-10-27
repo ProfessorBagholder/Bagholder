@@ -169,20 +169,27 @@ enum Conn {
     Plain(TcpStream),
 }
 
-/// A socket whose reads end at a deadline: each waits only what is left of it, so a
-/// peer sending a byte at a time cannot hold the read past it.
-#[derive(Debug)]
+/// A socket whose reads end at a deadline on the clock it is handed: each waits
+/// only what is left of it, so a peer sending a byte at a time cannot hold the
+/// read past it.
 struct Until {
     tcp: TcpStream,
-    at: std::time::Instant,
+    clock: std::sync::Arc<dyn crate::Clock>,
+    at: jiff::Timestamp,
+}
+
+impl std::fmt::Debug for Until {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "a socket read until {}", self.at)
+    }
 }
 
 impl Read for Until {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        let left = self.at.saturating_duration_since(std::time::Instant::now());
-        if left.is_zero() {
+        let left = Duration::try_from(self.at.duration_since(self.clock.now())).ok().filter(|d| !d.is_zero());
+        let Some(left) = left else {
             return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the answer took longer than it is given"));
-        }
+        };
         self.tcp.set_read_timeout(Some(left))?;
         self.tcp.read(buf)
     }
@@ -772,19 +779,19 @@ fn send(
 /// is checked for TLS and sent as `Host`. Nothing is pooled, no proxy is used, and
 /// no redirect is followed (the redirect is the answer). The body is at most
 /// `ceiling` bytes, and the whole of it, from connecting to the last byte, takes at
-/// most `timeout`. For a fetch whose address was checked before it was made: an
+/// most `timeout` on `clock`. For a fetch whose address was checked before it was made: an
 /// agent's metadata document, and the agents' address asked from outside
 /// (`docs/plans/agents-from-anywhere.md`, §2.1 and §4.4).
-pub fn get_at(to: std::net::SocketAddr, url: &str, headers: &[(&str, &str)], timeout: Duration, ceiling: u64) -> Result<Response, Error> {
+pub fn get_at(clock: &std::sync::Arc<dyn crate::Clock>, to: std::net::SocketAddr, url: &str, headers: &[(&str, &str)], timeout: Duration, ceiling: u64) -> Result<Response, Error> {
     let u = parse_url(url)?;
     if !u.tls {
         return Err(Error::Transport(format!("{url} is not https")));
     }
     leaving("GET", &u)?;
-    let at = std::time::Instant::now() + timeout;
+    let at = jiff::SignedDuration::try_from(timeout).ok().and_then(|d| clock.now().checked_add(d).ok()).ok_or_else(|| Error::Transport(format!("{timeout:?} is no deadline")))?;
     let tcp = TcpStream::connect_timeout(&to, timeout).map_err(transport)?;
     tcp.set_write_timeout(Some(timeout)).map_err(transport)?;
-    let tls = connector()?.connect(&u.host, Until { tcp, at }).map_err(|e| Error::Transport(e.to_string()))?;
+    let tls = connector()?.connect(&u.host, Until { tcp, clock: clock.clone(), at }).map_err(|e| Error::Transport(e.to_string()))?;
     let mut c = Conn::TlsUntil(Box::new(tls));
     let host_header = if u.port == 443 { u.host.clone() } else { format!("{}:{}", u.host, u.port) };
     let mut req = format!("GET {} HTTP/1.1\r\nHost: {}\r\nAccept-Encoding: identity\r\nConnection: close\r\n", u.path, host_header);
@@ -1114,9 +1121,11 @@ mod ceiling_tests {
                 }
             }
         });
-        let started = std::time::Instant::now();
-        assert!(super::get_at(to, "https://localhost/doc", &[], Duration::from_millis(500), 1024).is_err());
-        assert!(started.elapsed() < Duration::from_secs(3), "{:?}", started.elapsed());
+        let clock: std::sync::Arc<dyn crate::Clock> = std::sync::Arc::new(crate::SystemClock);
+        let started = clock.now();
+        assert!(super::get_at(&clock, to, "https://localhost/doc", &[], Duration::from_millis(500), 1024).is_err());
+        let took = clock.now().duration_since(started);
+        assert!(took < jiff::SignedDuration::from_secs(3), "{took:?}");
     }
 
     #[test]

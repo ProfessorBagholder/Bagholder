@@ -177,7 +177,11 @@ impl Agents {
 
     /// Tailscale asked again: what it says now is what the panel shows.
     pub fn look_at_tailscale(&self) -> tunnel::TailscaleSays {
-        let says = tunnel::tailscale_says(tunnel::find(tunnel::Provider::Tailscale).as_deref());
+        let mut says = tunnel::tailscale_says(tunnel::find(tunnel::Provider::Tailscale).as_deref());
+        // only while no tunnel of Bagholder's runs: its own Funnel would answer there
+        if self.tunnels().state().running.is_none() {
+            says.https_port_taken = says.address.as_deref().and_then(|a| a.parse::<std::net::IpAddr>().ok()).is_some_and(|a| tunnel::answers(std::net::SocketAddr::new(a, 443)));
+        }
         *self.tailscale.lock().unwrap_or_else(|e| e.into_inner()) = Some(says.clone());
         says
     }

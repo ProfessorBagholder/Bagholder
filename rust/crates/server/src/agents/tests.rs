@@ -823,10 +823,15 @@ struct Through {
     ctx: Arc<Ctx>,
     funnel: bool,
     went: Mutex<Vec<SocketAddr>>,
+    /// Addresses that close the connection before answering.
+    closed: Vec<IpAddr>,
 }
 impl Get for Through {
     fn get(&self, to: SocketAddr, url: &str, _h: &[(&str, &str)]) -> Result<bagholder_net::client::Response, String> {
         self.went.lock().unwrap().push(to);
+        if self.closed.contains(&to.ip()) {
+            return Err("the handshake failed: unexpected EOF".into());
+        }
         let path = url.split(HOST).nth(1).unwrap().to_string();
         let mut req = Request::builder().method("GET").uri(&path).header("host", HOST);
         if self.funnel {
@@ -846,6 +851,10 @@ impl Get for Through {
 }
 
 fn reach_with(system: &str, public: Option<&str>, funnel: bool, provider: tunnel::Provider) -> (tunnel::Ready, Vec<SocketAddr>) {
+    reach_through(system, public, funnel, provider, &[])
+}
+
+fn reach_through(system: &str, public: Option<&str>, funnel: bool, provider: tunnel::Provider, closed: &[&str]) -> (tunnel::Ready, Vec<SocketAddr>) {
     let public_dns: Arc<dyn Resolve> = match public {
         Some(p) => Arc::new(PublicAnswer(p.parse().unwrap())),
         None => Arc::new(Unreachable),
@@ -860,7 +869,7 @@ fn reach_with(system: &str, public: Option<&str>, funnel: bool, provider: tunnel
         }
     }
     let h = harness_with(Outside { resolve: Arc::new(PublicAnswer(system.parse().unwrap())), get: Arc::new(Late(slot.clone())), public_dns }, Arc::new(|| Err("none".into())));
-    let through = Arc::new(Through { ctx: h.ctx.clone(), funnel, went: Mutex::new(vec![]) });
+    let through = Arc::new(Through { ctx: h.ctx.clone(), funnel, went: Mutex::new(vec![]), closed: closed.iter().map(|a| a.parse().unwrap()).collect() });
     *slot.lock().unwrap() = Some(through.clone());
     let ready = tunnel::reach(&h.ctx, provider);
     let went = through.went.lock().unwrap().clone();
@@ -878,6 +887,34 @@ fn the_check_takes_the_public_path() {
     let (ready, went) = reach_with("100.101.102.103", Some("10.1.2.3"), true, tunnel::Provider::Tailscale);
     assert_eq!(went, vec![SocketAddr::from(([100, 101, 102, 103], 443))]);
     assert_eq!(ready, tunnel::Ready::Unconfirmed { said: tunnel::UNCONFIRMED.into() });
+}
+
+/// A machine may not reach its own address the public way: Tailscale's relay does
+/// not carry a node's own traffic back to it. The public path closing is then asked
+/// from here, and never Ready; closed both ways, it failed, in the public path's words.
+#[test]
+fn a_public_path_closed_to_this_computer_is_asked_from_here_and_never_ready() {
+    let (ready, went) = reach_through("100.101.102.103", Some("93.184.215.14"), true, tunnel::Provider::Tailscale, &["93.184.215.14"]);
+    assert_eq!(went, vec![SocketAddr::from(([93, 184, 215, 14], 443)), SocketAddr::from(([100, 101, 102, 103], 443))]);
+    assert_eq!(ready, tunnel::Ready::Unconfirmed { said: tunnel::UNCONFIRMED.into() });
+    let (ready, _) = reach_through("100.101.102.103", Some("93.184.215.14"), true, tunnel::Provider::Tailscale, &["93.184.215.14", "100.101.102.103"]);
+    assert_eq!(ready, tunnel::Ready::Failed { said: "the handshake failed: unexpected EOF".into() });
+}
+
+/// Another program answering on 443 at this machine's tailnet address takes Funnel's
+/// traffic on 443: the address is read from Tailscale's status, and a listener there
+/// is found.
+#[test]
+fn a_program_on_443_at_the_tailnet_address_is_found() {
+    let says = tunnel::read_tailscale_status(&json!({"BackendState": "Running", "Self": {"DNSName": "m.tail0000.ts.net.", "TailscaleIPs": ["100.101.102.103", "fd7a:115c:a1e0::1"]}}));
+    assert_eq!(says.address.as_deref(), Some("100.101.102.103"));
+    assert!(!says.https_port_taken, "found only when looked for");
+    // a test cannot hold 443: the same check, on a port this test holds, then frees
+    let held = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let at = held.local_addr().unwrap();
+    assert!(tunnel::answers(at));
+    drop(held);
+    assert!(!tunnel::answers(at));
 }
 
 #[test]

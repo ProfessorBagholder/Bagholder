@@ -28,6 +28,10 @@
   let copied = $state('')
 
   $effect(() => {
+    // 443 held by another program here, and nothing saved yet: Funnel serves on 8443
+    if (st?.tailscale?.httpsPortTaken && !st.setup) funnelPort = 8443
+  })
+  $effect(() => {
     // the saved tunnel, once the status says it
     if (st?.setup && !picked) {
       picked = st.setup.provider
@@ -217,6 +221,8 @@
             <div><div class="lbl" style="margin-bottom:5px">Funnel port</div>
               <select class="input" bind:value={funnelPort} aria-label="Funnel port"><option value={443}>443</option><option value={8443}>8443 (443 is in use)</option></select>
             </div>
+            {#if st?.tailscale?.httpsPortTaken}<div class="muted" style="font-size:11.5px;align-self:center">Another program on this computer answers on 443, so Funnel serves on 8443.</div>{/if}
+            {#if funnelPort === 8443}<div class="status-err" style="font-size:11.5px;align-self:center">Claude.ai did not reach Funnel on 8443 when Bagholder was tested: to connect it, free 443 on this computer or choose another tunnel.</div>{/if}
           {:else}
             <div style="flex:1;min-width:200px"><div class="lbl" style="margin-bottom:5px">{nameLabel(picked)}</div><input class="input" bind:value={name} spellcheck="false" aria-label={nameLabel(picked)} /></div>
           {/if}

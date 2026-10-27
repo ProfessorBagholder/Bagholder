@@ -125,6 +125,23 @@ fn with_no_server_each_tool_says_bagholder_is_not_running() {
     assert_eq!(std::fs::read_dir(home.path()).unwrap().count(), 0, "nothing made in the folder");
 }
 
+/// The holdings an agent reads are the page's own, field for field, less the net
+/// worth's daily history: the Portfolio chart's series, read by no agent asking for
+/// the holdings, and nearly all of the answer's size.
+#[test]
+fn the_holdings_are_the_page_s_without_the_net_worth_s_history() {
+    let home = book(3);
+    let s = served(home.path());
+    let read = ReadOnly::at(&format!("http://127.0.0.1:{}", s.port)).unwrap();
+    let page = read.view("positions", json!({ "filters": null })).unwrap();
+    assert!(page.pointer("/portfolio/netWorth/history").and_then(Value::as_array).is_some_and(|h| !h.is_empty()), "the page's answer has a history, so the test shows its removal");
+    let mine = crate::agents::tools::positions(&read, crate::agents::tools::PositionsArgs::default()).unwrap();
+    assert!(mine.pointer("/portfolio/netWorth/history").is_none());
+    let mut want = page.clone();
+    want.pointer_mut("/portfolio/netWorth").unwrap().as_object_mut().unwrap().remove("history");
+    assert_eq!(mine, want, "everything else, field for field");
+}
+
 /// Two servers on two folders: each adapter reads its own folder's book; each
 /// page of trades is the page's own answer for the same filters, field for
 /// field; paging returns every trade once, with the Trades list's total; each

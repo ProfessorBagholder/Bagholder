@@ -86,9 +86,15 @@ pub fn one_trade(r: &ReadOnly, id: &str) -> Result<Value, String> {
     Ok(json!({ "trade": trade, "fills": fills.get("fills").cloned().unwrap_or(Value::Null) }))
 }
 
-/// The holdings, under the Portfolio's filters.
+/// The holdings, under the Portfolio's filters: the page's own answer, less the
+/// net worth's daily history, the Portfolio chart's series and nearly all of the
+/// answer's size, which an agent asking for the holdings does not read.
 pub fn positions(r: &ReadOnly, a: PositionsArgs) -> Result<Value, String> {
-    r.view("positions", json!({ "filters": a.filters }))
+    let mut doc = r.view("positions", json!({ "filters": a.filters }))?;
+    if let Some(net_worth) = doc.pointer_mut("/portfolio/netWorth").and_then(Value::as_object_mut) {
+        net_worth.remove("history");
+    }
+    Ok(doc)
 }
 
 /// What the book holds to filter by.
