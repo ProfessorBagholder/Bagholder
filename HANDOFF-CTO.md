@@ -106,7 +106,7 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ### Agents anywhere: the owner's focus (2026-10-27)
 - **The owner:** cloud agents (Claude.ai, ChatGPT, Grok Bot, Muse, Dots) connect through a standard MCP URL over the person's own tunnel. The stdio/Claude Desktop config route is not what they want. Test with Tailscale first; Cloudflare after (they have accounts and domains). **Nothing specific to the owner's accounts may go in the app**: every user picks a tunnel and is walked through it.
-- **Order:** agents anywhere → the gate removal → the cleanup PR → coin units → previews (over Funnel). **#638 merged (920d24a7), v2.11.1 released** 2026-10-27 (Latest, 8 assets; the release suites passed under the new leftover check on macOS and Windows).
+- **Order:** agents anywhere (#639) → the cleanup PR → previews (over Funnel). **On hold (the Architect, 2026-10-27): the coin units and the gate removal; start neither.** A design brief supersedes both. The owner: "it should be completely impossible for Bagholder to somehow have the wrong amounts vs WS when all it does is pull from WS." Every amount an account shows or acts on (cash per currency, units, book value, account value, buying power) will be taken exactly as Wealthsimple states it. The history will be read only for the journal, and the broker check and its header lines go. **#638 merged (920d24a7), v2.11.1 released** 2026-10-27 (Latest, 8 assets; the release suites passed under the new leftover check on macOS and Windows).
 - **Done on `agents-anywhere` since the audit** (pushed, head 00b5f0cb):
   - the panel reads the log through the read layer;
   - Tailscale's steps are read from `tailscale status --json` (`TailscaleSays`, `POST /api/agents/tunnel/look`);
@@ -163,7 +163,7 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
   - the test is tests/exit_with.rs `a_copy_that_stops_leaves_no_local_model_running`.
 - **Follow-up once #639's guard lands:** the model starts through the guard, and the call in main goes (one mechanism). The stop after a failed start stays.
 
-### Removing the gate on a mapping version (the Architect's ruling, architecture-briefs 48184fa2; one PR after the agents build, a PATCH)
+### Removing the gate on a mapping version (ON HOLD: superseded by the coming design brief; architecture-briefs 48184fa2)
 Brief 77 §4 is withdrawn. The owner: "those are things that must be caught during development" and "then how would anyone ever know it's wrong". A missed mistake must show as the page's ordinary disagreement line (status.rs:812) and be repaired by the next release's read.
 1. Remove:
    - `gated_rederive`;
