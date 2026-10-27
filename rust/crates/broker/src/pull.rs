@@ -45,9 +45,11 @@ pub struct Report {
     pub days_stored: usize,
     /// Days the broker stated again differently: kept beside the first.
     pub days_restated: usize,
-    /// What the monthly statements read and booked, and each month that does
-    /// not reconcile (`statements`).
-    pub statements: crate::statements::Done,
+    /// The records an earlier version booked from the monthly statements that
+    /// this pull withdrew, and those it left because they took the place of
+    /// another source's record (`withdraw_statement_records`).
+    pub statements_withdrawn: usize,
+    pub statements_left: usize,
     /// Each part that failed, and why.
     pub failures: Vec<(String, Failure)>,
     /// The book's accounts this pull read the broker's statements of (cash,
@@ -101,8 +103,7 @@ pub fn pull_restating(book: &Book, adapter: &mut dyn BrokerAdapter, connection: 
 }
 
 /// A pull of what moved since the last: the accounts, each account's activity
-/// from its last full read, the balances, and the statements where the cash
-/// disagrees. Not the holdings or the daily history, which are as of the last
+/// from its last full read, and the balances. Not the holdings or the daily history, which are as of the last
 /// full day and are read by the day's pull: for a movement seen during the day
 /// (the cash moving at the broker), the rows that moved, quickly.
 pub fn pull_activity(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step)) -> Result<Report> {
@@ -372,21 +373,9 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     if daily {
         store_margin_rates(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
     }
-    // the movements the activity feed left out, for an account whose cash now
-    // disagrees with the broker's: read from its monthly statements, every
-    // account's, closed ones too
-    let mut statement_keys: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
-    let mut closed = BTreeSet::new();
-    for a in &stated {
-        statement_keys.entry(ids[&a.key]).or_default().push(a.key.clone());
-        if !a.open {
-            closed.insert(a.key.clone());
-        }
-    }
-    report.statements = crate::statements::run(book, adapter, connection, &statement_keys, &closed, today, now, step, &mut report.failures)?;
-    let (taken, given_back) = crate::statements::fills(book, adapter, connection, &statement_keys, now, &mut report.failures)?;
-    report.statements.fills = taken;
-    report.statements.withdrawn += given_back;
+    // what an earlier version booked from the monthly statements, withdrawn:
+    // the feed's records they took the place of are live again (brief 79 §3.7)
+    (report.statements_withdrawn, report.statements_left) = withdraw_statement_records(book, adapter, now)?;
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
     // units already stated as of that day are not asked again (brief 07 §1),
@@ -999,6 +988,32 @@ fn store_balances(
         Err(f) => failures.push(("outside accounts".into(), f)),
     }
     Ok(stored.into_iter().collect())
+}
+
+
+/// What an earlier version booked from the monthly statements, withdrawn. The
+/// statements are no longer read (brief 79), so each live record of theirs is
+/// taken back, and each feed record one took the place of is live again with its
+/// trades (`Book::withdraw`). One that took the place of another source's record
+/// is left as it is. Once a pull has done it nothing of theirs is live, and it
+/// finds nothing. The withdrawn, and the left.
+pub fn withdraw_statement_records(book: &Book, adapter: &dyn BrokerAdapter, now: jiff::Timestamp) -> Result<(usize, usize)> {
+    let Some(source) = adapter.statement_mapping().map(|m| m.source()) else { return Ok((0, 0)) };
+    let feed = adapter.mapping();
+    let (mut withdrawn, mut left) = (0, 0);
+    for (id, _, _) in book.live_records_written(&source)? {
+        let mut another = false;
+        for r in book.replaced(id)? {
+            another |= book.record(r)?.source != feed.source();
+        }
+        if another {
+            left += 1;
+            continue;
+        }
+        book.withdraw(id, feed, now)?;
+        withdrawn += 1;
+    }
+    Ok((withdrawn, left))
 }
 
 #[cfg(test)]

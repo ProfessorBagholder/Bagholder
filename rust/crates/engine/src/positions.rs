@@ -2,7 +2,7 @@
 //! instrument, one way. A position's id is the trade id of the round trip its
 //! first lot belongs to, so a note on it is the note on the trade it becomes.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_core::instrument::InstrumentKind;
 use bagholder_core::jiff::civil::Date;
@@ -12,7 +12,7 @@ use bagholder_core::{AccountId, Currency, Dec, InstrumentId, Money, Rounding, Tr
 use crate::fx::live_to_cad;
 use crate::gap::{Fig, Gap, Gaps};
 use crate::identity::Identity;
-use crate::input::{Inputs, QuoteSource};
+use crate::input::{Clock, Inputs, Market, QuoteSource, Rates};
 use crate::ledger::{multiplier, Direction, Lot, Matched, TripKey};
 use crate::trades::PRICE_PLACES;
 
@@ -78,8 +78,6 @@ pub struct PositionFig {
     pub gaps: Gaps,
     pub flags: BTreeSet<&'static str>,
     pub journal: JournalEntry,
-    /// What the broker says the account holds of it now.
-    pub broker_qty: Option<Dec>,
 }
 
 fn fits(kind: InstrumentKind, source: QuoteSource) -> bool {
@@ -93,13 +91,17 @@ fn fits(kind: InstrumentKind, source: QuoteSource) -> bool {
 /// The instrument's price: its quote from its own kind's source, else its last
 /// stored close, else none. The person's own fill price is never a market price.
 pub fn mark_of(inputs: &Inputs, instrument: InstrumentId, kind: InstrumentKind, currency: Currency) -> Fig<Mark> {
-    if let Some(q) = inputs.market.quotes.get(&instrument).filter(|q| fits(kind, q.source) && q.price.currency == currency) {
+    mark_in(&inputs.market, &inputs.facts.rates, &inputs.clock, instrument, kind, currency)
+}
+
+/// `mark_of`, from the market's prices and the rates alone.
+pub fn mark_in(market: &Market, rates: &Rates, clock: &Clock, instrument: InstrumentId, kind: InstrumentKind, currency: Currency) -> Fig<Mark> {
+    if let Some(q) = market.quotes.get(&instrument).filter(|q| fits(kind, q.source) && q.price.currency == currency) {
         return Ok(Mark { price: q.price.amount, source: PriceSource::Quote, change: q.change, change_pct: q.change_pct });
     }
-    let today = inputs.clock.today;
-    if let Some((day, close)) = inputs.market.closes.get(&instrument).and_then(|c| c.range(..=today).next_back()) {
+    if let Some((day, close)) = market.closes.get(&instrument).and_then(|c| c.range(..=clock.today).next_back()) {
         // a close in another currency is converted at its own day's rate
-        let price = crate::fx::convert(&inputs.facts.rates, &inputs.clock, *close, currency, *day)?;
+        let price = crate::fx::convert(rates, clock, *close, currency, *day)?;
         return Ok(Mark { price, source: PriceSource::Close(*day), change: None, change_pct: None });
     }
     Err(Gaps::of(Gap::PriceUnknown(instrument)))
@@ -110,13 +112,18 @@ pub fn mark_of(inputs: &Inputs, instrument: InstrumentId, kind: InstrumentKind, 
 /// that session's move from the close before it. A close in another currency is
 /// converted at its own day's rate.
 pub fn close_mark(inputs: &Inputs, instrument: InstrumentId, currency: Currency, day: Date) -> Fig<Mark> {
-    let closes = inputs.market.closes.get(&instrument);
+    close_mark_in(&inputs.market.closes, &inputs.facts.rates, &inputs.clock, instrument, currency, day)
+}
+
+/// `close_mark`, from the stored closes and the rates alone.
+pub fn close_mark_in(closes: &BTreeMap<InstrumentId, BTreeMap<Date, Money>>, rates: &Rates, clock: &Clock, instrument: InstrumentId, currency: Currency, day: Date) -> Fig<Mark> {
+    let closes = closes.get(&instrument);
     let mut last = closes.into_iter().flat_map(|c| c.range(..=day).rev());
     let Some((d, close)) = last.next() else { return Err(Gaps::of(Gap::PriceUnknown(instrument))) };
-    let price = crate::fx::convert(&inputs.facts.rates, &inputs.clock, *close, currency, *d)?;
+    let price = crate::fx::convert(rates, clock, *close, currency, *d)?;
     let (change, change_pct) = match last.next() {
         Some((d0, c0)) => {
-            let before = crate::fx::convert(&inputs.facts.rates, &inputs.clock, *c0, currency, *d0)?;
+            let before = crate::fx::convert(rates, clock, *c0, currency, *d0)?;
             let change = price.checked_sub(before)?;
             let pct = if before.is_zero() { None } else { Some(change.checked_mul(Dec::new(100, 0)?)?.div_rounded(before, PRICE_PLACES, Rounding::HalfEven)?) };
             (Some(change), pct)
@@ -280,7 +287,6 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
                 flags,
                 journal,
                 // what the broker holds now says nothing of a past day
-                broker_qty: if as_of.is_some() { None } else { inputs.market.brokers.get(account).and_then(|b| b.held.get(instrument)).copied() },
                 lots,
             });
         }

@@ -182,9 +182,6 @@ impl Source for Routed<'_> {
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         if self.op == Op::History { self.client.history(account, from) } else { self.replay.history(account, from) }
     }
-    fn statement(&mut self, account: &str, month: jiff::civil::Date, kind: &str) -> Answer<Option<Value>> {
-        self.replay.statement(account, month, kind)
-    }
     fn requests(&self) -> usize {
         self.replay.requests() + self.client.requests()
     }
@@ -226,7 +223,7 @@ fn pulled(op: Op, bodies: &[String]) -> Pulled {
     let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
     let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
     let f = answering(bodies);
-    let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements(), client: f.client(), op });
+    let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap(), client: f.client(), op });
     let report = pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), now, &mut |_| {}).unwrap();
     drop(ws);
     Pulled { asked: f.asked(), _home: home, book, report }
@@ -442,7 +439,7 @@ fn balances_read_between_syncs_keep_what_each_account_is_worth_now() {
     let connection = p.book.accounts().unwrap()[0].connection;
     let later: jiff::Timestamp = "2025-11-19T20:05:00Z".parse().unwrap();
     let f = answering(&[body("wealthsimple-pull/edited-accounts-one.json").replace("198451.616214", "201007.25")]);
-    let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements(), client: f.client(), op: Op::Accounts });
+    let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap(), client: f.client(), op: Op::Accounts });
     let read = bagholder_broker::pull::balances(&p.book, &mut ws, connection, later).unwrap();
     drop(ws);
     assert!(read.failures.is_empty(), "{:?}", read.failures);
@@ -1135,7 +1132,7 @@ fn balances_read_between_syncs_name_an_account_whose_cash_moved_since_its_activi
     let connection = p.book.accounts().unwrap()[0].connection;
     let read_at = |later: &str, answer: String| {
         let f = answering(&[answer]);
-        let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements(), client: f.client(), op: Op::Balances });
+        let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap(), client: f.client(), op: Op::Balances });
         bagholder_broker::pull::balances(&p.book, &mut ws, connection, later.parse().unwrap()).unwrap()
     };
     let same = read_at("2025-11-19T20:05:00Z", body("wealthsimple-pull/edited-balances.json"));
@@ -1155,7 +1152,7 @@ fn a_pull_of_the_activity_alone_reads_no_holdings_or_history_and_leaves_the_days
         let home = tempfile::tempdir().unwrap();
         let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
         let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
-        let mut ws = Wealthsimple::new(Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements());
+        let mut ws = Wealthsimple::new(Replay::read(&replies("wealthsimple-pull")).unwrap());
         let report = if whole {
             pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), now, &mut |_| {}).unwrap()
         } else {

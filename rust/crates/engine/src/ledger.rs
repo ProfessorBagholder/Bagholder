@@ -352,10 +352,6 @@ pub struct Matched {
     /// it is about: units that arrived with no cost on the record, and corporate
     /// events nothing says the values of.
     pub waiting: BTreeMap<TransactionId, Waiting>,
-    /// Each account's cash in each currency: every transaction's cash added up,
-    /// kept so that one account's check with its broker reads its own totals and
-    /// nothing else (`equity::broker_checks`); a sum that does not fit is that failure.
-    pub cash: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>>,
     /// Each instrument's round trips (by the instrument each is keyed on): what a
     /// family's figures are rebuilt from without a pass over every round trip.
     pub trips_of: BTreeMap<InstrumentId, BTreeSet<TripKey>>,
@@ -2398,8 +2394,6 @@ impl MatchState {
 pub struct Continued {
     pub trips: BTreeSet<TripKey>,
     pub holdings: BTreeSet<(AccountId, InstrumentId)>,
-    /// The added rows' cash, by account.
-    pub cash: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>>,
     /// Rows whose cashflow row reads what the walk wrote: the stock dividends it
     /// took out and wrote again, after a cut.
     pub rows: BTreeSet<TransactionId>,
@@ -2615,20 +2609,6 @@ pub fn passes_over(inputs: &Inputs, t: &Transaction) -> bool {
     t.instrument.is_none() || (t.kind == Kind::Dividend && inputs.facts.adjustments.get(&t.id).is_none())
 }
 
-/// Each account's cash `txs` move.
-fn cash_of(txs: &[&Transaction]) -> BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>> {
-    let mut out: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>> = BTreeMap::new();
-    for t in txs {
-        if let Some(c) = t.cash {
-            let e = out.entry(t.account).or_default().entry(c.currency).or_insert(Ok(Dec::ZERO));
-            if let Ok(total) = e {
-                *e = total.checked_add(c.amount).map_err(Gaps::from);
-            }
-        }
-    }
-    out
-}
-
 /// The match of `txs` alone, and what it keeps to be continued from: a set of
 /// transactions no other transaction's matching reaches (a family,
 /// `crate::families`), or every transaction. The lists of what the record waits
@@ -2647,7 +2627,6 @@ pub fn match_family(inputs: &Inputs, txs: Vec<&Transaction>) -> (Matched, MatchS
     let (mut state, _, _) = m.into_state(last, opens);
     state.expired_at_end = end.popped;
     state.ended_quiet = !end.acted;
-    out.cash = cash_of(&txs);
     out.in_match_order(&inputs.ledger);
     out.index();
     (out, state)
@@ -2673,7 +2652,7 @@ pub fn continue_family(inputs: &Inputs, out: &mut Matched, state: &mut MatchStat
     let (last, opens) = (s.last.take(), std::mem::take(&mut s.opens_at_last));
     let (s, trips, holdings) = walk_from(inputs, out, s, &added, last, opens, scope);
     *state = s;
-    Continued { trips, holdings, cash: cash_of(&added), rows: BTreeSet::new() }
+    Continued { trips, holdings, rows: BTreeSet::new() }
 }
 
 /// `rows` walked on from `s` into `out`, as the whole match walks them: the
@@ -2814,7 +2793,7 @@ pub fn match_from_cut(inputs: &Inputs, out: &mut Matched, state: &mut MatchState
     *state = s;
     trips.extend(gone);
     rows.extend(out.stock_dividends.iter().filter(|x| later.contains(&x.transaction)).map(|x| x.transaction.clone()));
-    Continued { trips, holdings, cash: cash_of(added), rows }
+    Continued { trips, holdings, rows }
 }
 
 /// A round trip added inside one of a family's flat stretches, placed there
@@ -2926,7 +2905,7 @@ pub fn place_in_stretch(inputs: &Inputs, out: &mut Matched, state: &mut MatchSta
     state.stretches.extend(stretches);
     // every cut after the rows held the match without them
     state.cuts.retain(|k, _| start.as_ref().is_some_and(|st| k <= st));
-    Some(Continued { trips, holdings, cash: cash_of(&added), rows: BTreeSet::new() })
+    Some(Continued { trips, holdings, rows: BTreeSet::new() })
 }
 
 impl Matched {
@@ -2958,7 +2937,7 @@ impl Matched {
         self.roles.retain(|x, _| !tx_in(x));
         self.waiting.retain(|x, _| !tx_in(x));
         // the lists kept in the match's order: each new row put in its place
-        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, trips_by_fill, held_by } = fresh;
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, trips_of, trips_by_fill, held_by } = fresh;
         let at = |id: &TransactionId| ledger.transactions.get(id).map(|t| place_in_match(ledger, t));
         fn put<T>(list: &mut Vec<T>, rows: Vec<T>, key: impl Fn(&T) -> Option<(Date, u8, Option<Timestamp>, u8, String, u8, String, TransactionId)>) {
             for row in rows {
@@ -3011,7 +2990,7 @@ impl Matched {
     /// Everything `fresh` holds put in beside what this holds, the cash totals
     /// aside (the caller's); the lists left for `in_match_order`.
     pub fn absorb(&mut self, fresh: Matched) {
-        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, trips_by_fill, held_by } = fresh;
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, trips_of, trips_by_fill, held_by } = fresh;
         for (i, k) in trips_of {
             self.trips_of.entry(i).or_default().extend(k);
         }

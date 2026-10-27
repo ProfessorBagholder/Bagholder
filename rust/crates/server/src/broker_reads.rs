@@ -362,7 +362,6 @@ fn step_text(s: &Step) -> String {
         // in whole percents, so a long pull changes the header a hundred times at most
         Step::Recording { done, of } => format!("Saving transactions… {}%", if *of == 0 { 100 } else { done * 100 / of }),
         Step::Balances => "Fetching balances…".into(),
-        Step::Statements => "Fetching statements…".into(),
         Step::Holdings { account, n, of } => format!("Fetching holdings for {account} ({n} of {of})…"),
         Step::History { account, n, of } => format!("Fetching equity history for {account} ({n} of {of})…"),
     }
@@ -434,14 +433,12 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     }
     // what was stored is applied whatever else failed
     set_step(app, "Saving…");
-    // the rows and the statements read with them, applied in one write
+    // the rows and what the broker states with them, applied in one write
     let applied = f.pulled(now, &report.stated_for);
     end_steps(app);
     applied?;
-    // a mapping version refused before, tried again with what the broker states now
-    f.retry_refused(now)?;
-    if report.statements.read > 0 || report.statements.booked > 0 {
-        log(&format!("bagholder: statements: {} read, {} movements the activity feed left out booked, {} moves between accounts joined", report.statements.read, report.statements.booked, report.statements.joined));
+    if report.statements_withdrawn > 0 || report.statements_left > 0 {
+        log(&format!("bagholder: what earlier versions booked from the monthly statements: {} records withdrawn, {} left in place of another source's", report.statements_withdrawn, report.statements_left));
     }
     // a file's row the broker's own row now reports is linked to it
     let linking = crate::csv_import::link(f, now)?;

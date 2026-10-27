@@ -614,43 +614,6 @@ fn run(path: &Path) -> Vec<String> {
                 c.ratio_fig("current yield", v, &h.current_yield.clone().map(Some));
             }
         }
-        for want in arr(&expect, "checks") {
-            let account = b.ids.account(s(&want, "account").unwrap());
-            let Some(chk) = f.checks.iter().find(|x| x.account == account) else {
-                c.fail(format!("no broker check for {}", s(&want, "account").unwrap()));
-                continue;
-            };
-            let got = chk.differences.len() as u64;
-            if Some(got) != want.get("differences").and_then(Value::as_u64) {
-                c.fail(format!("broker check differences: expected {:?}, got {:?}", want.get("differences"), chk.differences));
-            }
-            if let Some(n) = want.get("pending_differences").and_then(Value::as_u64) {
-                let got = chk.differences.iter().filter(|d| d.pending()).count() as u64;
-                if got != n {
-                    c.fail(format!("broker check pending differences: expected {n}, got {:?}", chk.differences));
-                }
-            }
-            // each cash difference expected: {"currency", "own", "broker", "pending"}
-            for d in arr(&want, "cash") {
-                use bagholder_engine::equity::Difference;
-                let currency = bagholder_core::Currency::parse(s(&d, "currency").unwrap()).unwrap();
-                match chk.differences.iter().find(|x| matches!(x, Difference::Cash { currency: c, .. } if *c == currency)) {
-                    Some(Difference::Cash { own, broker, pending, .. }) => {
-                        c.figure(&format!("{currency} cash, the book's"), d.get("own").unwrap(), own);
-                        c.figure(&format!("{currency} cash, the broker's"), d.get("broker").unwrap(), &Ok(*broker));
-                        if Some(*pending) != d.get("pending").and_then(Value::as_bool) {
-                            c.fail(format!("{currency} cash difference pending: expected {:?}, got {pending}", d.get("pending")));
-                        }
-                    }
-                    _ => c.fail(format!("no {currency} cash difference: {:?}", chk.differences)),
-                }
-            }
-            if let Some(p) = want.get("pending").and_then(Value::as_bool) {
-                if chk.pending != p {
-                    c.fail(format!("broker check pending: expected {p}"));
-                }
-            }
-        }
         for want in arr(&expect, "equity") {
             let account = b.ids.account(s(&want, "account").unwrap());
             let d = day(s(&want, "day").unwrap());

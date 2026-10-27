@@ -903,13 +903,7 @@
       ],
       "position_count": 0,
       "positions": [],
-      "beyond": [],
-      "checks": [
-        {
-          "account": "A",
-          "differences": 0
-        }
-      ]
+      "beyond": []
     }
   },
   {
@@ -981,13 +975,7 @@
       ],
       "position_count": 0,
       "positions": [],
-      "beyond": [],
-      "checks": [
-        {
-          "account": "A",
-          "differences": 1
-        }
-      ]
+      "beyond": []
     }
   },
   {
@@ -1063,13 +1051,7 @@
           "qty": "5"
         }
       ],
-      "beyond": [],
-      "checks": [
-        {
-          "account": "A",
-          "differences": 0
-        }
-      ]
+      "beyond": []
     }
   },
   {

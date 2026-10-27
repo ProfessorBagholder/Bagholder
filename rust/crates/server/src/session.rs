@@ -138,7 +138,6 @@ fn held_tokens(app: &Arc<App>, sess: &mut Session) -> Result<bagholder_wealthsim
         client_id,
         identity: sess.identity(),
         expires_at: None,
-        device: (!sess.wssdi.is_empty()).then(|| sess.wssdi.clone()),
     })
 }
 

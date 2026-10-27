@@ -58,8 +58,7 @@ pub struct Stated {
     /// states every line of it in one currency.
     pub unit_values: BTreeMap<InstrumentId, Money>,
     /// What that statement states each instrument's book value is, the same way:
-    /// the broker's own, kept to check the book's average cost against, never a
-    /// cost the book takes.
+    /// the holding's book value as the app shows it (brief 79).
     pub unit_books: BTreeMap<InstrumentId, Money>,
     /// When the account's activity was last read in full.
     pub activity_read_at: Option<jiff::Timestamp>,
@@ -152,29 +151,6 @@ impl Book {
     pub fn last_read(&self, connection: ConnectionId, part: &str) -> Result<Option<jiff::Timestamp>> {
         let at: Option<i64> = self.conn().query_row("SELECT MAX(at_ns) FROM broker_reads WHERE connection_id = ?1 AND part = ?2", params![connection.to_string(), part], |r| r.get(0))?;
         at.map(|t| from_ns("broker_reads", "at_ns", t)).transpose()
-    }
-
-    /// Keep an account's statement for the month starting `month`, as the
-    /// broker issued it. A month is read once and kept: a second copy of the
-    /// same month is not stored.
-    pub fn keep_monthly_statement(&self, connection: ConnectionId, account_key: &str, month: jiff::civil::Date, payload: &str, read: &ReadId) -> Result<()> {
-        self.conn().execute(
-            "INSERT OR IGNORE INTO monthly_statements (connection_id, account_key, month, payload, read_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![connection.to_string(), account_key, month.to_string(), payload, read.0],
-        )?;
-        Ok(())
-    }
-
-    /// Every statement kept for one of the broker's accounts, by month, oldest first.
-    pub fn monthly_statements(&self, connection: ConnectionId, account_key: &str) -> Result<Vec<(jiff::civil::Date, String)>> {
-        let mut stmt = self.conn().prepare("SELECT month, payload FROM monthly_statements WHERE connection_id = ?1 AND account_key = ?2 ORDER BY month")?;
-        let rows = stmt.query_map(params![connection.to_string(), account_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        let mut out = Vec::new();
-        for r in rows {
-            let (m, p) = r?;
-            out.push((text::parsed("monthly_statements", "month", &m, |d: &str| d.parse::<jiff::civil::Date>())?, p));
-        }
-        Ok(out)
     }
 
     /// The links between a connection's accounts, as one read of the accounts

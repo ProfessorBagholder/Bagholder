@@ -190,37 +190,16 @@ pub fn failures(st: &app::State, sources: &[String]) -> String {
     said.join(" ")
 }
 
-/// Where the book's units differ from what the broker states, and each sale or
-/// move that took out more units than the book held, one sentence each, said while
-/// the derivation finds it and gone with the next one that agrees. A holding's
-/// units are still the book's own (brief 79 reads them from Wealthsimple), so a
-/// difference is the one sign a figure shown is wrong: said until then. Where the
-/// book's cash differs from Wealthsimple's, a row of Wealthsimple's is not placed
-/// or a statement month does not reconcile, the header says nothing: the cash shown
-/// is Wealthsimple's, and none of those is a figure shown (the owner, 2026-10-27:
-/// "obviously you cannot account for every possible transaction that could happen
-/// in a checking account"). Figures are written exactly: a difference below the
-/// tables' rounding would read as two equal numbers.
+/// Each sale or move that took out more units than the book held, one sentence
+/// each, said while the derivation finds it and gone with the next one that does
+/// not: the journal's reading, never an amount (brief 79 §7). No sentence says the
+/// book's figures differ from Wealthsimple's: every amount shown is Wealthsimple's
+/// (brief 79 §1), so there is nothing to differ. Figures are written exactly: a
+/// difference below the tables' rounding would read as two equal numbers.
 pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
-    use bagholder_engine::equity::Difference;
     let inputs = e.inputs();
     let figures = e.figures();
-    // in the order a reader looks them up, never by the ids' random order: by
-    // account name, then the holdings by what they say
-    let mut checks: Vec<_> = figures.checks.iter().map(|c| (crate::wire::build::account_name(inputs, c.account), c)).collect();
-    checks.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.account.cmp(&b.1.account)));
     let mut out = vec![];
-    for (_, c) in checks {
-        let (broker, account) = (broker_label(inputs, c.account), in_account(inputs, c.account));
-        let mut held = vec![];
-        for d in c.differences.iter().filter(|d| !d.pending()) {
-            if let Difference::Units { instrument, own, broker: stated, .. } = d {
-                held.push(format!("{} in {account}: {broker} states {}, the book {}.", symbol(inputs, *instrument), units(*stated), own.as_ref().map(|o| format!("holds {}", exact(*o))).unwrap_or_else(|g| format!("cannot count its units ({})", g.words().join(", ")))));
-            }
-        }
-        held.sort();
-        out.extend(held);
-    }
     let beyond = &figures.matched.beyond;
     if !beyond.is_empty() {
         let wanted: std::collections::BTreeSet<_> = beyond.iter().map(|b| &b.transaction).collect();
@@ -233,11 +212,6 @@ pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
         }
     }
     out
-}
-
-/// The broker an account is held at, as its sentences name it.
-fn broker_label(inputs: &bagholder_engine::input::Inputs, a: bagholder_core::AccountId) -> String {
-    inputs.ledger.accounts.get(&a).map(|x| x.broker_label.clone()).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "The broker".into())
 }
 
 /// What took the units out, as a sentence opens with it.
@@ -483,9 +457,8 @@ mod tests {
         let mut feed = crate::events::Feed::open(app.clone());
         assert!(app.events.watch(&app, feed.id(), [("status".to_string(), crate::events::Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
         let first = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
-        // the recorded month is not the account's whole history: the broker check disagrees
         let base = error(&app);
-        assert!(!base.is_empty() && first.contains(&format!("\"error\":{}", serde_json::to_string(&base).unwrap())), "only the broker check fails yet: {first}");
+        assert!(first.contains(&format!("\"error\":{}", serde_json::to_string(&base).unwrap())), "{first}");
         let mut signals = app.events.subscribe();
         signals.mark_unchanged();
         let said = health::failure(&record(&app, LABELS[0].0, OutcomeKind::Unreachable)).unwrap();
@@ -510,91 +483,6 @@ mod tests {
         f.state_zone("America/Toronto", now).unwrap();
         app.set_figures(f);
         (home, app)
-    }
-
-    #[test]
-    fn test_where_the_book_and_the_broker_disagree_on_units_it_is_said_until_they_agree() {
-        use bagholder_book::statements::UnitsLine;
-        let (_home, app) = pulled();
-        let f = app.figures.get().unwrap();
-        let before = error(&app);
-        // an account the broker states units for, and one of them
-        let (account, as_of, held, instrument, symbol, name) = f
-            .read(|e| {
-                let i = e.inputs();
-                let (a, b) = i.market.brokers.iter().find(|(_, b)| !b.held.is_empty()).expect("the month states units");
-                // one the book has a name for, so its sentence is its own
-                let (inst, _) = b.held.iter().find(|(i, _)| !crate::wire::build::shown(e.inputs(), **i).symbol.is_empty()).unwrap();
-                (*a, b.held_as_of.unwrap(), b.held.clone(), *inst, super::symbol(i, *inst), super::in_account(i, *a))
-            })
-            .unwrap();
-        let book = f.book().unwrap();
-        let connection = book.accounts().unwrap().into_iter().find(|a| a.id == account).unwrap().connection;
-        let state = |units: &std::collections::BTreeMap<bagholder_core::InstrumentId, bagholder_core::Dec>| {
-            let now = Timestamp::now();
-            let read = book.broker_read(connection, "positions", now).unwrap();
-            let lines: Vec<UnitsLine> = units.iter().map(|(i, q)| UnitsLine { instrument: *i, quantity: *q, book_value: None, value: Some(bagholder_core::Money::new(*q, bagholder_core::Currency::CAD)) }).collect();
-            book.store_units(account, as_of, &lines, &read, now).unwrap();
-            book.note_activity_read(account, now, true).unwrap();
-            // as the reader of balances does: the figures moved, so the pages are told
-            let before = f.version();
-            f.broker_changed(account).unwrap();
-            if f.version() != before {
-                app.events.signal();
-            }
-        };
-        let mut more = held.clone();
-        let own = f.read(|e| e.figures().matched.units_on(account, instrument, as_of).unwrap()).unwrap();
-        let stated = own.checked_add(bagholder_core::Dec::parse("1000000").unwrap()).unwrap();
-        // a page open on the header
-        let mut feed = crate::events::Feed::open(app.clone());
-        assert!(app.events.watch(&app, feed.id(), [("status".to_string(), crate::events::Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
-        feed.step(&super::status);
-        let mut signals = app.events.subscribe();
-        signals.mark_unchanged();
-        more.insert(instrument, stated);
-        state(&more);
-        let said = format!("{symbol} in {name}: Wealthsimple states {} units, the book holds {}.", super::exact(stated), super::exact(own));
-        let line = error(&app);
-        assert!(line.contains(&said), "{said:?} in {line:?}");
-        // the open page is sent the header's error
-        assert!(signals.has_changed().unwrap());
-        let sent = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
-        assert!(sent.contains(&said), "{sent}");
-        // the broker's next statement agrees: the sentence goes
-        more.insert(instrument, own);
-        state(&more);
-        let line = error(&app);
-        let this = format!("{symbol} in {name}: ");
-        assert!(!line.contains(&this), "{line:?}");
-        // and nothing else changed
-        let rest = |l: &str| l.split(". ").map(|s| s.trim_end_matches('.').to_string()).filter(|s| !s.starts_with(&this)).collect::<Vec<_>>();
-        assert_eq!(rest(&line), rest(&before));
-    }
-
-    /// Where the book's cash differs from what Wealthsimple states, the header says
-    /// nothing: the cash shown is Wealthsimple's (brief 79), and the book's own has
-    /// no reader but the check. Before 2.11.5 it said a sentence for each currency.
-    #[test]
-    fn test_where_the_book_and_the_broker_disagree_on_cash_the_header_says_nothing() {
-        use bagholder_engine::equity::Difference;
-        let (_home, app) = pulled();
-        let f = app.figures.get().unwrap();
-        let before = error(&app);
-        let account = f.read(|e| *e.inputs().market.brokers.keys().next().unwrap()).unwrap();
-        let book = f.book().unwrap();
-        let connection = book.accounts().unwrap().into_iter().find(|a| a.id == account).unwrap().connection;
-        let cash: std::collections::BTreeMap<bagholder_core::Currency, bagholder_core::Dec> = [(bagholder_core::Currency::CAD, bagholder_core::Dec::parse("123456.78").unwrap())].into();
-        // stated at the activity's full read, then confirmed by a later statement
-        let first = Timestamp::now();
-        book.store_cash(account, first, &cash, &book.broker_read(connection, "cash", first).unwrap()).unwrap();
-        book.note_activity_read(account, first, true).unwrap();
-        let later = first.checked_add(bagholder_core::jiff::SignedDuration::from_secs(1)).unwrap();
-        book.store_cash(account, later, &cash, &book.broker_read(connection, "cash", later).unwrap()).unwrap();
-        f.broker_changed(account).unwrap();
-        let differs = f.read(|e| e.figures().checks.iter().any(|c| c.account == account && c.differences.iter().any(|d| matches!(d, Difference::Cash { .. }) && !d.pending()))).unwrap();
-        assert!(differs, "the check finds the cash differing");
-        assert_eq!(error(&app), before, "the header says nothing of it");
     }
 
     #[test]

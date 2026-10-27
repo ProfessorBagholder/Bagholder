@@ -91,7 +91,7 @@ pub fn pulled_book(home: &std::path::Path) {
     let (book, _) = bagholder_book::Book::open_in(home, crate::app::APP_VERSION, at).unwrap();
     let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", at).unwrap();
     let replies = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../wealthsimple/tests/replies/wealthsimple-pull");
-    let mut ws = bagholder_wealthsimple::adapter::Wealthsimple::new(bagholder_wealthsimple::replay::Replay::read(&replies).unwrap().taken_before_statements());
+    let mut ws = bagholder_wealthsimple::adapter::Wealthsimple::new(bagholder_wealthsimple::replay::Replay::read(&replies).unwrap());
     let r = bagholder_broker::pull::pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), at, &mut |_| {}).unwrap();
     assert!(r.failures.is_empty(), "{:?}", r.failures);
 }
@@ -148,8 +148,8 @@ pub fn order_accounts_in(a: &Arc<App>) {
 
 /// Wealthsimple's mapping a version back, reading a conversion whose detail
 /// states its side paid for the side received alone, as a person's book was
-/// read before rule set 16: the statements' walk then books the side paid from
-/// the statement, and the version after derives it from the record as well.
+/// read before rule set 16: the version after derives the side paid from the
+/// record.
 pub struct PaidUnread;
 impl bagholder_book::mapping::Mapping for PaidUnread {
     fn source(&self) -> bagholder_core::SourceName {
@@ -230,9 +230,6 @@ impl bagholder_broker::BrokerAdapter for ReadBefore {
     fn units(&mut self, account: &str, day: bagholder_core::jiff::civil::Date) -> bagholder_broker::Answer<Vec<bagholder_broker::Units>> {
         self.0.units(account, day)
     }
-    fn cash_on(&mut self, account: &str, day: bagholder_core::jiff::civil::Date) -> bagholder_broker::Answer<Option<std::collections::BTreeMap<bagholder_core::Currency, bagholder_core::Dec>>> {
-        self.0.cash_on(account, day)
-    }
     fn outside_accounts(&mut self) -> bagholder_broker::Answer<Option<Vec<bagholder_book::debts::OutsideDebt>>> {
         self.0.outside_accounts()
     }
@@ -245,28 +242,7 @@ impl bagholder_broker::BrokerAdapter for ReadBefore {
     fn history(&mut self, account: &str, from: Option<bagholder_core::jiff::civil::Date>) -> bagholder_broker::Answer<Vec<bagholder_broker::DayValue>> {
         self.0.history(account, from)
     }
-    fn statement(&mut self, account: &str, month: bagholder_core::jiff::civil::Date) -> bagholder_broker::Answer<bagholder_broker::StatementRead> {
-        self.0.statement(account, month)
-    }
-    fn statement_rows(&self, account: &str, payload: &bagholder_core::json::Value) -> bagholder_broker::Answer<Vec<bagholder_broker::StatementRow>> {
-        self.0.statement_rows(account, payload)
-    }
     fn statement_mapping(&self) -> Option<&dyn bagholder_book::mapping::Mapping> {
         self.0.statement_mapping()
-    }
-    fn statement_record(&self, account: &str, month: bagholder_core::jiff::civil::Date, position: usize, row: &bagholder_broker::StatementRow) -> Option<(String, bagholder_core::json::Value)> {
-        self.0.statement_record(account, month, position, row)
-    }
-    fn statement_gap_record(&self, gap: &bagholder_broker::statements::Gap) -> Option<(String, bagholder_core::json::Value)> {
-        self.0.statement_gap_record(gap)
-    }
-    fn conversion_paid_record(&self, paid: &bagholder_broker::statements::Paid) -> Option<(String, bagholder_core::json::Value)> {
-        self.0.conversion_paid_record(paid)
-    }
-    fn paid_of(&self, payload: &bagholder_core::json::Value) -> Option<bagholder_broker::statements::Paid> {
-        self.0.paid_of(payload)
-    }
-    fn fill_record(&self, fill: &bagholder_broker::statements::Fill) -> Option<(String, bagholder_core::json::Value)> {
-        self.0.fill_record(fill)
     }
 }

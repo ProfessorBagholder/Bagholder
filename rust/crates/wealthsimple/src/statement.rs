@@ -1,10 +1,13 @@
-//! Wealthsimple's monthly statements (`docs/plans/statement-gaps.md`): the
-//! reply to `FetchMonthlyStatementWithTransactions` read strictly into rows,
-//! and the mapping of a row booked into the book because the activity feed left
-//! the movement out.
+//! What an earlier version booked into the book from Wealthsimple's monthly
+//! statements (`docs/plans/statement-gaps.md`), mapped. The statements are no
+//! longer read (brief 79, `docs/plans/every-amount-as-wealthsimple-states-it.md`
+//! §3.7): the pull withdraws every record of theirs (`pull::withdraw_statement_records`),
+//! and this mapping stays only because migration 039 maps the records a book
+//! older than it holds. It goes with the statement tables at the next schema
+//! change.
 
 use bagholder_book::mapping::{Draft, MapContext, Mapped, Mapping};
-use bagholder_broker::{codes, StatementRow};
+use bagholder_broker::codes;
 use bagholder_core::account::AccountRef;
 use bagholder_core::json::{self, Value};
 use bagholder_core::record::Problem;
@@ -12,211 +15,26 @@ use bagholder_core::transaction::Kind;
 use bagholder_core::{Currency, Leg, Money, SourceName};
 use bagholder_sources::reply::{Mismatch, Node};
 
-/// A spending account's statement.
-pub const CASH: &str = "cash_monthly_statement";
-/// Every other account's in the book.
-pub const BROKERAGE: &str = "brokerage_monthly_statement";
-
-/// The rows of a `monthlyStatement` node. A brokerage statement states its
-/// rows per currency (`activitiesPerCurrency`); a cash statement's rows are in
-/// the account's own currency, `currency`.
-pub fn rows(node: &Value, currency: Currency) -> Result<Vec<StatementRow>, Mismatch> {
-    let n = Node::root(node);
-    let data = n.obj("data")?;
-    let mut out = Vec::new();
-    match data.text("__typename")? {
-        "CashMonthlyStatementObject" => {
-            for r in data.list("currentTransactions")? {
-                out.push(row(&r, currency)?);
-            }
-        }
-        // an account in one currency (a crypto account's) may state no lists per
-        // currency: its rows are in its own
-        "BrokerageMonthlyStatementObject" if matches!(data.field("activitiesPerCurrency")?.value(), Value::Null) => {
-            for r in data.list("currentTransactions")? {
-                out.push(row(&r, currency)?);
-            }
-        }
-        "BrokerageMonthlyStatementObject" => {
-            for per in data.list("activitiesPerCurrency")? {
-                let c = per.field("currency")?;
-                let currency = Currency::parse(c.as_text()?).map_err(|e| c.mismatch(e.to_string()))?;
-                // a row's cash is in its list's currency; its `unit` names what it
-                // moved (`$CAD` for cash, a symbol for units), not its currency
-                for r in per.list("currentTransactions")? {
-                    out.push(row(&r, currency)?);
-                }
-            }
-        }
-        other => return Err(data.field("__typename")?.mismatch(format!("a statement of a kind not read: {other:?}"))),
-    }
-    Ok(out)
+/// A row as a statement stated it, kept in its record.
+struct Row {
+    /// The day the statement filed it under (a trade's settlement).
+    day: jiff::civil::Date,
+    /// The day it states it was executed, where it states one.
+    executed: Option<jiff::civil::Date>,
+    /// The broker's transaction code (`WD`, `TRFIN`, …).
+    code: String,
+    /// The signed cash it moved.
+    cash: bagholder_core::Dec,
 }
 
-fn row(r: &Node, currency: Currency) -> Result<StatementRow, Mismatch> {
-    let description = r.text("description")?.to_string();
-    let executed = codes::executed_at(&description).map_err(|e| r.field("description").map(|f| f.mismatch(e)).unwrap_or_else(|m| m))?;
-    Ok(StatementRow {
-        day: r.day("transactionDate")?,
-        executed,
-        code: r.text("transactionType")?.to_string(),
-        description,
-        currency,
-        cash: r.dec_text("cashMovement")?,
-        balance: r.dec_text("balance")?,
-    })
+fn row(r: &Node) -> Result<Row, Mismatch> {
+    let description = r.text("description")?;
+    let executed = codes::executed_at(description).map_err(|e| r.field("description").map(|f| f.mismatch(e)).unwrap_or_else(|m| m))?;
+    Ok(Row { day: r.day("transactionDate")?, executed, code: r.text("transactionType")?.to_string(), cash: r.dec_text("cashMovement")? })
 }
 
 pub fn source() -> SourceName {
     SourceName::named("wealthsimple-statement")
-}
-
-/// The record a booked row is kept as: the row as the statement stated it,
-/// with the account, month and currency it was read under and its place among
-/// them.
-pub fn payload(account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Value {
-    let text = |s: &str| Value::String(s.to_string());
-    Value::Object(
-        [
-            ("account", text(account)),
-            ("month", text(&month.to_string())),
-            ("position", Value::Number(position.to_string())),
-            ("currency", text(row.currency.as_str())),
-            ("transactionDate", text(&row.day.to_string())),
-            ("transactionType", text(&row.code)),
-            ("description", text(&row.description)),
-            ("cashMovement", text(&row.cash.to_text())),
-            ("balance", text(&row.balance.to_text())),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect(),
-    )
-}
-
-/// The key a booked row is kept by: one per row of one account's month.
-pub fn key(account: &str, month: jiff::civil::Date, position: usize) -> String {
-    format!("{account}|{month}|{position}")
-}
-
-/// A gap booked (`statements::Gap`): the account, the currency, the month
-/// before and its closing, the month and its opening, as the statements state them.
-pub fn gap_payload(g: &bagholder_broker::statements::Gap) -> Value {
-    let text = |s: &str| Value::String(s.to_string());
-    Value::Object(
-        [
-            ("kind", text(OPENING)),
-            ("account", text(&g.account)),
-            ("currency", text(g.currency.as_str())),
-            ("from", text(&g.from.to_string())),
-            ("closing", text(&g.closing.to_text())),
-            ("month", text(&g.month.to_string())),
-            ("opening", text(&g.opening.to_text())),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect(),
-    )
-}
-
-/// One per account, currency and month.
-pub fn gap_key(g: &bagholder_broker::statements::Gap) -> String {
-    format!("{}|{}|opening|{}", g.account, g.month, g.currency.as_str())
-}
-
-/// A conversion's side paid read from the stated cash (`statements::Paid`):
-/// the conversion, its day, the side paid, and the stated cash it is read from.
-pub fn paid_payload(p: &bagholder_broker::statements::Paid) -> Value {
-    let text = |s: &str| Value::String(s.to_string());
-    Value::Object(
-        [
-            ("kind", text(PAID)),
-            ("account", text(&p.account)),
-            ("conversion", text(&p.conversion)),
-            ("day", text(&p.day.to_string())),
-            ("currency", text(p.currency.as_str())),
-            ("cashMovement", text(&p.cash.to_text())),
-            ("stated", text(&p.stated.to_text())),
-            ("statedAt", text(&p.stated_at.to_string())),
-        ]
-        .into_iter()
-        .map(|(k, v)| (k.to_string(), v))
-        .collect(),
-    )
-}
-
-/// One per day's conversions paid in one currency (their keys joined by `|`;
-/// one conversion's alone as before): a later reading of the day's cash revises it.
-/// A side paid's record read back (`paid_payload`): none for a record of
-/// another kind, or one that does not read.
-pub fn paid_of(v: &Value) -> Option<bagholder_broker::statements::Paid> {
-    let Value::Object(o) = v else { return None };
-    let text = |k: &str| match o.get(k) {
-        Some(Value::String(s)) => Some(s.as_str()),
-        _ => None,
-    };
-    if text("kind")? != PAID {
-        return None;
-    }
-    Some(bagholder_broker::statements::Paid {
-        account: text("account")?.to_string(),
-        conversion: text("conversion")?.to_string(),
-        day: text("day")?.parse().ok()?,
-        currency: bagholder_core::Currency::parse(text("currency")?).ok()?,
-        cash: bagholder_core::Dec::parse(text("cashMovement")?).ok()?,
-        stated: bagholder_core::Dec::parse(text("stated")?).ok()?,
-        stated_at: text("statedAt")?.parse().ok()?,
-    })
-}
-
-pub fn paid_key(p: &bagholder_broker::statements::Paid) -> String {
-    format!("{}|paid|{}", p.account, p.conversion)
-}
-
-/// The conversions a side paid's record names, by their keys, from its own key.
-pub fn paid_conversions(key: &str) -> Option<Vec<&str>> {
-    let (_, names) = key.split_once("|paid|")?;
-    Some(names.split('|').collect())
-}
-
-/// A fill as the statement states it (`statements::Fill`): the statement's row,
-/// the units it states, and what the feed's row states besides, which it keeps.
-pub fn fill_payload(f: &bagholder_broker::statements::Fill) -> Value {
-    let text = |s: &str| Value::String(s.to_string());
-    let opt = |v: Option<String>| v.map(|s| Value::String(s)).unwrap_or(Value::Null);
-    let money = |m: Option<Money>| (opt(m.map(|m| m.amount.to_text())), opt(m.map(|m| m.currency.as_str().to_string())));
-    let t = &f.feed;
-    let (price, price_currency) = money(t.price);
-    let (cash, cash_currency) = money(t.cash);
-    let (fee, fee_currency) = money(t.fee);
-    let Value::Object(mut row) = payload(&f.account, f.month, f.position, &f.row) else { unreachable!("a row is an object") };
-    for (k, v) in [
-        ("kind", text(FILL)),
-        ("security", text(&f.security.value)),
-        ("instrumentKind", text(f.kind.as_str())),
-        ("instrumentCurrency", text(f.currency.as_str())),
-        ("quantity", text(&f.quantity.to_text())),
-        ("side", text(t.kind.as_str())),
-        ("effect", opt(t.effect.map(|e| e.as_str().to_string()))),
-        ("occurredAt", opt(t.occurred_at.map(|a| a.to_string()))),
-        ("tradeDate", text(&t.trade_date.to_string())),
-        ("settleDate", opt(t.settle_date.map(|d| d.to_string()))),
-        ("price", price),
-        ("priceCurrency", price_currency),
-        ("cash", cash),
-        ("cashCurrency", cash_currency),
-        ("fee", fee),
-        ("feeCurrency", fee_currency),
-        ("fxRate", opt(t.fx_rate.map(|r| r.to_text()))),
-    ] {
-        row.insert(k.to_string(), v);
-    }
-    Value::Object(row)
-}
-
-/// One per row of one account's month, as a row booked is.
-pub fn fill_key(f: &bagholder_broker::statements::Fill) -> String {
-    format!("{}|fill", key(&f.account, f.month, f.position))
 }
 
 const FILL: &str = "fill";
@@ -330,18 +148,19 @@ fn map_row(v: &Value) -> Result<Mapped, Mismatch> {
         Some(OPENING) => {
             let (closing, opening) = (n.dec_text("closing")?, n.dec_text("opening")?);
             let moved = opening.checked_sub(closing).map_err(|e| n.field("opening").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
-            return draft(bagholder_broker::statements::gap_leg().as_str(), n.day("month")?, Kind::Fee, moved);
+            return draft(OPENING, n.day("month")?, Kind::Fee, moved);
         }
-        Some(PAID) => return draft(bagholder_broker::statements::paid_leg().as_str(), n.day("day")?, Kind::CurrencyConversion, n.dec_text("cashMovement")?),
+        Some(PAID) => return draft("paid", n.day("day")?, Kind::CurrencyConversion, n.dec_text("cashMovement")?),
         Some(FILL) => return fill(&n, currency),
         Some(other) => return Err(n.field("kind")?.mismatch(format!("a record of a kind not kept: {other:?}"))),
     }
-    let row = row(&n, currency)?;
+    let row = row(&n)?;
     let draft = Draft {
         leg: Leg::parse("trade").expect("a leg name written in the code"),
         account: AccountRef::new(crate::mapping::broker(), n.text("account")?.to_string()),
         occurred_at: None,
-        trade_date: row.book_day(),
+        // filed at its execution where it states one, as the feed dates a trade
+        trade_date: row.executed.unwrap_or(row.day),
         settle_date: row.executed.map(|_| row.day),
         kind: Kind::Unclassified,
         effect: None,
