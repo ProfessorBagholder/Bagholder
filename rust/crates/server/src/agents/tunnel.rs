@@ -275,7 +275,9 @@ impl Tunnels {
                 libc::kill(c.id() as libc::pid_t, libc::SIGTERM);
             }
             #[cfg(not(unix))]
+            #[expect(clippy::let_underscore_must_use, reason = "the guard may have ended already; the wait below reaps it either way")]
             let _ = c.kill();
+            #[expect(clippy::let_underscore_must_use, reason = "reaping the guard; how it ended is read from its output")]
             let _ = c.wait();
         }
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
@@ -324,10 +326,16 @@ pub fn guard(args: &[String]) -> i32 {
     {
         use std::os::unix::process::CommandExt;
         cmd.process_group(0);
-        #[cfg(target_os = "linux")]
-        // SAFETY: prctl in the child before exec, async-signal-safe
+        // SAFETY: in the child before exec, async-signal-safe calls only. A signal mask
+        // is inherited across exec, so the stop signals the guard blocks for itself
+        // (below) are let through again: a tunnel that blocked them could not be
+        // stopped. On Linux the child is ended with the guard however the guard ends.
         unsafe {
             cmd.pre_exec(|| {
+                let mut none: libc::sigset_t = std::mem::zeroed();
+                libc::sigemptyset(&mut none);
+                libc::sigprocmask(libc::SIG_SETMASK, &none, std::ptr::null_mut());
+                #[cfg(target_os = "linux")]
                 libc::prctl(libc::PR_SET_PDEATHSIG, libc::SIGTERM);
                 Ok(())
             });
@@ -364,13 +372,19 @@ pub fn guard(args: &[String]) -> i32 {
     }
     #[cfg(unix)]
     {
-        let _ = std::thread::Builder::new().name("tunnel-stop".into()).spawn(move || {
+        let watching = std::thread::Builder::new().name("tunnel-stop".into()).spawn(move || {
             let mut sig: libc::c_int = 0;
             // SAFETY: the set built by block_stops, and one int to write the signal into
             unsafe { libc::sigwait(&stops, &mut sig) };
             end_group(pid);
             std::process::exit(0);
         });
+        // a guard that cannot hear a stop would leave the tunnel when told to stop
+        if let Err(e) = watching {
+            eprintln!("bagholder tunnel-guard: {e}");
+            end_group(pid);
+            return 1;
+        }
     }
     match child.wait() {
         Ok(s) => s.code().unwrap_or(1),

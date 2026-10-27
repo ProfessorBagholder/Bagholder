@@ -453,9 +453,10 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// here, with the reason it stays: this list is the one place timers are argued for.
-const TIMED_WAITS: [(&str, usize, &str); 20] = [
+const TIMED_WAITS: [(&str, usize, &str); 21] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
+    ("net/src/client.rs", 1, "a test's stand-in peer that answers a byte at a time, slower than the fetch is given, to show the fetch ends at its deadline"),
     ("net/src/machine.rs", 1, "every host's request rate on the one limiter (Yahoo, SEDAR+, the SEC, fund companies, news feeds, the archive at TMX): a turn taken, waited for with no lock held"),
     ("server/src/agents/listener.rs", 1, "agents switched off: the listener takes no connection from then on, and what is already in hand gets at most five seconds to finish, so a connection held open cannot keep it serving"),
     ("server/src/app.rs", 4, "`wait` itself, measured on the wall clock (`Wall`) so a deadline a sleeping machine passed is met on waking, looking at that clock once a minute as cron does; three in its test"),
@@ -713,7 +714,7 @@ fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failur
 /// tools (`src/bin`, and the server's own subcommands) print their output, which is
 /// what they are for.
 const TERMINAL: [(&str, usize, &str); 10] = [
-    ("server/src/agents/tunnel.rs", 6, "the `tunnel-guard` subcommand, a child the server starts: why it could not start or keep the tunnel reaches the Agents panel through its standard error, which the server reads"),
+    ("server/src/agents/tunnel.rs", 7, "the `tunnel-guard` subcommand, a child the server starts: why it could not start or keep the tunnel reaches the Agents panel through its standard error, which the server reads"),
     ("server/src/app.rs", 1, "`say`: where to open the app, and whether orders are live"),
     ("server/src/logfile.rs", 3, "the log itself cannot be written or was started twice: the terminal is all that is left"),
     ("server/src/main.rs", 6, "the browser could not be opened (open the address yourself), no port could be bound, `--version`; `mcp` with no data folder to read; a command started for work that has already ended (`BAGHOLDER_EXIT_WITH`), before any log is open; a first word that is no command this build runs"),

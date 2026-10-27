@@ -88,7 +88,8 @@ pub fn waiting(store: &AgentsBook, now: Timestamp) -> Result<Vec<Waiting>, Strin
             who: r.who,
             name: client.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
             checked: client.as_ref().is_some_and(|c| c.metadata),
-            redirect_host: super::fetch::https_host(&r.redirect_uri).map(|h| h.0).unwrap_or_default(),
+            // registered as https: should one not read as such, it is shown whole
+            redirect_host: super::fetch::https_host(&r.redirect_uri).map_or_else(|_| r.redirect_uri.clone(), |h| h.0),
             made_at: r.made_at.to_string(),
         });
     }

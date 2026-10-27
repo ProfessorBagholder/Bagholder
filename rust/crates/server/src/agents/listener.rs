@@ -159,6 +159,13 @@ pub async fn serve(listener: tokio::net::TcpListener, ctx: Arc<Ctx>, mut stop: t
     }
 }
 
+/// A refusal's logging that did not finish (its thread failed) is said in the app's log.
+fn logged(done: Result<(), tokio::task::JoinError>) {
+    if let Err(e) = done {
+        crate::app::log(&format!("bagholder: an agent's refusal could not be logged: {e}"));
+    }
+}
+
 /// A refusal kept in the log: of a caller no grant or key names, under no agent.
 pub fn refused(ctx: &Ctx, agent: &str, why: &str) {
     let r = bagholder_book::agents::Read { agent: agent.to_string(), at: ctx.now(), tool: None, arguments: None, refusal: Some(why.to_string()) };
@@ -183,7 +190,7 @@ async fn gate(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response
     if want.is_empty() || host != want {
         let c = ctx.clone();
         let why = format!("a request for another host ({host})");
-        let _ = tokio::task::spawn_blocking(move || refused(&c, "", &why)).await;
+        logged(tokio::task::spawn_blocking(move || refused(&c, "", &why)).await);
         return said(StatusCode::MISDIRECTED_REQUEST, "misdirected_request", "This address answers for its own name alone.");
     }
     // the methods the table names, and no other (HEAD and OPTIONS among them)
@@ -246,7 +253,7 @@ async fn admitted(ctx: Arc<Ctx>, req: Request, next: Next, check: fn(&Ctx, Optio
     if let Err(retry) = rate(&ctx, &agent) {
         let c = ctx.clone();
         let a = agent.clone();
-        let _ = tokio::task::spawn_blocking(move || refused(&c, &a, "over the rate")).await;
+        logged(tokio::task::spawn_blocking(move || refused(&c, &a, "over the rate")).await);
         return too_many(retry);
     }
     let mut req = req;

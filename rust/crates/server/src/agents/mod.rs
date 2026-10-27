@@ -159,6 +159,7 @@ impl Agents {
     /// nothing answers.
     pub fn switch_off(&self) {
         if let Some(l) = self.listening.lock().unwrap_or_else(|e| e.into_inner()).take() {
+            #[expect(clippy::let_underscore_must_use, reason = "it fails only when the listener has ended already, which is the stop asked for")]
             let _ = l.stop.send(true);
         }
         self.tunnel.lock().unwrap_or_else(|e| e.into_inner()).stop();

@@ -282,6 +282,8 @@ fn waiting_page(a: &Asking, code: &str, id: &str) -> String {
     } else {
         format!(" <span style='opacity:.7'>(“{}”, name given by the agent, not checked)</span>", escape(&a.client.name))
     };
+    #[expect(clippy::disallowed_methods, reason = "a string always serializes")]
+    let id_json = serde_json::to_string(id).unwrap_or_default();
     format!(
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title>\
 <body style='font:16px system-ui;margin:40px auto;max-width:520px;padding:0 16px'>\
@@ -293,7 +295,7 @@ fn waiting_page(a: &Asking, code: &str, id: &str) -> String {
         who = escape(&a.who),
         name = name,
         code = escape(code),
-        id = serde_json::to_string(id).unwrap_or_default(),
+        id = id_json,
     )
 }
 
@@ -309,6 +311,7 @@ fn back(redirect: &str, params: &[(&str, &str)], state: Option<&str>, iss: &str)
         q.push(("state", s));
     }
     q.push(("iss", iss));
+    #[expect(clippy::disallowed_methods, reason = "pairs of strings always encode")]
     let qs = serde_urlencoded::to_string(&q).unwrap_or_default();
     format!("{redirect}{}{qs}", if redirect.contains('?') { "&" } else { "?" })
 }
@@ -432,7 +435,9 @@ pub async fn token(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Resp
                     Ok(true) => tokens(&ctx, &store, &t.grant.id),
                     Ok(false) => {
                         // used a second time: someone else holds it, and the grant ends
-                        let _ = store.withdraw_grant(&t.grant.id, now);
+                        if let Err(e) = store.withdraw_grant(&t.grant.id, now) {
+                            return unavailable(e);
+                        }
                         refused(&ctx, &t.grant.id, "a refresh token used twice: the grant was ended");
                         grant_error("invalid_grant", "This refresh token was used before, so the grant has ended.")
                     }
