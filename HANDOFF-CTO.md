@@ -104,6 +104,30 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 - **A sign-in bug, proven, waiting on the owner's go** (they were signed out after updating to 2.10.13; their app runs on their Mac): at start, `boot_session` with a saved, unexpired sign-in and no answer from Wealthsimple leaves `connected` false. `heard(NotAsked)` keeps `connected && live`, and `connected` starts false. The page then offers "Connect Wealthsimple", which opens the sign-in Chrome window. A throwaway test showed connected=false, error "unreachable: the connection dropped", and the saved login still on disk. The rule dates from 8ae43bed (2026-10-04, 2.2.2). Whether this is what hit the owner is unknown; the app logs no reason when it drops a sign-in. Proposed to the owner: at start, an unexpired saved sign-in counts as connected until Wealthsimple refuses it, and an unanswered check is retried; plus a log line saying why a sign-in is dropped. Not built until they say go.
 - The sign-in window itself is not new: `login::start_login_browser`, reached only from the page's "Connect Wealthsimple" (menu or empty screen). It uses its own profile in the app's folder and picks Chrome before Brave (`find_chrome`), as it has since the Rust port (2026-09-16).
 
+### Agents anywhere: the owner's focus (2026-10-27)
+- **The owner:** cloud agents (Claude.ai, ChatGPT, Grok Bot, Muse, Dots) connect through a standard MCP URL over the person's own tunnel. The stdio/Claude Desktop config route is not what they want. Test with Tailscale first; Cloudflare after (they have accounts and domains). **Nothing specific to the owner's accounts may go in the app**: every user picks a tunnel and is walked through it.
+- **Order:** #638 (sign-in, cleared, 2.11.1 on green) → agents anywhere → coin units → preview links.
+- **The work:** branch `agents-anywhere` (worktree `aa`), draft **#639** (CI only, not for review). Master merged in (3fda0ebe), plus 1092dc59: the listener's 5 s drain is argued in `TIMED_WAITS`, and tunnel-guard's stderr in `TERMINAL`.
+- **This server is already on Tailscale:** tailnet `professorbagholder.github`, Funnel allowed, nothing served. I asked the owner whether I may use Funnel here to test on the made-up book. **Do not use it until they say yes.**
+- **The audit against the plan (2026-10-27); what is left:**
+  - **Page:**
+    - the panel makes a GET outside the read layer (`api.test.ts` "reads only through the read layer" fails on #639);
+    - the address and copy buttons show before the check says Ready;
+    - each Muse/Grok copy click makes a new key;
+    - the redirect hostname is computed (`approve.rs:91`) but never shown;
+    - refusals by unknown callers (agent `""`) never show;
+    - only the "install" step is detected as done (sign-in is not);
+    - e2e "side by side" queries `tr` but the panel uses `<label>`.
+  - **Defects:**
+    - Own proxy: `host_of` returns `sends_host`, stored as `agents.host`, so the issuer, resource and address name the proxy's internal Host;
+    - `BAGHOLDER_HOSTS` could list the agents host and expose Allow/Deny on the page listener;
+    - the public waiting page polls status every 2 s against the global 60/min pre-sign-in bucket (two pages use it up);
+    - the CIMD fetch's 5 s is per socket, not a total.
+  - **Tests missing:** `stopping_the_server_stops_the_tunnel`; the conformance job (`@modelcontextprotocol/conformance`, reported-only); an e2e of a metadata-document client.
+  - **Docs:** SPEC agents-5 still "not built"; architecture §12 "planned" and §14; decisions "Held by … once built".
+  - **Measurements (plan §5):** size, build time, memory, a capacity row.
+  - **Deviations to state in the PR:** no `mcp_http.rs`/`grants.rs` (rmcp in `listener.rs`, storage in `book/src/agents.rs`); Allow takes the id in the body; tokens are looked up by SHA-256 in SQL, not `memcmp`; forwarded headers are never trusted and not logged; tests_mcp is replaced by a narrower scan; `AgentsBook` writes only the agent tables.
+
 ### Delegated
 - **PR A (#630): merged** (cc28ea70), no release. It covers the exponent cap, `take_frame` returning `io::Result`, four clippy denies, and CI's clippy running with `--features bagholder-ws/standin` (the Architect's condition).
 - **PR B** (the wider lints): after brief 77.
