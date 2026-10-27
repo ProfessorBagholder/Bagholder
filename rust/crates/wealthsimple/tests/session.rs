@@ -96,6 +96,7 @@ fn a_refused_refresh_token_is_never_posted_again() {
     let (_d, file) = session_file("refused-token");
     let n = net(&q);
     assert!(matches!(refresh(&n, &file, &held("refused-token")), Err(Failure::Lapsed(_))));
+    assert!(!file.path.exists(), "the refused sign-in is removed: a later start reads it ended");
     assert!(matches!(refresh(&n, &file, &held("refused-token")), Err(Failure::Lapsed(_))));
     assert_eq!(q.asked.lock().unwrap().len(), 1);
 }
@@ -214,10 +215,13 @@ fn a_second_token_posted_meanwhile_hides_nothing_known_of_the_first() {
     assert!(matches!(take_over(&n, &lock_only().1, &held("per-token-b"), |_| Ok(())), Err(Failure::Unreachable(_))));
     // the first refused now: its answer was lost, not refused at first sight
     assert_eq!(refresh(&n, &file, &held("per-token-a")), Err(Failure::Lapsed(LOST_REFRESH.into())));
-    // another token refused after it: the first is still never posted again
+    assert!(!file.path.exists(), "the refused sign-in is removed");
+    // another token refused after it: the first is still never posted again, even
+    // from a file that holds it again
     let q = queue(&[(400, INVALID_GRANT)]);
     let n = net(&q);
     assert_eq!(take_over(&n, &lock_only().1, &held("per-token-c"), |_| Ok(())), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
+    let (_d2, file) = session_file("per-token-a");
     assert_eq!(refresh(&n, &file, &held("per-token-a")), Err(Failure::Lapsed(REFUSED_SIGN_IN.into())));
     assert_eq!(q.asked.lock().unwrap().len(), 1, "the refused first token was not posted again");
 }

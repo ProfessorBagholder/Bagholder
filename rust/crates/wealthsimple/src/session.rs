@@ -6,8 +6,9 @@
 //!   another caller already rotated is adopted, and nothing is posted;
 //! - a refresh token Wealthsimple refused is never posted again;
 //! - a refused refresh is a lapse: the session is no longer valid until the
-//!   person signs in again.
-//! Every other key the file holds is kept as it was.
+//!   person signs in again, and the saved sign-in is removed, so a later start
+//!   reads it ended whether or not Wealthsimple answers then.
+//! A refresh Wealthsimple answers keeps every other key the file holds as it was.
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
@@ -136,6 +137,14 @@ impl SessionFile {
         };
         write().map_err(|e| Failure::Lapsed(format!("the refreshed sign-in could not be saved: {e}")))
     }
+
+    /// The saved sign-in gone: Wealthsimple refused it.
+    fn remove(&self) -> Result<(), Failure> {
+        match std::fs::remove_file(&self.path) {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(Failure::Lapsed(format!("the refused sign-in could not be removed: {e}"))),
+            _ => Ok(()),
+        }
+    }
 }
 
 /// A fresh access token for `held`: the file's where another caller already
@@ -148,7 +157,14 @@ pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, F
         // rotated by another caller while this one waited: adopt it, post nothing
         return Ok(on_disk);
     }
-    let fresh = post_refresh(net, held)?;
+    let fresh = match post_refresh(net, held) {
+        // refused: the sign-in it saved ends with it
+        Err(Failure::Lapsed(why)) => {
+            file.remove()?;
+            return Err(Failure::Lapsed(why));
+        }
+        answered => answered?,
+    };
     file.save(&previous, &fresh)?;
     Ok(fresh)
 }

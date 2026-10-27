@@ -108,25 +108,72 @@ fn connected_has_one_writer() {
         }
     }
     assert!(writers.iter().all(|w| w.starts_with("session.rs:")), "connected written outside session::heard: {writers:?}");
-    assert_eq!(writers.len(), 3, "the three arms of heard: {writers:?}");
+    assert_eq!(writers.len(), 2, "heard's two writes, on and off: {writers:?}");
 }
 
-#[test]
-fn a_refresh_with_no_answer_while_the_token_held_is_live_stays_connected_and_one_refused_does_not() {
-    let _g = crate::tests_common::guard();
-    let (_home, app) = app_answering(vec![(0, "the connection dropped"), (400, INVALID_GRANT)]);
+/// A sign-in saved with its access token `expires_in` seconds from now. Its refresh
+/// token is the test's own: one Wealthsimple refused is never posted again in the
+/// process.
+fn saved_expiring(app: &Arc<App>, refresh: &str, expires_in: f64) {
     let mut sess = bagholder_ws::session::Session {
-        access_token: "live-access".into(),
-        refresh_token: "live-refresh".into(),
+        access_token: "held-access".into(),
+        refresh_token: refresh.into(),
         client_id: bagholder_ws::standin::FAKE_CLIENT_ID.into(),
         ids: bagholder_ws::session::IdentityKeys { identity_canonical_id: "identity-1".into(), ..Default::default() },
         ..Default::default()
     };
-    sess.expires_at = Some(bagholder_ws::session::Expiry::Unix(crate::app::now_unix() + 3600.0));
-    session::save_session(&app, &sess).unwrap();
+    sess.expires_at = Some(bagholder_ws::session::Expiry::Unix(crate::app::now_unix() + expires_in));
+    session::save_session(app, &sess).unwrap();
+}
+
+/// No answer from Wealthsimple at start is not a sign-out: the page offers Sync
+/// now, not Connect Wealthsimple, and says what went unanswered.
+#[test]
+fn a_start_wealthsimple_does_not_answer_keeps_the_saved_sign_in() {
+    let _g = crate::tests_common::guard();
+    let (_home, app) = app_answering(vec![(0, "the connection dropped"); 3]);
+    saved_expiring(&app, "start-unanswered", 3600.0);
+    session::boot_session(&app);
+    let page = crate::status::status(&app);
+    assert!(page.connected, "a saved sign-in Wealthsimple did not refuse is still the person's");
+    assert!(page.error.contains("the connection dropped"), "{}", page.error);
+}
+
+/// At start, a sign-in Wealthsimple refuses ends: connect again.
+#[test]
+fn a_start_wealthsimple_refuses_ends_the_saved_sign_in() {
+    let _g = crate::tests_common::guard();
+    let (_home, app) = app_answering(vec![(400, INVALID_GRANT); 3]);
+    saved_expiring(&app, "start-refused", 3600.0);
+    session::boot_session(&app);
+    let page = crate::status::status(&app);
+    assert!(!page.connected);
+    assert_eq!(page.error, bagholder_wealthsimple::session::REFUSED_SIGN_IN);
+}
+
+/// A sign-in Wealthsimple refused ends on disk too: a later start with no answer
+/// reads it ended, never saved.
+#[test]
+fn a_refused_sign_in_is_gone_from_disk_so_a_later_start_with_no_answer_is_not_connected() {
+    let _g = crate::tests_common::guard();
+    let (_home, app) = app_answering(vec![(400, INVALID_GRANT), (0, "the connection dropped"), (0, "the connection dropped")]);
+    saved_expiring(&app, "refused-then-unanswered", 3600.0);
+    session::boot_session(&app);
+    assert!(session::load_session(&app).unwrap().is_none(), "the refused sign-in is gone from disk");
+    session::boot_session(&app);
+    assert!(!crate::status::status(&app).connected);
+}
+
+/// The access token running out while Wealthsimple cannot be reached is not a
+/// sign-out either: the refresh renews it once it can be asked.
+#[test]
+fn a_refresh_with_no_answer_stays_connected_past_the_access_token_s_expiry_and_one_refused_does_not() {
+    let _g = crate::tests_common::guard();
+    let (_home, app) = app_answering(vec![(0, "the connection dropped"), (400, INVALID_GRANT)]);
+    saved_expiring(&app, "expired-offline", -60.0);
     session::heard(&app, session::Heard::Issued);
     let a = session::refresh_now(&app);
-    assert!(!a.ok && a.connected, "the token held is live: still connected ({})", a.error);
+    assert!(!a.ok && a.connected, "no answer: still connected ({})", a.error);
     let a = session::refresh_now(&app);
     assert!(!a.ok && !a.connected, "refused: connect again");
     assert_eq!(a.error, bagholder_wealthsimple::session::LOST_REFRESH, "the refusal follows a post whose answer was lost");
