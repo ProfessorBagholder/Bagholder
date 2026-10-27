@@ -151,6 +151,19 @@ fn a_start_wealthsimple_refuses_ends_the_saved_sign_in() {
     assert_eq!(page.error, bagholder_wealthsimple::session::REFUSED_SIGN_IN);
 }
 
+/// A sign-in Wealthsimple refused ends on disk too: a later start with no answer
+/// reads it ended, never saved.
+#[test]
+fn a_refused_sign_in_is_gone_from_disk_so_a_later_start_with_no_answer_is_not_connected() {
+    let _g = crate::tests_common::guard();
+    let (_home, app) = app_answering(vec![(400, INVALID_GRANT), (0, "the connection dropped"), (0, "the connection dropped")]);
+    saved_expiring(&app, "refused-then-unanswered", 3600.0);
+    session::boot_session(&app);
+    assert!(session::load_session(&app).unwrap().is_none(), "the refused sign-in is gone from disk");
+    session::boot_session(&app);
+    assert!(!crate::status::status(&app).connected);
+}
+
 /// The access token running out while Wealthsimple cannot be reached is not a
 /// sign-out either: the refresh renews it once it can be asked.
 #[test]
