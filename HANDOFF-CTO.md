@@ -106,7 +106,27 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ### Agents anywhere: the owner's focus (2026-10-27)
 - **The owner:** cloud agents (Claude.ai, ChatGPT, Grok Bot, Muse, Dots) connect through a standard MCP URL over the person's own tunnel. The stdio/Claude Desktop config route is not what they want. Test with Tailscale first; Cloudflare after (they have accounts and domains). **Nothing specific to the owner's accounts may go in the app**: every user picks a tunnel and is walked through it.
-- **Order:** #638 (sign-in, cleared, 2.11.1 on green) → agents anywhere → coin units → preview links.
+- **Order:** agents anywhere → coin units → preview links. **#638 merged (920d24a7), v2.11.1 released** 2026-10-27 (Latest, 8 assets; the release suites passed under the new leftover check on macOS and Windows).
+- **Done on `agents-anywhere` since the audit** (pushed, head 00b5f0cb):
+  - the panel reads the log through the read layer;
+  - Tailscale's steps are read from `tailscale status --json` (`TailscaleSays`, `POST /api/agents/tunnel/look`);
+  - tunnel output links are clickable;
+  - the address is given only once checked;
+  - one key per agent copy;
+  - the redirect host is shown, with a refused-callers log;
+  - the own-proxy Host fix (`Ctx.receives`);
+  - the page refuses the agents' name even when listed;
+  - status polls are outside the pre-sign-in bucket for known ids;
+  - `get_at` has a total deadline (`Until`);
+  - **the tunnel guard's inherited signal mask is cleared** (the tunnel outlived the server; `tests/tunnel_guard.rs`);
+  - clippy is clean;
+  - the docs and the owner's 2026-10-27 decision are in.
+- **Left:**
+  - the live Tailscale test (waiting on the owner's yes to use Funnel here);
+  - the measurements (plan §5: archive size with and without rmcp's feature, build time, tunnel memory, a capacity row for an HTTP read through the listener);
+  - Cloudflare's, ngrok's and zrok's steps still name commands (the owner wants no terminal);
+  - the conformance job: running `@modelcontextprotocol/conformance` here was refused by the permission check ("Code from External"), so it is not included; say so in the PR;
+  - the review-ready PR text, with the deviations listed below.
 - **The work:** branch `agents-anywhere` (worktree `aa`), draft **#639** (CI only, not for review). Master merged in (3fda0ebe), plus 1092dc59: the listener's 5 s drain is argued in `TIMED_WAITS`, and tunnel-guard's stderr in `TERMINAL`.
 - **This server is already on Tailscale:** tailnet `professorbagholder.github`, Funnel allowed, nothing served. I asked the owner whether I may use Funnel here to test on the made-up book. **Do not use it until they say yes.**
 - **The audit against the plan (2026-10-27); what is left:**
