@@ -22,6 +22,8 @@ jiff = "0.2.37"
 
 [dev-dependencies]
 jiff = "0.2.37"
+# a folder of its own for each test, removed as it ends
+tempfile = "3"
 
 [lints]
 workspace = true

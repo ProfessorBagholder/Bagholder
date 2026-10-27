@@ -8,11 +8,34 @@ use crate::app::App;
 static LOCK: Mutex<()> = Mutex::new(());
 static APP: OnceLock<Arc<App>> = OnceLock::new();
 
+/// A folder of this run's own, removed as the run exits: for the homes of the
+/// apps the tests share, which no one test's end can take. A run stopped by a
+/// signal leaves it.
+pub fn run_folder(name: &str) -> PathBuf {
+    static RUN: OnceLock<PathBuf> = OnceLock::new();
+    extern "C" {
+        fn atexit(f: extern "C" fn()) -> std::os::raw::c_int;
+    }
+    extern "C" fn remove() {
+        if let Some(d) = RUN.get() {
+            let _ = std::fs::remove_dir_all(d);
+        }
+    }
+    let run = RUN.get_or_init(|| {
+        let d = tempfile::Builder::new().prefix("bh-server-tests-").tempdir().unwrap().keep();
+        // SAFETY: atexit keeps a function to call once, as the process exits
+        assert_eq!(unsafe { atexit(remove) }, 0);
+        d
+    });
+    let d = run.join(name);
+    std::fs::create_dir_all(&d).unwrap();
+    d
+}
+
 pub fn home() -> PathBuf {
     static H: OnceLock<PathBuf> = OnceLock::new();
     H.get_or_init(|| {
-        let d = std::env::temp_dir().join(format!("bh-server-tests-{}", std::process::id()));
-        std::fs::create_dir_all(&d).unwrap();
+        let d = run_folder("home");
         std::env::set_var("BAGHOLDER_DRY_ORDERS", "1");
         // nothing this binary does reaches beyond loopback; the Wealthsimple
         // stand-in (`bagholder_ws::standin`) answers on 127.0.0.1, which stays

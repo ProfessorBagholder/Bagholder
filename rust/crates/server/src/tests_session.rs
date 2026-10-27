@@ -24,12 +24,11 @@ impl bagholder_net::Transport for Shared {
     }
 }
 
-fn app_answering(name: &str, replies: Vec<(u16, &'static str)>) -> Arc<App> {
-    let dir = std::env::temp_dir().join(format!("bh-session-{name}-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
+fn app_answering(replies: Vec<(u16, &'static str)>) -> (tempfile::TempDir, Arc<App>) {
+    let dir = tempfile::tempdir().unwrap();
     let net = bagholder_net::Net::answered_by(Arc::new(bagholder_net::SystemClock), Arc::new(bagholder_net::Limiter::new()), Box::new(Shared(Arc::new(Token(Mutex::new(replies))))));
-    App::with_net(dir, PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into(), net)
+    let app = App::with_net(dir.path().to_path_buf(), PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into(), net);
+    (dir, app)
 }
 
 /// A good saved login, as a sign-in before this one left it.
@@ -61,7 +60,7 @@ const INVALID_GRANT: &str = r#"{"error":"invalid_grant"}"#;
 #[test]
 fn a_capture_wealthsimple_refuses_leaves_the_saved_login_and_is_not_tried_again() {
     let _g = crate::tests_common::guard();
-    let app = app_answering("refused", vec![(400, INVALID_GRANT)]);
+    let (_home, app) = app_answering(vec![(400, INVALID_GRANT)]);
     let before = saved(&app);
     assert!(matches!(session::take_capture(&app, &captured("captured-refused")), Taken::Refused(_)));
     assert_eq!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), before, "nothing written before Wealthsimple accepts");
@@ -70,7 +69,7 @@ fn a_capture_wealthsimple_refuses_leaves_the_saved_login_and_is_not_tried_again(
 #[test]
 fn a_capture_with_no_answer_leaves_the_saved_login_and_is_tried_again() {
     let _g = crate::tests_common::guard();
-    let app = app_answering("unanswered", vec![(0, "the connection dropped"), (200, NEW_TOKENS)]);
+    let (_home, app) = app_answering(vec![(0, "the connection dropped"), (200, NEW_TOKENS)]);
     let before = saved(&app);
     assert!(matches!(session::take_capture(&app, &captured("captured-1")), Taken::NotAsked(_)), "no answer is not a refusal");
     assert_eq!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), before);
@@ -115,7 +114,7 @@ fn connected_has_one_writer() {
 #[test]
 fn a_refresh_with_no_answer_while_the_token_held_is_live_stays_connected_and_one_refused_does_not() {
     let _g = crate::tests_common::guard();
-    let app = app_answering("live", vec![(0, "the connection dropped"), (400, INVALID_GRANT)]);
+    let (_home, app) = app_answering(vec![(0, "the connection dropped"), (400, INVALID_GRANT)]);
     let mut sess = bagholder_ws::session::Session {
         access_token: "live-access".into(),
         refresh_token: "live-refresh".into(),
