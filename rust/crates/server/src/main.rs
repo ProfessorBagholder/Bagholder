@@ -349,6 +349,8 @@ fn serve() -> i32 {
     a.agents.switch_off();
     // a producer thread still writing to a stream that has gone is not waited for
     runtime.shutdown_background();
+    // the local model this copy started stops with it, however it was told to stop
+    bagholder_market::localmodel::shutdown();
     a.exit_code.load(std::sync::atomic::Ordering::SeqCst)
 }
 

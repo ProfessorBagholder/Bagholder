@@ -480,20 +480,31 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     book.settle_successions()?;
     let mut days_of: BTreeMap<AccountId, BTreeMap<jiff::civil::Date, (bagholder_core::Money, bagholder_core::Money)>> = BTreeMap::new();
     let mut history_failed: BTreeSet<AccountId> = BTreeSet::new();
-    // an account whose days are stated up to the last full day has none new
+    // An account's daily history is read whole when a day it has not stated is
+    // due: every day as Wealthsimple states it now, so a day an earlier read stored
+    // wrong is put right by the next day's pull (only a day that changed is
+    // stored). It is read over every id behind the account, closed ones too, and
+    // the days are theirs added up: each id states what it held on each day. An
+    // account closed whole is read once.
+    let open: BTreeSet<AccountId> = stated.iter().filter(|a| a.open).map(|a| ids[&a.key]).collect();
+    let mut last_of: BTreeMap<AccountId, Option<jiff::civil::Date>> = BTreeMap::new();
     let mut dated = Vec::new();
     for a in stated.iter().filter(|_| daily) {
-        let last = book.last_account_day(ids[&a.key])?;
-        if !(last.is_some_and(|d| d >= as_of) || (!a.open && last.is_some())) {
-            dated.push((a, last));
+        let id = ids[&a.key];
+        let last = match last_of.get(&id) {
+            Some(l) => *l,
+            None => *last_of.entry(id).or_insert(book.last_account_day(id)?),
+        };
+        let due = if open.contains(&id) { !last.is_some_and(|d| d >= as_of) } else { last.is_none() };
+        if due {
+            dated.push(a);
         }
     }
     let of = dated.len();
-    for (n, (a, last)) in dated.into_iter().enumerate() {
+    for (n, a) in dated.into_iter().enumerate() {
         let id = ids[&a.key];
         step(Step::History { account: a.name(), n: n + 1, of });
-        let from = last.and_then(|d| d.tomorrow().ok());
-        match adapter.history(&a.key, from) {
+        match adapter.history(&a.key, None) {
             Ok(days) => {
                 let e = days_of.entry(id).or_default();
                 for d in days {
@@ -524,7 +535,9 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
         }
         let read = book.broker_read(connection, "history", now)?;
         let days: Vec<AccountDay> = days.into_iter().map(|(day, (net_value, net_deposits))| AccountDay { day, net_value, net_deposits }).collect();
-        report.days_stored += days.len();
+        // the days new to the book; the rest are stated again
+        let last = last_of.get(&id).copied().flatten();
+        report.days_stored += days.iter().filter(|d| last.is_none_or(|l| d.day > l)).count();
         report.days_restated += book.store_account_days(id, &days, &read)?.len();
     }
     // the day's pull is done: what the window asks of it (`DAILY_READ`) is read

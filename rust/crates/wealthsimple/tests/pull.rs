@@ -5,8 +5,10 @@
 
 use std::path::{Path, PathBuf};
 
+use bagholder_book::statements::AccountDay;
 use bagholder_book::Book;
 use bagholder_broker::pull::{pull, Report};
+use bagholder_broker::BrokerAdapter;
 use bagholder_core::account::{AccountRef, AccountStatus};
 use bagholder_core::json::Value;
 use bagholder_core::record::RecordState;
@@ -135,6 +137,40 @@ fn a_pull_with_one_new_trade_asks_only_what_the_trade_needs_besides() {
     assert!(third.failures.is_empty(), "{:?}", third.failures);
     assert_eq!(third.records_new, 1);
     assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances", "net worth"]);
+}
+
+/// A day an earlier read stored wrong is stated again by the next day's pull:
+/// the daily history is read whole, and each day is kept as Wealthsimple states
+/// it now. 2.10.2 read an account behind two ids on one of them and stored years
+/// of its days at nothing; reading only the days after the last one stored, no
+/// pull read them again, and the charts lost the account until its newest days.
+#[test]
+fn a_day_an_earlier_read_stored_wrong_is_stated_again_by_the_next_day_s_pull() {
+    let home = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open_in(home.path(), "test", at("2026-09-25T20:00:00Z")).unwrap();
+    // a day's pull of the recorded replies; the recorded history ends on 2026-09-23
+    let day_s_pull = |today: &str| {
+        let now = format!("{today}T20:00:00Z");
+        let mut ws = Wealthsimple::new(Replay::read(&dir()).unwrap().taken_before_statements());
+        let r = pull(&book, &mut ws, connection(&book, &now), today.parse().unwrap(), at(&now), &mut |_| {}).unwrap();
+        assert!(!r.failures.iter().any(|(part, _)| part.starts_with("history")), "{:?}", r.failures);
+        r
+    };
+    day_s_pull("2026-09-25");
+    let account = book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
+    let stated = book.stated(account).unwrap().days;
+    // an earlier build's read of the account: every day from a date on, at nothing
+    let from: jiff::civil::Date = "2024-03-01".parse().unwrap();
+    let spoiled: Vec<AccountDay> = stated.range(from..).map(|(day, (v, n))| AccountDay { day: *day, net_value: Money::zero(v.currency), net_deposits: Money::zero(n.currency) }).collect();
+    let wrong = stated.range(from..).filter(|(_, (v, n))| !(v.amount.is_zero() && n.amount.is_zero())).count();
+    assert!(wrong > 500, "the stretch spoiled holds what the account held: {wrong}");
+    let read = book.broker_read(connection(&book, "2026-09-25T21:00:00Z"), "history", at("2026-09-25T21:00:00Z")).unwrap();
+    book.store_account_days(account, &spoiled, &read).unwrap();
+    assert_ne!(book.stated(account).unwrap().days, stated);
+    // the next day's pull states every one of them again, and no day is new
+    let next = day_s_pull("2026-09-26");
+    assert_eq!(book.stated(account).unwrap().days, stated);
+    assert_eq!((next.days_restated, next.days_stored), (wrong, 0));
 }
 
 /// The accounts list's edges in an accounts reply.
@@ -970,6 +1006,41 @@ fn an_account_under_two_ids_wealthsimple_links_is_one_account_open_while_either_
     assert_eq!(book.account(account).unwrap().status, AccountStatus::Open);
     cash_agrees(&book, &ws.source);
     assert_eq!(book_units(&book, account), ws.source.units_of(new));
+}
+
+/// The days of an account under two ids, the first closed halfway, stored at
+/// nothing by an earlier read, are stated again by the next day's pull as both
+/// ids state them added up: the closed id is read too, since the days it held
+/// the account are its to state.
+#[test]
+fn an_account_under_two_ids_has_its_days_stated_again_from_both_the_closed_one_too() {
+    let (_h, book, mut ws, report) = shaped(&[Shape::LinkedIds]);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let [(old, new)] = &ws.source.retired()[..] else { panic!("one id retired") };
+    let (old, new) = (old.clone(), new.clone());
+    let account = book_account(&book, &new);
+    // what both ids state, added up by day
+    let mut both: std::collections::BTreeMap<jiff::civil::Date, (Money, Money)> = std::collections::BTreeMap::new();
+    for key in [&old, &new] {
+        for d in BrokerAdapter::history(&mut ws, key, None).unwrap() {
+            let (v, n) = both.entry(d.day).or_insert((Money::zero(d.net_value.currency), Money::zero(d.net_deposits.currency)));
+            *v = Money::new(v.amount.checked_add(d.net_value.amount).unwrap(), v.currency);
+            *n = Money::new(n.amount.checked_add(d.net_deposits.amount).unwrap(), n.currency);
+        }
+    }
+    assert_eq!(book.stated(account).unwrap().days, both, "the first pull states both ids");
+    let held_by_the_closed_id = BrokerAdapter::history(&mut ws, &old, None).unwrap().iter().filter(|d| !d.net_value.amount.is_zero()).count();
+    assert!(held_by_the_closed_id > 30, "the closed id held the account for a while: {held_by_the_closed_id} days");
+    // an earlier build's read: every day at nothing
+    let spoiled: Vec<AccountDay> = both.iter().map(|(day, (v, n))| AccountDay { day: *day, net_value: Money::zero(v.currency), net_deposits: Money::zero(n.currency) }).collect();
+    let read = book.broker_read(connection(&book, "2026-10-08T21:00:00Z"), "history", at("2026-10-08T21:00:00Z")).unwrap();
+    book.store_account_days(account, &spoiled, &read).unwrap();
+    // the next pull with a day new to state: the made-up broker states its own
+    // today, so two days on
+    let now = "2026-10-10T20:00:00Z";
+    let next = pull(&book, &mut ws, connection(&book, now), "2026-10-10".parse().unwrap(), at(now), &mut |_| {}).unwrap();
+    assert!(!next.failures.iter().any(|(part, _)| part.starts_with("history")), "{:?}", next.failures);
+    assert_eq!(book.stated(account).unwrap().days, both);
 }
 
 #[test]
