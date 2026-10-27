@@ -55,12 +55,15 @@ jobs:
       # cache (`server/tests/start_failures.rs`)
       - name: strace
         run: sudo apt-get update && sudo apt-get install -y strace
-      # a warning fails the build: the workspace is kept warning-free
+      # a warning fails the build: the workspace is kept warning-free; the suite runs
+      # on a temp folder of its own, and a test that leaves anything there fails it
       - name: The Rust suite
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
-        run: cargo test --workspace --locked -- --skip capacity::tests
+        run: |
+          cargo test --workspace --locked --no-run
+          ../bin/check-test-leftovers.sh cargo test --workspace --locked -- --skip capacity::tests
         working-directory: rust
       # the developer's subcommands (`bagholder demo`, `pull-broker`), each behind a
       # feature no release build enables: their own tests, built with them
@@ -273,6 +276,8 @@ jobs:
       - name: The server and the made-up book
         run: cargo build --locked --bin bagholder --features demo
         working-directory: rust
+      # not under bin/check-test-leftovers.sh yet: the end-to-end servers' temp
+      # folders are their own matter, and the browser run failed under the check (#589)
       - name: The browser tests
         run: npm run e2e
         working-directory: web
