@@ -112,12 +112,17 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
     - **What goes:** `Matched.cash`, the broker check, the header lines that compare or reconcile, the gate, the monthly statements (whole) and `CashByDay`.
     - **Order (§6):** 1) one read-only capture (§3), which settles which read states units now (sec-s/sec-o entries skipped at read.rs:184), the book value's currency, the cash the web app shows, past days, and coins; 2) the plan; 3) one build PR with §4's tests, MINOR.
     - **The test that makes the rule hold:** a book with a spoiled history still shows WS's amounts exactly.
-  - **The capture (§3), started 2026-10-27 18:01 UTC with the owner's go** (relayed by the Architect: "go ahead with all that"):
-    - **The bridge session:** `session_01H7mhEwe3ARKY5TFW5nnhFo` on air:Bagholder:edb7.
-    - **The script:** `scratchpad/cap79/capture79.py` (sha256 f71025ad…). The session fetches it from the temporary branch `capture-79-script` (**delete that branch once the capture is in**). It reads `~/.bagholder-rust/session.json` read-only, never renewing it, and asks: FetchAllAccounts; introspection of BalanceType and CurrencyOverride; FetchAccountsWithBalance for every type; FetchHoldingsExportPositionsAsOfDate for today, yesterday, 40 days back, 400 days back and today with each override; FetchTradingBalanceBuyingPower CAD/USD; the margin read; and the crypto accounts' whole feeds.
-    - **What it returns:** facts as counts and yes/no only, plus a gzip+base64 bundle of the replies with every id, name, symbol, logo, amount and date made up consistently (zero kept, sign and places kept, dates shifted). A leak check refuses to write if any value survives.
-    - **Tested** against a stand-in (`scratchpad/cap79/fake_ws.py`); remove `scratchpad/cap79` once done.
-    - **Not captured:** `FetchIdentityPositions`, which has no document in the repository and was not found in the web app's main script. The cash the web app shows needs the owner's eyes or the web app's query; take it to the Architect.
+  - **The capture (§3): option 1, the Architect's ruling (2026-10-27).**
+    - **What happened:** the first try (a Python script on the Mac) failed. `gh` hit TLS, and the curl download was refused as [Code from External]. The branch and the scratch script are deleted, and the session is archived.
+    - **What it becomes:** a capture mode of the existing feature-gated `pull-broker`, the first PR of brief 79 §6 (no reading change), merged after #639:
+      - the wealthsimple client, read-only, never renewing the sign-in and never writing the book;
+      - made-up figures from `anonymise.rs` (extended; no second anonymiser);
+      - output to a folder named on the command line;
+      - every BalanceType the introspection lists, side by side;
+      - introspection of the Query type's fields for every positions and balance read, which settles whether a current-positions read exists.
+    - **Tests on the stand-in:** the §3 facts it prints match what the stand-in states, and a leak test, planted with one field left unanonymised.
+    - **On the Mac:** clone over the sandbox-proxy tunnel and build `--features pull-broker`, as the release gate does. The first prompt quotes the owner's go: "tell CTO to go ahead with all that". Never ask the owner to approve anything in a bridge session.
+    - **The 2026-10-26 captures** read a `sqlite3 -readonly .backup` of the book, never the sign-in.
   - **#641 merged** (eeda743e); **v2.11.3** is building. **v2.11.2 is published** (the local model stops with the app). Its first macOS suite run failed the leftover check on one `.tmpXXXX` folder and a re-run passed: an intermittent macOS leftover to find. **On hold (the Architect, 2026-10-27): the coin units and the gate removal; start neither.** A design brief supersedes both. The owner: "it should be completely impossible for Bagholder to somehow have the wrong amounts vs WS when all it does is pull from WS." Every amount an account shows or acts on (cash per currency, units, book value, account value, buying power) will be taken exactly as Wealthsimple states it. The history will be read only for the journal, and the broker check and its header lines go. **#638 merged (920d24a7), v2.11.1 released** 2026-10-27 (Latest, 8 assets; the release suites passed under the new leftover check on macOS and Windows).
 - **Done on `agents-anywhere` since the audit** (pushed, head 00b5f0cb):
   - the panel reads the log through the read layer;
