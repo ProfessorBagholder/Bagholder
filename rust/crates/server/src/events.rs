@@ -338,12 +338,14 @@ fn v_text(v: u64) -> String {
 impl Feed {
     pub fn open(app: Arc<App>) -> Feed {
         let bus = app.events.clone();
-        // a page open: quotes are owed, and the figure path looks at once whether one is due
-        if let Some(f) = app.figures.get() {
+        let (registered, wanted) = Registered::new(&bus);
+        let feed = Feed { app, _watching: Watching::new(&bus), registered, wanted, at: 0, base: 0, views: Default::default(), sent_docs: Default::default(), status: None, refused: Default::default() };
+        // the page counted first (`Watching::new`), then the figure path woken: a pass
+        // the wake starts sees the page, and so owes its quotes at once
+        if let Some(f) = feed.app.figures.get() {
             f.wake();
         }
-        let (registered, wanted) = Registered::new(&bus);
-        Feed { app, _watching: Watching::new(&bus), registered, wanted, at: 0, base: 0, views: Default::default(), sent_docs: Default::default(), status: None, refused: Default::default() }
+        feed
     }
 
     /// The header's status as this page shows it: its badge counts the Orders panel's
@@ -682,6 +684,20 @@ mod tests {
     /// shows: a page on the Dashboard or the trades is owed quotes as one showing the
     /// holdings is, so a tab opened later never waits on a quote pass; with no page
     /// open, none are owed.
+    /// A page opening wakes the figure path with the page already counted: the pass
+    /// the wake starts owes the quotes at once, never one that sees no page and parks.
+    #[test]
+    fn test_a_page_opening_wakes_the_figure_path_with_quotes_owed() {
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let f = app.figures.get().unwrap();
+        f.woken(); // whatever was pending before
+        let feed = Feed::open(app.clone());
+        assert!(f.woken(), "the figure path is woken as the page opens");
+        assert!(crate::due::quotes_owed(&app), "and the page is counted by then");
+        drop(feed);
+    }
+
     #[test]
     fn test_quotes_are_owed_while_a_page_is_open_whatever_it_shows() {
         let _g = crate::tests_common::guard();
