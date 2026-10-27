@@ -25,25 +25,21 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 ## 2. Where things stand (2026-10-27 ~22:30 UTC, written by the home-server CTO session)
 
 ### Released, newest first (`gh release list` is the truth)
-- **v2.11.4** (#642): an account's history is read whole whenever its day is due, over every id it has had (the closed one too), so the days an earlier build stored wrong are stated again.
+- **v2.11.5** (#643, merge dcd86f17; published 2026-10-27 ~22:40 UTC, Latest, 8 assets): a run's first sync restates every history (`pull_restating`; `App::history_restated` set once that pull completes, whatever failed in it). The header keeps only the units lines and the "took more" lines. The owner was told to update. **Then check their book on the Mac (below); a reminder fires at 23:49 UTC.**
+- **v2.11.4** (#642): an account's history is read whole whenever its day is due, over every id it has had (the closed one too).
 - **v2.11.3** (#641); **v2.11.2** (#640: the local model stops with the app); **v2.11.0** (#636: `BAGHOLDER_HOSTS`).
+- **#644 merged** (40748cd5), tests only: closing the filters is its own measured interaction in `dataflow.spec.ts`, so its watch (the popover watches the holdings) is never counted in the idle minute. Proven with a plant that issues every page request 300 ms late.
+
+### The chart spike's cause (proven with read-only ratio reads of the owner's book)
+- 2.10.2 re-read the history of accounts with two Wealthsimple ids on one id, and stored years of `account_days` at zero;
+- the pull read history only from `last + 1`, so those days were never read again;
+- 2.10.4 summed both ids for new days, so the charts jumped at the end.
+
+#642 and #643 state those days again.
 
 ### In flight
-- **#643 → v2.11.5** (branch `history-on-start`, worktree `hn`, head cb813f46; cleared by the Architect at dbbf5f92, and the last commit only removes a duplicate `#[test]`):
-  - a run's first sync restates every history (`pull_restating`; `App::history_restated` is set once that pull completes, whatever failed in it). The owner: "waiting for a whole day to pass for a correction is not acceptable";
-  - the header keeps only the units lines and the "took more" lines. The cash lines, the lines for rows the mapping cannot place and the statement lines are gone (brief 79 §2.3 as amended; the units sentence stays until brief 79's build);
-  - the browser job failed once, on `dataflow.spec.ts` "each interaction keeps within its request budget" (one watch in the idle minute). The code was identical to two heads that passed it, so it was rerun (see Other follow-ups);
-  - **after it publishes:** tell the owner to update (the first sync after the start restates every history), then check their book on the Mac (below).
-- **The chart spike's cause** (proven with read-only ratio reads of the owner's book):
-  - 2.10.2 re-read the history of accounts with two Wealthsimple ids on one id, and stored years of `account_days` at zero;
-  - the pull read history only from `last + 1`, so those days were never read again;
-  - 2.10.4 summed both ids for new days, so the charts jumped at the end.
-  
-  #642 and #643 state those days again.
-- **#639 agents anywhere → v2.12.0** (branch `agents-anywhere`, worktree `aa`):
-  - brief 80 (57 findings) is all in. The local head 1d70d27a merges master with #642. It is not pushed: the last pushed head is e95e5190;
-  - next: merge master again once #643 is in, bump to 2.12.0, run the touched tests, push one head, set the PR text from `scratchpad/pr639-new.md` (fix its test counts), and message the Architect;
-  - on clearance and green: merge, release, and **tell the Architect the moment 2.12.0 is published**.
+- **#639 agents anywhere → v2.12.0** (branch `agents-anywhere`, worktree `aa`, head d6349a88): brief 80's 57 findings, master merged (#642, #643), version 2.12.0, PR text from `scratchpad/pr639-new.md`. 6fe224e5's rust job failed only `tests_misc` TIMED_WAITS (the fetch's two waits), fixed in d6349a88; its server integration tests and `tests_misc` pass here. **Waiting:** CI and the Architect's clearance. Then merge, release 2.12.0, and **tell the Architect the moment it is published**.
+- **#645, the brief 79 plan** (branch `amounts-plan`, worktree `b79`, head cfc1e84c): `docs/plans/every-amount-as-wealthsimple-states-it.md`. Units now from the positions read as of today (one request for every account, with the balances); book value in CAD as stated; past days from the positions read as of the day, kept; statement records withdrawn by the first pull. Asked the Architect to confirm the one visible change (a listing outside Canada shows Book and Avg in CAD). The facts and the removal inventory it rests on: `scratchpad/b79-facts.md`. **Waiting:** review. Then one build PR, released MINOR.
 
 ### Checking the owner's book on their Mac
 - **The owner's words (2026-10-27):** "a local session can poll the db to get the data it needs… it can launch the real app on my mac and verify what the browser shows. why do you keep putting more back on me?" Verify there yourself; never hand the owner a step.
