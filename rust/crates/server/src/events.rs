@@ -680,10 +680,6 @@ mod tests {
         assert_eq!(reads(), first + 1, "a commit to the store they live in reads them again");
     }
 
-    /// What is held and followed is quoted while a page is open, whatever tab it
-    /// shows: a page on the Dashboard or the trades is owed quotes as one showing the
-    /// holdings is, so a tab opened later never waits on a quote pass; with no page
-    /// open, none are owed.
     /// A page opening wakes the figure path with the page already counted: the pass
     /// the wake starts owes the quotes at once, never one that sees no page and parks.
     #[test]
@@ -698,6 +694,10 @@ mod tests {
         drop(feed);
     }
 
+    /// What is held and followed is quoted while a page is open, whatever tab it
+    /// shows: a page on the Dashboard or the trades is owed quotes as one showing the
+    /// holdings is, so a tab opened later never waits on a quote pass; with no page
+    /// open, none are owed.
     #[test]
     fn test_quotes_are_owed_while_a_page_is_open_whatever_it_shows() {
         let _g = crate::tests_common::guard();
