@@ -123,8 +123,7 @@
     made = r
     return r
   }
-  /** an agent's log, or (`REFUSED`) the requests no grant or key named, refused */
-  const REFUSED = 'refused'
+  /** an agent's log */
   async function openLog(id: string) {
     if (logOf === id) {
       logOf = ''
@@ -132,7 +131,7 @@
     }
     logOf = id
     log = []
-    const r = await read('GET /api/agents/log', { query: { agent: id === REFUSED ? '' : id } })
+    const r = await read('GET /api/agents/log', { query: { agent: id } })
     if (r.ok && logOf === id) log = r.lines
   }
   function copy(text: string, what: string) {
@@ -287,13 +286,8 @@
       {/each}
     {/if}
     {#if st?.on}
-      <div style="padding:8px 0;border-top:1px solid rgba(var(--ink-rgb),.08);font-size:12.5px">
-        <button style="background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left" onclick={() => openLog(REFUSED)}><span class="muted">Requests refused from callers no agent's sign-in or key names</span></button>
-        {#if logOf === REFUSED}
-          <div class="scroll" style="max-height:160px;margin-top:6px;font-size:11.5px">
-            {#each log as l, i (i)}<div class="muted">{relTime(l.at)} · refused: {l.refusal}</div>{:else}<div class="muted">None.</div>{/each}
-          </div>
-        {/if}
+      <div class="muted" style="padding:8px 0;border-top:1px solid rgba(var(--ink-rgb),.08);font-size:12.5px">
+        Requests refused from callers no agent's sign-in or key names, since the address opened: {st.refused.length ? st.refused.map((r) => `${r.count} ${r.why}`).join(' · ') : 'none'}
       </div>
     {/if}
   </div>

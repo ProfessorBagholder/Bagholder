@@ -53,6 +53,28 @@ pub struct Limits {
     before: Option<Bucket>,
     agents: BTreeMap<String, Option<Bucket>>,
     polls: BTreeMap<String, Timestamp>,
+    /// The refusals of callers no grant or key names, by reason.
+    strangers: BTreeMap<&'static str, u64>,
+}
+
+/// The most of a caller's own text an agent's log keeps: a read's arguments, a
+/// reason a refusal names.
+pub const LOGGED_TEXT: usize = 200;
+
+/// A caller's text as an agent's log keeps it: its first `LOGGED_TEXT` characters.
+pub fn cut(text: &str) -> String {
+    text.chars().take(LOGGED_TEXT).collect()
+}
+
+/// A caller no grant or key names, refused: counted by reason in memory and never
+/// written, so a stranger's requests take no storage however many come.
+pub fn stranger(ctx: &Ctx, why: &'static str) {
+    *ctx.limits.lock().unwrap_or_else(|e| e.into_inner()).strangers.entry(why).or_default() += 1;
+}
+
+/// The strangers refused since the address opened, by reason.
+pub fn strangers(ctx: &Ctx) -> Vec<(String, u64)> {
+    ctx.limits.lock().unwrap_or_else(|e| e.into_inner()).strangers.iter().map(|(why, n)| (why.to_string(), *n)).collect()
 }
 
 /// A waiting page's ask after the sign-in `id`, a request the store keeps:
@@ -187,9 +209,9 @@ fn logged(done: Result<(), tokio::task::JoinError>) {
     }
 }
 
-/// A refusal kept in the log: of a caller no grant or key names, under no agent.
+/// A refusal of a known agent (a grant's, a key's), in that agent's own log.
 pub fn refused(ctx: &Ctx, agent: &str, why: &str) {
-    let r = bagholder_book::agents::Read { agent: agent.to_string(), at: ctx.now(), tool: None, arguments: None, refusal: Some(why.to_string()) };
+    let r = bagholder_book::agents::Read { agent: agent.to_string(), at: ctx.now(), tool: None, arguments: None, refusal: Some(cut(why)) };
     if let Err(e) = ctx.store().and_then(|s| s.log(&r).map_err(|e| e.to_string())) {
         crate::app::log(&format!("bagholder: an agent's refusal could not be logged: {e}"));
     }
@@ -209,9 +231,7 @@ async fn gate(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response
     let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("").trim().to_ascii_lowercase();
     let want = ctx.received();
     if want.is_empty() || host != want {
-        let c = ctx.clone();
-        let why = format!("a request for another host ({host})");
-        logged(tokio::task::spawn_blocking(move || refused(&c, "", &why)).await);
+        stranger(&ctx, "for another host");
         return said(StatusCode::MISDIRECTED_REQUEST, "misdirected_request", "This address answers for its own name alone.");
     }
     // the methods the table names, and no other (HEAD and OPTIONS among them)
@@ -243,7 +263,7 @@ pub fn spend_before_sign_in(ctx: &Ctx) -> Result<(), Response> {
         Bucket::take(&mut l.before, ctx.now(), super::BEFORE_SIGN_IN_PER_MINUTE, super::BEFORE_SIGN_IN_PER_MINUTE)
     };
     taken.map_err(|retry| {
-        refused(ctx, "", "over the rate before sign-in");
+        stranger(ctx, "over the rate before sign-in");
         too_many(retry)
     })
 }
@@ -300,13 +320,13 @@ async fn api_key(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Respo
 
 /// A key of `way`, not withdrawn: its id.
 fn key(ctx: &Ctx, token: Option<&str>, way: &str) -> Result<String, Response> {
-    let refuse = |why: &str| {
-        refused(ctx, "", why);
+    let refuse = |why: &'static str| {
+        stranger(ctx, why);
         let mut r = said(StatusCode::UNAUTHORIZED, "invalid_token", "No key, or not a key Bagholder made for this address.");
         r.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
         r
     };
-    let Some(token) = token else { return Err(refuse("no key")) };
+    let Some(token) = token else { return Err(refuse("with no key")) };
     let store = ctx.store().map_err(|e| said(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable", &e))?;
     let hash = secret::hash(token);
     match store.key_by_hash(&hash).map_err(|e| said(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable", &e.to_string()))? {
@@ -317,7 +337,7 @@ fn key(ctx: &Ctx, token: Option<&str>, way: &str) -> Result<String, Response> {
             r.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
             Err(r)
         }
-        None => Err(refuse("a wrong key")),
+        None => Err(refuse("with a wrong key")),
     }
 }
 
@@ -347,7 +367,7 @@ impl super::tools::Reader for Served {
 
     fn reading(&self, caller: Option<&Caller>, tool: &str, args: &serde_json::Value) {
         let Some(c) = caller else { return };
-        let r = bagholder_book::agents::Read { agent: c.agent.clone(), at: self.0.now(), tool: Some(tool.to_string()), arguments: Some(args.to_string()), refusal: None };
+        let r = bagholder_book::agents::Read { agent: c.agent.clone(), at: self.0.now(), tool: Some(tool.to_string()), arguments: Some(cut(&args.to_string())), refusal: None };
         if let Err(e) = self.0.store().and_then(|s| s.log(&r).map_err(|e| e.to_string())) {
             crate::app::log(&format!("bagholder: an agent's read could not be logged: {e}"));
         }

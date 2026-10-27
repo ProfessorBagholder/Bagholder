@@ -85,6 +85,8 @@ export type ProgramFound = { provider: Provider,
  */
 path: string | null, };
 
+export type RefusedCount = { why: string, count: number, };
+
 export type AgentsStatus = { on: boolean, port: number | null, 
 /**
  * The tunnel the person chose, and what they entered for it.
@@ -103,6 +105,11 @@ tailscale: TailscaleSays | null, tunnel: TunnelState, ready: Ready | null, waiti
  * Every agent that may read: each grant and each key.
  */
 allowed: Array<Connected>, 
+/**
+ * The requests refused from callers no grant or key names since the address
+ * opened, counted by reason (none is written).
+ */
+refused: Array<RefusedCount>, 
 /**
  * What could not be read, in words.
  */

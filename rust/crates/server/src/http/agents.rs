@@ -62,8 +62,19 @@ pub struct AgentsStatus {
     pub waiting: Vec<Waiting>,
     /// Every agent that may read: each grant and each key.
     pub allowed: Vec<Connected>,
+    /// The requests refused from callers no grant or key names since the address
+    /// opened, counted by reason (none is written).
+    pub refused: Vec<RefusedCount>,
     /// What could not be read, in words.
     pub error: String,
+}
+
+/// A reason the address refused callers no grant or key names, and how many.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct RefusedCount {
+    pub why: String,
+    pub count: u32,
 }
 
 /// The agent tables, on a connection whose commits reach the page.
@@ -89,6 +100,7 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
     out.ready = app.agents.ready();
     out.tailscale = app.agents.tailscale();
     out.address = app.agents.ctx().map(|c| c.host()).filter(|h| !h.is_empty()).map(|h| format!("https://{h}")).unwrap_or_default();
+    out.refused = app.agents.ctx().map(|c| agents::listener::strangers(&c)).unwrap_or_default().into_iter().map(|(why, n)| RefusedCount { why, count: n.min(u32::MAX as u64) as u32 }).collect();
     out.programs = Provider::ALL.iter().filter(|p| p.program().is_some()).map(|p| ProgramFound { provider: *p, path: tunnel::find(*p).map(|x| x.display().to_string()) }).collect();
     let mut read = || -> Result<(), String> {
         let a = store(app)?;

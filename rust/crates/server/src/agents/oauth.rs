@@ -80,7 +80,7 @@ pub fn access(ctx: &Ctx, token: Option<&str>) -> Result<String, Response> {
     let Some(token) = token else { return Err(challenge(ctx, None)) };
     let store = ctx.store().map_err(unavailable)?;
     let Some(t) = store.token(&secret::hash(token)).map_err(unavailable)? else {
-        refused(ctx, "", "a wrong token");
+        super::listener::stranger(ctx, "with a wrong token");
         return Err(challenge(ctx, Some("invalid_token")));
     };
     let why = if t.refresh {

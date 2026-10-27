@@ -586,6 +586,29 @@ fn the_pages_say_who_is_really_asking() {
 
 // ---- bounds before sign-in (brief 73, 1) ----
 
+/// A caller no grant or key names is refused and counted, never written (brief 80
+/// §2.1): a Host of 64 KiB is refused at the gate and kept nowhere, and a thousand
+/// wrong keys leave the log as it was, each counted by its reason in memory.
+#[test]
+fn strangers_refused_are_counted_by_reason_and_never_written() {
+    let h = harness();
+    let huge = "a".repeat(64 * 1024);
+    assert_eq!(h.ask("GET", "/.well-known/oauth-protected-resource", &[("host", &huge)], vec![]).status, StatusCode::MISDIRECTED_REQUEST);
+    for _ in 0..1000 {
+        assert_eq!(h.ask("GET", "/api/agents/trades", &[("authorization", "Bearer bhk_wrong")], vec![]).status, StatusCode::UNAUTHORIZED);
+    }
+    assert!(h.store().reads("", usize::MAX).unwrap().is_empty(), "nothing written");
+    assert_eq!(listener::strangers(&h.ctx), vec![("for another host".to_string(), 1), ("with a wrong key".to_string(), 1000)]);
+}
+
+/// What an agent's log keeps of a caller's own text is cut to `LOGGED_TEXT`.
+#[test]
+fn a_caller_s_text_is_kept_cut_to_its_named_length() {
+    assert_eq!(listener::cut(&"é".repeat(5 * listener::LOGGED_TEXT)).chars().count(), listener::LOGGED_TEXT);
+    assert_eq!(listener::cut("short"), "short");
+}
+
+
 #[test]
 fn a_sixth_pending_request_is_refused() {
     let h = harness();
@@ -725,10 +748,9 @@ fn the_gate_takes_the_public_name_and_a_loopback_peer_and_sends_no_cors() {
             assert!(a.headers.keys().all(|k| !k.as_str().starts_with("access-control-")), "{m} {path} sent CORS");
         }
     }
-    // a refusal is logged, never naming what a forwarded header claimed
-    let lines = h.store().reads("", 100).unwrap();
-    assert!(lines.iter().any(|r| r.refusal.as_deref().is_some_and(|x| x.contains("another host"))));
-    assert!(lines.iter().all(|r| !r.refusal.as_deref().unwrap_or("").contains("203.0.113.9")));
+    // a stranger's refusal is counted, and nothing it sent is kept
+    assert!(listener::strangers(&h.ctx).iter().any(|(why, n)| why == "for another host" && *n > 0));
+    assert!(h.store().reads("", 100).unwrap().is_empty());
 }
 
 // ---- rate and log ----
@@ -750,9 +772,10 @@ fn the_11th_read_in_a_burst_is_refused_and_the_log_keeps_arguments_never_answers
     assert_eq!(log.iter().filter(|l| l.tool.as_deref() == Some("trade")).count(), READS_BURST as usize);
     assert!(log.iter().all(|l| l.arguments.as_deref().is_none_or(|a| a == "{\"id\":\"t-1\"}")), "{log:?}");
     assert!(log.iter().any(|l| l.refusal.as_deref() == Some("over the rate")));
-    // a wrong key's refusal is logged too
+    // a wrong key's refusal is counted, not written
     h.ask("GET", "/api/agents/lists", &[("authorization", "Bearer bhj_nope")], vec![]);
-    assert!(h.store().reads("", 10).unwrap().iter().any(|r| r.refusal.as_deref() == Some("a wrong key")));
+    assert!(listener::strangers(&h.ctx).contains(&("with a wrong key".to_string(), 1)));
+    assert!(h.store().reads("", 10).unwrap().is_empty());
 }
 
 // ---- the tunnels ----
