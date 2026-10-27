@@ -368,6 +368,14 @@ fn main() {
         println!("bagholder {}", app::APP_VERSION);
         return;
     }
+    // an agents' tunnel, run as this guard's child and ended with the server that
+    // started it (docs/plans/agents-from-anywhere.md, §4.4). Before any thread
+    // starts: the guard takes the stop signals itself, and a thread started before
+    // it blocks them (the watch below) would take a stop by its default action and
+    // leave the tunnel running.
+    if args.first().map(String::as_str) == Some("tunnel-guard") {
+        std::process::exit(agents::tunnel::guard(&args[1..]));
+    }
     // a command run for some work ends with what started it (brief 64): the server
     // ends through its own stop (`serve`), a command at once
     if !args.is_empty() {
@@ -411,11 +419,6 @@ fn main() {
                 std::process::exit(1);
             }
         }
-    }
-    // an agents' tunnel, run as this guard's child and ended with the server that
-    // started it (docs/plans/agents-from-anywhere.md, §4.4)
-    if args.first().map(String::as_str) == Some("tunnel-guard") {
-        std::process::exit(agents::tunnel::guard(&args[1..]));
     }
     if args.first().map(String::as_str) == Some("source-health") {
         std::process::exit(read_sources::cli_health(&args[1..]));
