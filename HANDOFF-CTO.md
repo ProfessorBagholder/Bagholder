@@ -43,8 +43,8 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 ### Brief 77, what is left, in order
 1. **#631 (§4, the gated rederive): merged** (730abe16), no release.
 2. **#632: merged** (b9017f9c), no release; it ships with (c).
-3. **#633 = (c): CLOSED unmerged.** The canary on the owner's book held it; the closing comment states the four causes by rule, with no figures. Branch `statement-fills` kept on origin for reference (`delivery()`, the recorded `contract_of`, the take-back run once); worktree `fills`.
-   - **The causes, by rule** (from a before/after diff of a read-only copy; script `scratchpad/diag/changed.py`):
+3. **#633 = (c): CLOSED unmerged.** The canary on the owner's book held it; the closing comment states the four causes by rule, with no figures. Branch `statement-fills` kept on origin for reference (`delivery()`, the recorded `contract_of`, the take-back run once); its local worktree and branch are gone.
+   - **The causes, by rule** (from a before/after diff of a read-only copy):
      1. The supersede took the statement's cash for coin fills, but a coin fill's statement cash is before Wealthsimple's fee, and the feed's amount is the cash that moved.
      2. The omitted-fill booking took fills the feed does list: where the feed's share security isn't called by the statement's symbol, and where a coin fill's units and cash both differ.
      3. `book.store` under 2.10.9's `fill_key` restored the records 2.10.10 took back.
@@ -72,7 +72,7 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
      5. Golden diff, header lines only.
      6. Version bump, the canary on the owner's book (Mac gate; `pull-broker --statements-only` runs the walk AND the fills step), PR, Architect, release.
    - Reusable from #633's branch: the recorded `contract_of` form, `delivery()` for an assignment's shares, the take-back once per book.
-   - Scripts: `scratchpad/diag/changed.py` (before/after diff of two copies), `capture.py`, `fills.py`. The gate prompt pattern is in the memory file `bagholder-delegation-playbook.md`.
+   - The diag scripts and every scratch file holding the owner's data were deleted on 2026-10-27. The gate prompt pattern is in the memory file `bagholder-delegation-playbook.md`.
    - **Never** name the owner's securities, coins or account nicknames in this file, a commit, a PR or an issue: the repository is public (a push naming two of them was caught and replaced on 2026-10-26).
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
@@ -93,7 +93,15 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
   2. The sweep shows which fills the step misses: later-form purchases and limit sells.
   3. One change, a subtraction: the units step pairs through the walk's own `match_rows` (combined pass, 31-day late pass) instead of its own pairing. The statement fill record carries its row's day, so a superseded limit sell is dated at execution. A first-month purchase a cent under pairs with nothing and keeps the feed's units; say so in the PR.
   4. Then PR B.
-- Diag scripts `capture9.py`–`capture14.py` are in `scratchpad/diag/` (read-only, ids dropped).
+
+### Brief 78 (the owner's go, 2026-10-27)
+- **§1, #636 merged** (856d409d), **v2.11.0** tagged as its own release: `BAGHOLDER_HOSTS` lists exact host names a proxy on the same machine may send. `host_ok` answers a listed name only from loopback (`peer_ok` unchanged); `app::parse_hosts` refuses the start on a bad entry. Docs: README "From another device", architecture §12, decisions.md (brief 15 d3 struck as superseded).
+- **§2, the preview tooling: waits for the owner** to name the Cloudflare account and domain. Never use `~/.cloudflared/cert.pem` (2025) or the running `cloudflared.service` (memory `cloudflare-account-confirmed-first.md`). Fresh credentials from the named account go only in the tool's own folder (`~/.claude/tools/preview/`, mode 600), never the repository. Facts checked in Cloudflare's docs: a named tunnel routes by hostname (a leading wildcard is allowed, a catch-all rule is required); its ingress has no hot reload, so a route change is a replica swap (start the new connector, wait until it serves, stop the old); `originRequest.access` (`required`, `teamName`, `audTag`); Access applications take a wildcard; Quick Tunnels buffer SSE, so they are out. Then: a shared `CARGO_TARGET_DIR` under flock/nice, measure command-to-link minutes, a live run from the owner's phone, one link reported, `preview --gc` only if anything were left.
+- **The smoke test's leftovers were removed on 2026-10-27:** the portless proxy stopped, `~/.portless` deleted, the package uninstalled, `/tmp/portless-smoke` and its worktree removed. Three things need the owner (sudo or refused by the permission check): portless's CA in the system trust store, Node v24.22.1 under `~/.nvm`, and the test folders in `/tmp`. They were given one line to run.
+- **v2.11.0 published** 2026-10-27: every release job green, 8 assets, Latest (`releases/latest` confirmed).
+- **Tests' temp folders: #637** (branch `tests-clean-temp`, worktree `tmpdirs`, head b1efc6fe) sent to the Architect. Single tests take `tempfile::tempdir()`; the two run-long homes live in `tests_common::run_folder`, removed by `atexit`. A run killed by a signal still leaves its one folder.
+- **A sign-in bug, proven, waiting on the owner's go** (they were signed out after updating to 2.10.13; their app runs on their Mac): at start, `boot_session` with a saved, unexpired sign-in and no answer from Wealthsimple leaves `connected` false. `heard(NotAsked)` keeps `connected && live`, and `connected` starts false. The page then offers "Connect Wealthsimple", which opens the sign-in Chrome window. A throwaway test showed connected=false, error "unreachable: the connection dropped", and the saved login still on disk. The rule dates from 8ae43bed (2026-10-04, 2.2.2). Whether this is what hit the owner is unknown; the app logs no reason when it drops a sign-in. Proposed to the owner: at start, an unexpired saved sign-in counts as connected until Wealthsimple refuses it, and an unanswered check is retried; plus a log line saying why a sign-in is dropped. Not built until they say go.
+- The sign-in window itself is not new: `login::start_login_browser`, reached only from the page's "Connect Wealthsimple" (menu or empty screen). It uses its own profile in the app's folder and picks Chrome before Brave (`find_chrome`), as it has since the Rust port (2026-09-16).
 
 ### Delegated
 - **PR A (#630): merged** (cc28ea70), no release. It covers the exponent cap, `take_frame` returning `io::Result`, four clippy denies, and CI's clippy running with `--features bagholder-ws/standin` (the Architect's condition).
@@ -117,8 +125,8 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 - **Merging.** A merge whose commit writes a new workflow file blob is refused (the token has no `workflow` scope). Merge master into the branch first and push; git pushes are allowed.
 
 ### Workspace
-- Worktrees in this session's scratchpad: `fills` (closed #633, for reference), `aa` (agents), `g558` (paused, the owner's call), `ho` (this file). Scripts in `diag/`.
-- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. It was removed at 196 GB on 2026-10-26 because the disk filled; the next build starts cold. Keep it under ~30 GB (`du -sh`), and remove it when the day's branches merge. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, and only the named tests a change touches. The server crate is a bin: `-p bagholder-server --bin bagholder <filter>`.
+- Worktrees in this session's scratchpad: `aa` (agents), `g558` (paused, the owner's call), `ho` (this file), `tmpdirs` (the temp-folder PR; remove after merge).
+- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. It was removed at 196 GB on 2026-10-26 because the disk filled; on 2026-10-27 its `debug/incremental` (19 GB) was removed, leaving 16 GB. Keep it under ~30 GB (`du -sh`), and remove it when the day's branches merge. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, and only the named tests a change touches. The server crate is a bin: `-p bagholder-server --bin bagholder <filter>`.
 
 ### How a release goes (all delegated: Architect clearance + green checks = merge and release)
 - The version bump goes inside the fix PR, so CI runs once: `rust/Cargo.toml` `version`, `rust/crates/server/src/app.rs` `APP_VERSION`, `rust/crates/server/tests/golden/routes.json` `"version"`, then `cargo update --workspace --offline`.
