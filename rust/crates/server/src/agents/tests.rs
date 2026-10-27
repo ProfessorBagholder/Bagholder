@@ -231,12 +231,41 @@ fn the_route_table_is_exactly_the_planned_one() {
     }
     assert_eq!(h.get("/anything-else").status, StatusCode::NOT_FOUND);
     // and the router names no path the table does not
-    let src = include_str!("listener.rs");
-    let named: Vec<&str> = src.lines().filter_map(|l| l.split(".route(\"").nth(1).or_else(|| l.split(".route_service(\"").nth(1))).map(|r| r.split('"').next().unwrap()).collect();
+    let named = routes_named(include_str!("listener.rs"));
     assert!(!named.is_empty());
     for p in named {
         assert!(ROUTES.iter().any(|(r, _)| *r == p), "the router names {p}, which the table does not");
     }
+}
+
+/// Every path a router source names, each `.route(` and `.route_service(` on a line.
+fn routes_named(src: &str) -> Vec<&str> {
+    src.lines().flat_map(|l| l.split(".route(\"").skip(1).chain(l.split(".route_service(\"").skip(1))).map(|r| r.split('"').next().unwrap()).collect()
+}
+
+/// The route scan reads every route a line names: a second chained on one line is
+/// held to the table too (brief 80 §4.2).
+#[test]
+fn the_route_scan_reads_every_route_on_a_line() {
+    let line = r#"Router::new().route("/a", get(x)).route("/b", get(y)).route_service("/c", z)"#;
+    assert_eq!(routes_named(line), vec!["/a", "/b", "/c"]);
+}
+
+/// Each provider's gate name is derived from its setup, Tailscale on 8443 with its
+/// port (brief 80 §4.2).
+#[test]
+fn each_provider_s_gate_name_comes_from_its_setup() {
+    use super::tunnel::{host_of, Provider, Setup};
+    let setup = |provider, name: &str, funnel_port| Setup { provider, name: name.into(), funnel_port, sends_host: None };
+    let ts = Some("box.tail1234.ts.net.");
+    assert_eq!(host_of(&setup(Provider::Tailscale, "", None), ts).unwrap(), "box.tail1234.ts.net");
+    assert_eq!(host_of(&setup(Provider::Tailscale, "", Some(443)), ts).unwrap(), "box.tail1234.ts.net");
+    assert_eq!(host_of(&setup(Provider::Tailscale, "", Some(8443)), ts).unwrap(), "box.tail1234.ts.net:8443");
+    assert!(host_of(&setup(Provider::Tailscale, "", None), None).is_err(), "no name from Tailscale yet");
+    assert_eq!(host_of(&setup(Provider::Cloudflare, "Agents.Example.com", None), None).unwrap(), "agents.example.com");
+    assert_eq!(host_of(&setup(Provider::Ngrok, "https://agents.ngrok.app/", None), None).unwrap(), "agents.ngrok.app");
+    assert_eq!(host_of(&setup(Provider::Zrok, "mybook", None), None).unwrap(), "mybook.share.zrok.io");
+    assert_eq!(host_of(&setup(Provider::Own, "agents.example.com", None), None).unwrap(), "agents.example.com");
 }
 
 /// Every page route asked on the agents' listener is 404, GET and POST alike.
@@ -818,7 +847,7 @@ fn a_proxy_s_own_host_is_taken_and_the_public_name_given() {
 fn the_gate_takes_the_public_name_and_a_loopback_peer_and_sends_no_cors() {
     let h = harness();
     // another Host, the target's among them, and each provider's request shape
-    for host in ["127.0.0.1:9000", "localhost", "evil.example", "bagholder.example.ts.net.evil.example"] {
+    for host in ["127.0.0.1:9000", "localhost", "evil.example", "bagholder.example.ts.net.evil.example", "evil.bagholder.example.ts.net", "xbagholder.example.ts.net", "bagholder.example.ts.net."] {
         let a = h.ask("GET", "/.well-known/oauth-protected-resource", &[("host", host)], vec![]);
         assert_eq!(a.status, StatusCode::MISDIRECTED_REQUEST, "{host}");
     }

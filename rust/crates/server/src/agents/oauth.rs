@@ -121,12 +121,7 @@ pub fn redirect_ok(uri: &str) -> Result<(), String> {
     if let Ok(ip) = host.parse::<std::net::IpAddr>() {
         return if ip.to_string() == host && fetch::public(ip) { Ok(()) } else { refused() };
     }
-    let labels: Vec<&str> = host.split('.').collect();
-    let named = labels.len() >= 2
-        && labels.iter().all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-') && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
-        && !labels.last().is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
-        && labels.last() != Some(&"localhost");
-    if named {
+    if fetch::dns_name(&host) {
         Ok(())
     } else {
         refused()

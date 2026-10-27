@@ -77,11 +77,18 @@ pub struct Setup {
     pub sends_host: Option<String>,
 }
 
-/// A name a person typed for a host: lower case, no scheme, no path, no spaces.
+/// A name a person typed for a host: lower case, no scheme, no path, a port kept.
+/// A DNS name alone (`fetch::dns_name`): an address or `localhost` names this
+/// machine, and taken as the agents' name it would turn the page's own gate on the
+/// page (brief 80 §4.1).
 pub fn clean_name(s: &str) -> Result<String, String> {
     let t = s.trim().trim_start_matches("https://").trim_start_matches("http://").trim_end_matches('/').to_ascii_lowercase();
-    if t.is_empty() || t.contains(['/', ' ', '@', '?', '#']) || !t.contains('.') {
-        return Err(format!("{s:?} is not a host name, such as agents.example.com"));
+    let host = match t.rsplit_once(':') {
+        Some((h, p)) if !p.is_empty() && p.bytes().all(|b| b.is_ascii_digit()) => h,
+        _ => t.as_str(),
+    };
+    if !super::fetch::dns_name(host) {
+        return Err(format!("{s:?} is not a public host name, such as agents.example.com: an address or localhost is this computer"));
     }
     Ok(t)
 }

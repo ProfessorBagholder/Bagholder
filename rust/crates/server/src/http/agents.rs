@@ -144,6 +144,15 @@ fn ctx(app: &Arc<App>, host: &str, receives: Option<&str>) -> Ctx {
     }
 }
 
+/// The page's own ports, never the agents' address's.
+const PAGE_PORTS: std::ops::RangeInclusive<u16> = 8765..=8767;
+
+/// A port the address was given, as it is kept for the next start: never one of
+/// the page's own, which the system can hand out when it chooses (brief 80 §4.3).
+fn kept_port(port: u16) -> Option<u16> {
+    (!PAGE_PORTS.contains(&port)).then_some(port)
+}
+
 /// Switch the address on, on the port it was given before when it is free.
 pub fn switch_on(app: &Arc<App>, rt: &tokio::runtime::Handle) -> Result<u16, String> {
     let a = store(app)?;
@@ -151,11 +160,11 @@ pub fn switch_on(app: &Arc<App>, rt: &tokio::runtime::Handle) -> Result<u16, Str
     let receives = setup(&a)?.map(|s| tunnel::received_host(&s)).transpose()?.flatten();
     let kept: u16 = a.setting(agents::PORT).map_err(|e| e.to_string())?.and_then(|p| p.parse().ok()).unwrap_or(0);
     // never the page's own ports
-    let wanted = if (8765..=8767).contains(&kept) { 0 } else { kept };
+    let wanted = kept_port(kept).unwrap_or(0);
     let port = app.agents.switch_on(rt, wanted, ctx(app, &host, receives.as_deref())).or_else(|_| app.agents.switch_on(rt, 0, ctx(app, &host, receives.as_deref())))?;
     let now = bagholder_core::jiff::Timestamp::now();
     a.set_setting(agents::ON, Some("1"), now).map_err(|e| e.to_string())?;
-    a.set_setting(agents::PORT, Some(&port.to_string()), now).map_err(|e| e.to_string())?;
+    a.set_setting(agents::PORT, kept_port(port).map(|p| p.to_string()).as_deref(), now).map_err(|e| e.to_string())?;
     Ok(port)
 }
 
@@ -408,6 +417,17 @@ mod tests {
         assert_eq!(app.agents.ready(), Some(Ready::Ready));
         app.agents.switch_off();
         crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], bagholder_core::jiff::Timestamp::now()).unwrap();
+    }
+
+    /// A port in the page's own range is never kept for the agents' address, whoever
+    /// chose it (brief 80 §4.3).
+    #[test]
+    fn a_port_of_the_page_s_own_is_never_kept() {
+        for p in [8765, 8766, 8767] {
+            assert_eq!(kept_port(p), None, "{p}");
+        }
+        assert_eq!(kept_port(8768), Some(8768));
+        assert_eq!(kept_port(41234), Some(41234));
     }
 
     /// The page's status reads the agents' tables and never writes them, Agents off

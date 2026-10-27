@@ -79,6 +79,18 @@ fn public_v6(ip: Ipv6Addr) -> bool {
         || (first == 0x2001 && ip.segments()[1] == 0xdb8))
 }
 
+/// Whether `host` is a DNS name a browser reads as that name alone: labels of
+/// letters, digits and hyphens (none at either end), at least one dot, and a last
+/// label that is not all digits; never `localhost` or a name under it. An address
+/// written as a host (`127.0.0.1`, `127.1`, `0x7f.1`, `[::1]`) is none.
+pub fn dns_name(host: &str) -> bool {
+    let labels: Vec<&str> = host.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-') && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
+        && !labels.last().is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
+        && labels.last() != Some(&"localhost")
+}
+
 /// What turns a name into addresses: the system's resolver in use, a stand-in in tests.
 pub trait Resolve: Send + Sync {
     fn resolve(&self, host: &str, port: u16) -> Result<Vec<IpAddr>, String>;
