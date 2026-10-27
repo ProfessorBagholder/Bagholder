@@ -106,7 +106,7 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ### Agents anywhere: the owner's focus (2026-10-27)
 - **The owner:** cloud agents (Claude.ai, ChatGPT, Grok Bot, Muse, Dots) connect through a standard MCP URL over the person's own tunnel. The stdio/Claude Desktop config route is not what they want. Test with Tailscale first; Cloudflare after (they have accounts and domains). **Nothing specific to the owner's accounts may go in the app**: every user picks a tunnel and is walked through it.
-- **Order:** agents anywhere → coin units → preview links. **#638 merged (920d24a7), v2.11.1 released** 2026-10-27 (Latest, 8 assets; the release suites passed under the new leftover check on macOS and Windows).
+- **Order:** agents anywhere → the gate removal → the cleanup PR → coin units → previews (over Funnel). **#638 merged (920d24a7), v2.11.1 released** 2026-10-27 (Latest, 8 assets; the release suites passed under the new leftover check on macOS and Windows).
 - **Done on `agents-anywhere` since the audit** (pushed, head 00b5f0cb):
   - the panel reads the log through the read layer;
   - Tailscale's steps are read from `tailscale status --json` (`TailscaleSays`, `POST /api/agents/tunnel/look`);
@@ -162,6 +162,26 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
   - provision stops a model whose start failed;
   - the test is tests/exit_with.rs `a_copy_that_stops_leaves_no_local_model_running`.
 - **Follow-up once #639's guard lands:** the model starts through the guard, and the call in main goes (one mechanism). The stop after a failed start stays.
+
+### Removing the gate on a mapping version (the Architect's ruling, architecture-briefs 48184fa2; one PR after the agents build, a PATCH)
+Brief 77 §4 is withdrawn. The owner: "those are things that must be caught during development" and "then how would anyone ever know it's wrong". A missed mistake must show as the page's ordinary disagreement line (status.rs:812) and be repaired by the next release's read.
+1. Remove:
+   - `gated_rederive`;
+   - `REFUSED_VERSIONS` (the `rederive.refused` setting);
+   - the retry after a pull (figures.rs:459-469, broker_reads.rs:426);
+   - the gate's tests;
+   - `restate_walk_records`, if nothing else uses it.
+2. `rederive_all` derives directly again, and the next pull's walk restates. Say whether anything shows doubled between the open and that pull; if so, name it with a stand-in test.
+3. A stored `rederive.refused` key: drop it, or show that nothing reads it.
+4. A test: a mapping version that leaves an account disagreeing shows as the disagreement line in the page's data. With the gate back, the test fails.
+
+### Previews (brief 78 §2 amended by the owner, architecture-briefs 750fcf76)
+- **The link:** Tailscale Funnel on this server's tailnet, https://<machine>.<tailnet>.ts.net[:port]. No Cloudflare and no domain.
+- **Ports:** each preview gets one of 443, 8443 and 10000, so at most three at once. The agents' Funnel takes one while it runs. Here, Traefik holds 443.
+- **`BAGHOLDER_HOSTS`:** the name exactly as the Host header carries it, with `:8443`/`:10000`.
+- **Content:** no login, so a made-up book with `DRY_ORDERS` only.
+- **Lifetime:** foreground only. Afterwards `tailscale funnel status` shows nothing of the preview's.
+- The Cloudflare Access gate is only for the main copy's fixed link, later. The order is unchanged: agents → coin units → previews.
 
 ### The cleanup PR (the Architect's ruling, 2026-10-27; after the agents build, one PR, no owner decision)
 For each removal, the PR says why nothing calls it: a function nothing calls can be a missing call (#640 was one).
