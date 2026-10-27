@@ -76,15 +76,24 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
    - **Never** name the owner's securities, coins or account nicknames in this file, a commit, a PR or an issue: the repository is public (a push naming two of them was caught and replaced on 2026-10-26).
 4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
 
-### (c) premise check (2026-10-26 ~23:30, after the compaction): (c) proposed dropped, awaiting the Architect
-Five read-only Mac captures (scripts `scratchpad/diag/capture9.py`–`capture13.py`; real output in this session only) showed:
-- ".TO": the feed and its `security.stock.symbol` say SYM.TO in CAD, the statement says SYM; cash is equal, so the walk already pairs them by cash. A made-up fixture, `wealthsimple/tests/replies/wealthsimple/edited-activity-dot-to.json`, is in worktree `match` (detached from master b9017f9c, not pushed), with `Shape::Interlisted` begun in `generated.rs`; it compiles.
-- 2024 coin form ("Fee charged"): cash equals the feed's; units differ (the feed's are an estimate to 6 places). 2.10.8's step takes these as intended.
-- The "two coin sales that paired with nothing" are in the feed as limit sells dated the day the order was placed, 9 and 12 days before the execution date the statement gives. Both 2.10.8's window and #633's miss them; the walk's 31-day late pass pairs them by cash. Open item: limit fills are dated on their placement day.
-- 2025 coin form: a fill row before the fee plus its own FEE row ("Fee for purchase of N SYM …" / "Trading fee for sale of N SYM …"), with lists per currency. A sale's two rows come to the feed's amount (the combined pass pairs them); a purchase's come to a cent less. The coin account's cash agrees with the broker, so the walk never reads it.
-- June 2026 (the old "June line"'s month): every fill row has a feed fill of the same cash. The line was the conversions' USD difference, fixed by 2.10.12.
-- **Defect found:** a US fill stated as a cash row "Bought 0.0000 shares at $P per share (executed at D), FX Rate: R" plus a units row "Bought N shares …" at cash 0 (unit SYM). 2.10.8's `statements::fills` reads the cash row as a 0-unit fill and supersedes the feed's fill. The owner's book has exactly 2 such fills (a purchase and its sale, June 2026), so that round trip is missing from the trades. #625's made-up recording replaced 0.0000 with a number, which hid it.
-- Sent to the Architect (msg 12d5c369): drop (c) and its guards. Next comes a shapes PR (Interlisted, the 2025 coin form with its FEE row, the limit-date gap, the split fill, FeeFolded removed, golden re-blessed). Then a reading change for 2.10.8's step: the split pair is read as one fill, the next read withdraws the 0-unit records and makes the feed's live again; the form is re-recorded with 0.0000 kept; a SplitFill shape; test, golden, canary. Waiting for go/change.
+### Since the compaction (2026-10-26 evening, UTC into 2026-10-27)
+- **(c) dropped** (Architect's go): no recorded fill row states other cash than the feed's in a way identity pairing would close; its only source was the typed `FeeFolded`. Its three guards went with it.
+- **#634 merged** (aeccf555), no release: `FILL_FORMS` = `Interlisted`, `Coin2025`, `LimitOrder`, `SplitFill`, each from recorded forms. The typed `FeeFolded`/`FeedOmits`/`FxFunded` are `READ_BY_2_10_9`, only so `tests/take_back.rs` can re-read its two stored books; they go with `take_back_2_10_9`. The split fill's rows were recorded again with their zero. The notation keeps a zero as `0` and writes a fee's coin symbol as `SYM`. `feed-fill-dot-to.json` sits beside the statement forms, where no replay reads it. The golden gained gross units bought/sold per account and symbol; its header lines went from 373 to 2.
+- **#635 merged** (341c0608), **v2.10.13 created** as a prerelease 2026-10-27 ~01:35 UTC; release.yml was building (confirm 8 assets and Latest with `gh release view v2.10.13` and `gh api …/releases/latest`).
+  - The units step reads no fill from a row stating no units. At every pull it first withdraws (`Book::withdraw`) a statement fill record whose row reads as no fill or as the feed's units; `Book::mapped` gives the feed record's units.
+  - `fills` returns (taken, given back), and the offline walk prints both.
+  - Canary PASS: the candidate gave back the copy's zero-unit fills (none left), and the header went from one line to none.
+  - The owner's live book still had the USD trading line at 01:10 UTC, so it had had no 2.10.12 sync. The owner should update to 2.10.13 and sync.
+- **Settled from recorded sides:**
+  - (a) Later-form coin purchases: the feed's units are the executed units rounded to 6 places; the units step misses them (it pairs by cash, and the fill row is before the fee). Sales' units are equal.
+  - (b) The coin limit sells' feed rows carry only the placement date (one revision, no execution field); their units are rounded too. The walk's 31-day pass pairs them; the step's 7-day window does not.
+  - The "cent under" on later-form coin purchases held in that form's first month only.
+- **Next (Architect's order):** the coin units.
+  1. A generator commit: every coin fill, in both forms, has its executed units to 10 places on the statement and rounded to 6 in the feed.
+  2. The sweep shows which fills the step misses: later-form purchases and limit sells.
+  3. One change, a subtraction: the units step pairs through the walk's own `match_rows` (combined pass, 31-day late pass) instead of its own pairing. The statement fill record carries its row's day, so a superseded limit sell is dated at execution. A first-month purchase a cent under pairs with nothing and keeps the feed's units; say so in the PR.
+  4. Then PR B.
+- Diag scripts `capture9.py`–`capture14.py` are in `scratchpad/diag/` (read-only, ids dropped).
 
 ### Delegated
 - **PR A (#630): merged** (cc28ea70), no release. It covers the exponent cap, `take_frame` returning `io::Result`, four clippy denies, and CI's clippy running with `--features bagholder-ws/standin` (the Architect's condition).
