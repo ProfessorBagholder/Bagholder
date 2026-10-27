@@ -77,6 +77,71 @@ fn test_only_the_page_on_this_machine_gets_in() {
     });
 }
 
+/// Names listed for a proxy on this machine (`BAGHOLDER_HOSTS`), emptied again
+/// whatever the test does.
+struct Listed;
+
+impl Listed {
+    fn names(names: &[&str]) -> Listed {
+        *app().hosts.lock().unwrap() = names.iter().map(|n| n.to_string()).collect();
+        Listed
+    }
+}
+
+impl Drop for Listed {
+    fn drop(&mut self) {
+        app().hosts.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
+/// A request as the page makes it through a proxy on this machine that names it
+/// `host`, from `peer`.
+fn through(method: Method, uri: &str, body: Option<&str>, host: &str, peer: [u8; 4]) -> Request<Body> {
+    let mut req = from_the_page(method, uri, body);
+    req.headers_mut().insert(header::HOST, host.parse().unwrap());
+    req.extensions_mut().insert(ConnectInfo(SocketAddr::from((peer, 50000))));
+    req
+}
+
+/// A name listed for a proxy in front is answered as 127.0.0.1 and the port are,
+/// from this machine alone, exactly as listed; nothing listed, nothing more is.
+#[test]
+fn test_a_name_listed_for_a_proxy_is_answered_from_this_machine_alone() {
+    let _g = guard();
+    let local = [127, 0, 0, 1];
+    runtime().block_on(async {
+        // nothing listed: the proxy's name is refused, as any other
+        assert_eq!(json_of(through(Method::GET, "/api/status", None, "dev.example.com", local)).await.0, StatusCode::FORBIDDEN);
+        let _listed = Listed::names(&["dev.example.com"]);
+        // listed, from this machine: a read, and a write from the page
+        assert_eq!(json_of(through(Method::GET, "/api/status", None, "dev.example.com", local)).await.0, StatusCode::OK);
+        assert_eq!(json_of(through(Method::POST, "/api/events/watch", Some("{}"), "dev.example.com", local)).await.0, StatusCode::OK);
+        // the Host header is folded before the check
+        assert_eq!(json_of(through(Method::GET, "/api/status", None, "DEV.example.com", local)).await.0, StatusCode::OK);
+        // the same name from a peer that is not this machine
+        assert_eq!(json_of(through(Method::GET, "/api/status", None, "dev.example.com", [192, 168, 1, 20])).await.0, StatusCode::FORBIDDEN);
+        // near misses: a port the list does not name, a longer name ending in the listed one, another name
+        for host in ["dev.example.com:443", "evil-dev.example.com", "other.example.com"] {
+            assert_eq!(json_of(through(Method::GET, "/api/status", None, host, local)).await.0, StatusCode::FORBIDDEN, "{host}");
+        }
+        // 127.0.0.1 and the port as ever
+        assert_eq!(json_of(from_the_page(Method::GET, "/api/status", None)).await.0, StatusCode::OK);
+    });
+}
+
+/// `BAGHOLDER_HOSTS` read: names lowercased, a port kept; an entry with a space,
+/// an empty one, or one that is no host name refuses the start, naming it.
+#[test]
+fn test_the_names_listed_are_read_exactly_or_the_start_is_refused() {
+    use crate::app::parse_hosts;
+    assert_eq!(parse_hosts(""), Ok(vec![]));
+    assert_eq!(parse_hosts("Dev.Example.com,app.example.com:8443"), Ok(vec!["dev.example.com".to_string(), "app.example.com:8443".to_string()]));
+    for (text, named) in [("dev.example.com, app.example.com", "\" app.example.com\""), ("dev.example.com,,app.example.com", "\"\""), ("dev.example.com,", "\"\""), ("dev example.com", "\"dev example.com\""), ("dev.example.com:", "\"dev.example.com:\""), ("dev.example.com:99999", "\"dev.example.com:99999\""), ("*.example.com", "\"*.example.com\""), ("-dev.example.com", "\"-dev.example.com\"")] {
+        let e = parse_hosts(text).unwrap_err();
+        assert!(e.starts_with("BAGHOLDER_HOSTS lists ") && e.contains(named), "{text}: {e}");
+    }
+}
+
 #[test]
 fn test_every_answer_is_private_and_every_failure_has_one_shape() {
     let _g = guard();

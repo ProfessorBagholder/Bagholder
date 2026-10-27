@@ -348,9 +348,10 @@ fn refused(code: StatusCode) -> Response {
 }
 
 /// The gate: loopback only unless the server was bound elsewhere on purpose, the
-/// Host header has to name 127.0.0.1 and the port (a page on another origin that
-/// resolves a name of its own to this machine names itself there), and a write
-/// has to come from the page itself.
+/// Host header has to name 127.0.0.1 and the port, or one name the person listed
+/// for a proxy on this machine (a page on another origin that resolves a name of
+/// its own to this machine names itself there), and a write has to come from the
+/// page itself.
 async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
     match admitted(&state.app, &req) {
         Ok(()) => next.run(req).await,
@@ -369,7 +370,8 @@ fn admitted(app: &App, req: &Request) -> Result<(), StatusCode> {
     let head = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("").trim().to_lowercase();
     let port = *app.port.lock().unwrap_or_else(|e| e.into_inner());
     let from_the_page = || head("sec-fetch-site") == "same-origin" || !head("x-bagholder").is_empty();
-    if peer_ok(&app.bind_host, peer) && host_ok(&app.bind_host, port, &head("host")) && (!write || from_the_page()) {
+    let hosts = app.hosts.lock().unwrap_or_else(|e| e.into_inner());
+    if peer_ok(&app.bind_host, peer) && host_ok(&app.bind_host, port, &head("host"), &hosts) && (!write || from_the_page()) {
         Ok(())
     } else {
         Err(StatusCode::FORBIDDEN)
@@ -387,9 +389,13 @@ fn peer_ok(bind_host: &str, peer: Option<std::net::IpAddr>) -> bool {
     }
 }
 
-fn host_ok(bind_host: &str, port: u16, host: &str) -> bool {
+fn host_ok(bind_host: &str, port: u16, host: &str, listed: &[String]) -> bool {
     if host.is_empty() || host.contains(',') {
         return false;
+    }
+    // a name listed for a proxy in front, exactly as listed: no wildcard, no suffix, no port ignored
+    if listed.iter().any(|l| l == host) {
+        return true;
     }
     if bind_host != "127.0.0.1" {
         // a container's port may be published under another number; the name must still be 127.0.0.1
