@@ -1337,3 +1337,46 @@ fn a_book_of_every_shape_carried_from_version_36_is_the_same_book_after_its_next
     assert_eq!(report.accounts_merged, 1, "{report:?}");
     assert_eq!(held(&book), before);
 }
+
+/// A fill the statement writes on two rows (`Shape::SplitFill`), a round trip and
+/// an open position: the units step reads no fill from the cash rows, so the book
+/// holds the feed's units and the round trip stands, its month kept by a walk or not.
+#[test]
+fn a_fill_the_statement_writes_on_two_rows_keeps_its_units_and_its_round_trip() {
+    let today = shaped_today();
+    let shapes: Vec<Shape> = SHAPES.iter().copied().chain([Shape::SplitFill]).collect();
+    let (_h, book, mut ws, _) = shaped_by(SHAPED, today, &shapes);
+    let now = today.to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(jiff::SignedDuration::from_hours(21)).unwrap();
+    let conn = connection(&book, &now.to_string());
+    // the month of its fills kept, as a walk keeps the months it reads
+    let account = ws.source.account_ids()[0].clone();
+    let month = today.first_of_month().checked_sub(jiff::Span::new().months(1)).unwrap();
+    let statement = bagholder_wealthsimple::adapter::Source::statement(&mut ws.source, &account, month, bagholder_wealthsimple::statement::BROKERAGE).unwrap().expect("the newest month's statement");
+    let symbol = {
+        let text = statement.canonical();
+        let at = text.find(" 0.0000 shares at ").expect("a fill's cash on a row of no units");
+        let before = &text[..at];
+        let start = before.rfind("\"description\":\"").expect("its description") + "\"description\":\"".len();
+        before[start..].split(" - ").next().unwrap().to_string()
+    };
+    let a = book_account(&book, &account);
+    let stated = ws.source.units_of(&account).get(&symbol).copied();
+    // the listing's fills as the book holds them, the round trip and the open position
+    let holds = |book: &Book, when: &str| {
+        let mut fills = vec![];
+        for t in book.transactions().unwrap().into_iter().filter(|t| t.account == a && matches!(t.kind, Kind::Buy | Kind::Sell)) {
+            let Some(i) = t.instrument else { continue };
+            if book.names(i).unwrap().iter().any(|n| n.symbol == symbol) {
+                fills.push(t.quantity.unwrap());
+            }
+        }
+        assert_eq!(fills.len(), 3, "{when}: the round trip and the open position: {fills:?}");
+        assert!(fills.iter().all(|q| !q.is_zero()), "{when}: a fill of no units: {fills:?}");
+        assert_eq!(Some(fills.iter().fold(Dec::ZERO, |s, q| s.checked_add(*q).unwrap())), stated, "{when}: the units the broker states");
+    };
+    holds(&book, "its month not kept");
+    let read = book.broker_read(conn, &format!("statement:{account}"), now).unwrap();
+    book.keep_monthly_statement(conn, &account, month, &statement.canonical(), &read).unwrap();
+    pull(&book, &mut ws, conn, today, now, &mut |_| {}).unwrap();
+    holds(&book, "its month kept");
+}

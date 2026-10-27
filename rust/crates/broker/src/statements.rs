@@ -595,9 +595,32 @@ pub struct Fill {
 /// statement's fill. A statement fill row is paired with the feed's fill of the
 /// same account, side, symbol and cash, executed the row's day or the day
 /// before it (a coin's row can be filed the day before), the nearest day and
-/// then the nearest quantity first, one to one.
-pub fn fills(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys_of: &BTreeMap<AccountId, Vec<String>>, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<usize> {
-    let Some(mapping) = adapter.statement_mapping().map(|m| m.source()) else { return Ok(0) };
+/// then the nearest quantity first, one to one. A row stating no units is no
+/// fill: a statement can write a fill's cash on a row of no units and its units
+/// on a row of their own at no cash, which this step never reads.
+///
+/// First, a fill an earlier step took from a statement whose row now reads as
+/// no fill, or as the feed's own units, gives its place back: the feed's record
+/// is live again, derived from its own payload. Returns the fills taken and
+/// those given back.
+pub fn fills(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, keys_of: &BTreeMap<AccountId, Vec<String>>, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<(usize, usize)> {
+    let Some(mapping) = adapter.statement_mapping().map(|m| m.source()) else { return Ok((0, 0)) };
+    let mut given_back = 0;
+    for (id, _, _) in book.live_records_written(&mapping)? {
+        let [feed] = book.replaced(id)?[..] else { continue };
+        let Some(payload) = book.revisions(id)?.pop().and_then(|(_, _, p)| bagholder_core::json::parse(&p).ok()) else { continue };
+        let bagholder_core::json::Value::Object(o) = &payload else { continue };
+        let (Some(bagholder_core::json::Value::String(kind)), Some(bagholder_core::json::Value::String(description))) = (o.get("kind"), o.get("description")) else { continue };
+        if kind != "fill" {
+            continue;
+        }
+        let stated = crate::codes::fill_of(description).map(|(_, q)| q).filter(|q| !q.is_zero());
+        let theirs = book.mapped(feed, adapter.mapping())?.legs.iter().find_map(|d| d.quantity).map(Dec::abs);
+        if stated.is_none() || stated == theirs {
+            book.withdraw(id, adapter.mapping(), now)?;
+            given_back += 1;
+        }
+    }
     let txs = book.transactions()?;
     let mut replaced = 0;
     for (account, keys) in keys_of {
@@ -633,7 +656,7 @@ pub fn fills(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connectio
                     if !matches!(crate::codes::kind(&r.code), Some(Kind::Buy | Kind::Sell)) || r.cash.is_zero() {
                         continue;
                     }
-                    if let Some((symbol, q)) = crate::codes::fill_of(&r.description) {
+                    if let Some((symbol, q)) = crate::codes::fill_of(&r.description).filter(|(_, q)| !q.is_zero()) {
                         rows.push(((k.clone(), m, i), r, symbol.to_uppercase(), q));
                     }
                 }
@@ -689,7 +712,7 @@ pub fn fills(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connectio
             }
         }
     }
-    Ok(replaced)
+    Ok((replaced, given_back))
 }
 
 /// The reason 2.10.9 gave each feed record a statement fill took the place of.

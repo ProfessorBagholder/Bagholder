@@ -243,6 +243,15 @@ impl Book {
             .ok_or_else(|| text::corrupt("record_revisions", "record_id", &id.to_string(), "a record with no revision"))
     }
 
+    /// What `mapping` reads a record's latest payload as, whatever its state,
+    /// storing nothing: a superseded record's own units, which it holds no
+    /// transactions of.
+    pub fn mapped(&self, id: RecordId, mapping: &dyn Mapping) -> Result<crate::mapping::Mapped> {
+        let connection = self.record(id)?.connection;
+        let (payload, _) = self.latest_revision(id)?;
+        Ok(mapping.map(&MapContext { connection, record: id, zones: &self.zones }, &payload))
+    }
+
     /// Derive a live record's transactions from `payload` again, replacing what
     /// it had, and move or orphan the trades anchored on it. Each leg is kept on
     /// the instrument its own references name (`Book::own_instrument`), so a

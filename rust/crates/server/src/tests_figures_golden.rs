@@ -17,13 +17,9 @@ use bagholder_wealthsimple::adapter::Wealthsimple;
 use bagholder_wealthsimple::generated::{Generated, Shape, Size, FILL_FORMS, SHAPES};
 use serde_json::{json, Map, Value};
 
-/// Every shape the made-up broker has from recorded books, but a fill the statement
-/// states on two rows (`Shape::SplitFill`): 2.10.8's units step reads its cash row as
-/// a fill of no units wherever a walk kept its month, and the months kept differ
-/// between a book the version before read and one this version reads, so the two
-/// disagree until that step is fixed, when it joins.
+/// Every shape the made-up broker has from recorded books.
 fn every_shape() -> Vec<Shape> {
-    SHAPES.iter().chain(FILL_FORMS.iter()).filter(|s| **s != Shape::SplitFill).copied().collect()
+    SHAPES.iter().chain(FILL_FORMS.iter()).copied().collect()
 }
 
 /// One seed's book, pulled whole and opened as the app opens it: its figures.
