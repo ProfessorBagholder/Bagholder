@@ -98,7 +98,11 @@ address: string, programs: Array<ProgramFound>,
  * What Tailscale said of this machine when last asked: asked when Tailscale is
  * chosen, when its tunnel starts, and when the person asks again.
  */
-tailscale: TailscaleSays | null, tunnel: TunnelState, ready: Ready | null, waiting: Array<Waiting>, connected: Array<Connected>, 
+tailscale: TailscaleSays | null, tunnel: TunnelState, ready: Ready | null, waiting: Array<Waiting>, 
+/**
+ * Every agent that may read: each grant and each key.
+ */
+allowed: Array<Connected>, 
 /**
  * What could not be read, in words.
  */

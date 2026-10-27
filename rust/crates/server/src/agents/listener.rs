@@ -147,7 +147,11 @@ pub async fn serve(listener: tokio::net::TcpListener, ctx: Arc<Ctx>, mut stop: t
     };
     let service = router(ctx).into_make_service_with_connect_info::<SocketAddr>();
     tokio::select! {
-        _ = axum::serve(listener, service).with_graceful_shutdown(stopped) => {}
+        served = axum::serve(listener, service).with_graceful_shutdown(stopped) => {
+            if let Err(e) = served {
+                crate::app::log(&format!("bagholder: the agents' address stopped serving: {e}"));
+            }
+        }
         _ = async {
             while !*stop2.borrow() {
                 if stop2.changed().await.is_err() {

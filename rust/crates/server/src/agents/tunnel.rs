@@ -271,12 +271,19 @@ impl Tunnels {
     /// Whether the child ended on its own: said, with its last lines kept.
     pub fn reap(&mut self) {
         let Some(c) = self.child.as_mut() else { return };
-        if let Ok(Some(status)) = c.try_wait() {
-            self.child = None;
-            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            s.running = None;
-            s.exited = Some(format!("The tunnel ended: {status}"));
-        }
+        let status = match c.try_wait() {
+            Ok(Some(status)) => status,
+            Ok(None) => return,
+            Err(e) => {
+                // its state cannot be read: said, and asked again at the next look
+                self.state.lock().unwrap_or_else(|e| e.into_inner()).exited = Some(format!("The tunnel's state could not be read: {e}"));
+                return;
+            }
+        };
+        self.child = None;
+        let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+        s.running = None;
+        s.exited = Some(format!("The tunnel ended: {status}"));
     }
 
     /// Stop the tunnel: the guard ends its group.

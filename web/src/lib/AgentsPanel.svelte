@@ -269,9 +269,9 @@
       {/if}
     {/if}
 
-    {#if st?.connected.length}
+    {#if st?.allowed.length}
       <div class="lbl" style="margin:18px 0 8px">Connected agents</div>
-      {#each st.connected as c (c.id)}
+      {#each st.allowed as c (c.id)}
         <div style="padding:8px 0;border-top:1px solid rgba(var(--ink-rgb),.08)">
           <div style="display:flex;gap:10px;align-items:center;font-size:12.5px">
             <button style="background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left;min-width:0" onclick={() => openLog(c.id)}><span style="font-weight:500">{c.name}</span> <span class="muted">· {way(c.way)}{c.who ? ' · ' + c.who : ''} · made {relTime(c.madeAt)}{c.lastUsedAt ? ' · last read ' + relTime(c.lastUsedAt) : ' · no reads yet'}</span></button>

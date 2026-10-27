@@ -79,7 +79,7 @@
         },
         "ready": null,
         "waiting": [],
-        "connected": [],
+        "allowed": [],
         "error": ""
       },
       "dataVersion": "exposures:0|filings:0|news:0|universes:0|<today>",

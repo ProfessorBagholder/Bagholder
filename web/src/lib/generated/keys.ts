@@ -59,7 +59,7 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
   },
   'status': {
     'agents.waiting': 'id',
-    'agents.connected': 'id',
+    'agents.allowed': 'id',
   },
   'orders': {
     'orders': 'id',

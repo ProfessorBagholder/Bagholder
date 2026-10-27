@@ -60,7 +60,8 @@ pub struct AgentsStatus {
     pub tunnel: TunnelState,
     pub ready: Option<Ready>,
     pub waiting: Vec<Waiting>,
-    pub connected: Vec<Connected>,
+    /// Every agent that may read: each grant and each key.
+    pub allowed: Vec<Connected>,
     /// What could not be read, in words.
     pub error: String,
 }
@@ -96,7 +97,7 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
             out.address = a.setting(agents::HOST).map_err(|e| e.to_string())?.map(|h| format!("https://{h}")).unwrap_or_default();
         }
         out.waiting = approve::waiting(&a, bagholder_core::jiff::Timestamp::now())?;
-        out.connected = approve::connected(&a)?;
+        out.allowed = approve::connected(&a)?;
         Ok(())
     };
     if app.figures.get().is_some() {

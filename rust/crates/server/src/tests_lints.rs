@@ -58,7 +58,8 @@ const IO_CALLS: [&str; 8] = [".get()", ".open()", "connect(", "std::fs::", "fs::
 
 /// Places the two scanned forms stand, by file, with why each may: the scan
 /// fails when a file has more or fewer than listed.
-const LISTED: [(&str, usize, &str); 2] = [
+const LISTED: [(&str, usize, &str); 3] = [
+    ("server/src/agents/listener.rs", 1, "`tokio::select!`'s arm (`_ = async { .. } => {}`), not an assignment: the drain's deadline after the agents are switched off"),
     ("server/src/http/mod.rs", 1, "`tokio::select!`'s arm (`_ = async { .. } => Ok(())`), not an assignment: the drain's deadline after a stop"),
     ("server/src/main.rs", 2, "`tokio::select!`'s arms (`_ = ctrl_c() => {}`), not an assignment: the signal that stops the app"),
 ];
