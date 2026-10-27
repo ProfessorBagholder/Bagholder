@@ -34,7 +34,8 @@ pub enum Kind {
     /// The saved Wealthsimple login (`session.json`).
     Login,
     /// The agents reaching the book from elsewhere: who may read, their keys and
-    /// their log, and the agents' settings. The agents' address closes with them.
+    /// their log, the agents' settings, and what Bagholder kept for a tunnel (a
+    /// provider's sign-in, a tunnel's credentials). The agents' address closes with them.
     Agents,
 }
 
@@ -176,8 +177,14 @@ pub fn clear(app: &Arc<App>, f: &Figures, kinds: &[Kind], now: bagholder_core::j
         crate::session::delete_session(app).map_err(Refused::Failed)?;
     }
     if kinds.contains(&Kind::Agents) {
-        // the address closes and its tunnel stops: nothing is left to answer an agent
+        // the address closes and its tunnel stops: nothing is left to answer an agent;
+        // and what Bagholder kept for each tunnel (a sign-in, a tunnel's credentials) goes
         app.agents.switch_off();
+        match std::fs::remove_dir_all(app.home.join("agents")) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(Refused::Failed(format!("what Bagholder kept for the agents' tunnel could not be removed: {e}"))),
+        }
     }
     if kinds.contains(&Kind::Broker) {
         let mut st = app.state.lock().unwrap();
@@ -302,6 +309,10 @@ mod tests {
             a.log(&bagholder_book::agents::Read { agent: "key-1".into(), at: t, tool: Some("trades".into()), arguments: Some("{}".into()), refusal: None }).unwrap();
             a.set_setting("agents.on", Some("1"), t).unwrap();
         }
+        // a tunnel provider's sign-in, kept for the agents' tunnel, made up
+        let kept = crate::agents::tunnel::files(&app.home, crate::agents::tunnel::Provider::Cloudflare).join(".cloudflared");
+        std::fs::create_dir_all(&kept).unwrap();
+        std::fs::write(kept.join("cert.pem"), "made up").unwrap();
         // a browser subscribed to this copy's pushes
         book.keep_push_subscription("https://push.example/sub", "BAAA", "AAAA", t).unwrap();
         // a debt the broker's net worth feature states, and the person's word on a payee
@@ -482,6 +493,8 @@ mod tests {
             let cache_before = counts(f.cache().unwrap().connection());
             let settings_before = f.book().unwrap().setting(crate::notify::SETTINGS_KEY).unwrap();
             clear(&app, f, &[kind], now()).unwrap();
+            // what Bagholder kept for a tunnel goes with the agents alone
+            assert_eq!(app.home.join("agents").exists(), kind != Kind::Agents, "{kind:?}: what was kept for the agents' tunnel");
             let book_after = counts(&f.book().unwrap().conn_for_tests());
             let src_after = sources(f);
             // the book: records by source, the rest by what each table holds

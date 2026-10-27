@@ -46,8 +46,8 @@
   ]
 
   const program = (p: Provider) => st?.programs.find((x) => x.provider === p)?.path ?? null
-  /** each provider's steps, from nothing: a step already done here is shown done, never chosen for the person */
-  function steps(p: Provider): { what: string; link?: string; done?: boolean }[] {
+  /** each provider's steps, from nothing: a step already done here is shown done, never chosen for the person; a step Bagholder runs is a button */
+  function steps(p: Provider): { what: string; code?: boolean; link?: string; done?: boolean; act?: { label: string; run: () => void } }[] {
     const port = st?.port ?? 0
     switch (p) {
       case 'tailscale': {
@@ -61,21 +61,20 @@
       case 'cloudflare':
         return [
           { what: 'Install cloudflared', link: 'https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/', done: !!program(p) },
-          { what: 'cloudflared tunnel login' },
-          { what: 'cloudflared tunnel create bagholder-agents' },
-          { what: 'cloudflared tunnel route dns bagholder-agents ' + (name || 'agents.yourdomain.com') },
+          { what: 'Sign in to Cloudflare, and choose the domain for the agents\' address', done: !!st?.cloudflare.signedIn, act: { label: 'Sign in to Cloudflare', run: () => void signIn('cloudflare') } },
+          { what: 'Enter a name on that domain below, such as agents.yourdomain.com: starting the tunnel makes it, with its DNS record, the first time' },
         ]
       case 'ngrok':
         return [
           { what: 'Install ngrok', link: 'https://ngrok.com/download', done: !!program(p) },
-          { what: 'ngrok config add-authtoken <token from your dashboard>', link: 'https://dashboard.ngrok.com/get-started/your-authtoken' },
+          { what: 'ngrok config add-authtoken <token from your dashboard>', code: true, link: 'https://dashboard.ngrok.com/get-started/your-authtoken' },
           { what: 'Enter the dev domain your dashboard shows', link: 'https://dashboard.ngrok.com/domains' },
         ]
       case 'zrok':
         return [
           { what: 'Install zrok 2', link: 'https://docs.zrok.io/docs/guides/install/', done: !!program(p) },
-          { what: 'zrok2 enable <your account token>' },
-          { what: 'zrok2 create name -n public ' + (name || '<a name>') },
+          { what: 'zrok2 enable <your account token>', code: true },
+          { what: 'zrok2 create name -n public ' + (name || '<a name>'), code: true },
         ]
       case 'own':
         return [{ what: 'Point your proxy at http://127.0.0.1:' + (port || '<port shown once Agents is on>') + ', keeping the Host it was asked for' }]
@@ -97,6 +96,8 @@
     return act('save', () => call('POST /api/agents/tunnel', { body: setup }))
   }
   const start = () => act('start', () => call('POST /api/agents/tunnel/start'))
+  /** the provider's sign-in, run by Bagholder: its link opens from the lines below */
+  const signIn = (p: Provider) => act('sign-in', () => call('POST /api/agents/tunnel/sign-in', { body: { provider: p } }))
   /** Tailscale asked again: once chosen, and when the person has signed in or let Funnel on since */
   const look = () => act('look', () => call('POST /api/agents/tunnel/look'))
   function pick(p: Provider) {
@@ -201,7 +202,7 @@
       {#if picked}
         <ol style="font-size:12px;line-height:1.6;margin:12px 0 0;padding-left:18px">
           {#each steps(picked) as s, i (i)}
-            <li>{#if s.done}<span class="muted">Done: </span>{/if}{#if s.link}<a href={s.link} target="_blank" rel="noopener">{s.what}</a>{:else}<code>{s.what}</code>{/if}</li>
+            <li>{#if s.done}<span class="muted">Done: </span>{/if}{#if s.link && !s.code}<a href={s.link} target="_blank" rel="noopener">{s.what}</a>{:else if s.link}<code>{s.what}</code>{' '}<a href={s.link} target="_blank" rel="noopener">Where</a>{:else if s.act}{s.what}{#if !s.done}{' '}<button class="btn btn-secondary" style="margin-left:6px" disabled={busy === 'sign-in' || !!st?.tunnel.signingIn} onclick={s.act.run}>{st?.tunnel.signingIn ? 'Waiting for the sign-in…' : s.act.label}</button>{/if}{:else if s.code}<code>{s.what}</code>{:else}{s.what}{/if}</li>
           {/each}
         </ol>
         {#if picked === 'tailscale'}
@@ -229,16 +230,16 @@
       {#if st.setup}
         <div style="display:flex;gap:8px;align-items:center;margin-top:14px;flex-wrap:wrap">
           {#if st.setup.provider !== 'own'}
-            {#if st.tunnel.running}<button class="btn btn-secondary" disabled={busy === 'stop'} onclick={stop}>Stop tunnel</button>
+            {#if st.tunnel.running}<button class="btn btn-secondary" disabled={busy === 'stop'} onclick={stop}>{st.tunnel.signingIn ? 'Cancel the sign-in' : 'Stop tunnel'}</button>
             {:else}<button class="btn btn-primary" disabled={busy === 'start'} onclick={start}>Start tunnel</button>{/if}
           {/if}
           <button class="btn btn-secondary" disabled={busy === 'check' || !address} onclick={check}>{busy === 'check' ? 'Checking…' : 'Check the address'}</button>
           {#if readyWord}<span class={st.ready?.state === 'failed' ? 'status-err' : st.ready?.state === 'ready' ? '' : 'muted'} style="font-size:12px">{readyWord}</span>{/if}
         </div>
         {#if address}<div class="muted" style="font-size:11.5px;margin-top:8px">Address: {address}{confirmed ? '' : ', given to agents once the check finds it answers'}</div>{/if}
-        {#if st.tunnel.exited}<div class="status-err" style="font-size:12px;margin-top:6px">{st.tunnel.exited}</div>{/if}
-        {#if st.tunnel.lines.length}<pre class="scroll" style="font-size:11px;max-height:120px;margin:8px 0 0;white-space:pre-wrap">{#each st.tunnel.lines as line, i (i)}{#each linked(line) as part, j (j)}{#if part.link}<a href={part.text} target="_blank" rel="noopener">{part.text}</a>{:else}{part.text}{/if}{/each}{'\n'}{/each}</pre>{/if}
       {/if}
+      {#if st.tunnel.exited}<div class="status-err" style="font-size:12px;margin-top:6px">{st.tunnel.exited}</div>{/if}
+      {#if st.tunnel.lines.length}<pre class="scroll" style="font-size:11px;max-height:120px;margin:8px 0 0;white-space:pre-wrap">{#each st.tunnel.lines as line, i (i)}{#each linked(line) as part, j (j)}{#if part.link}<a href={part.text} target="_blank" rel="noopener">{part.text}</a>{:else}{part.text}{/if}{/each}{'\n'}{/each}</pre>{/if}
 
       {#if address && confirmed}
         <div class="lbl" style="margin:18px 0 8px">Connect an agent</div>

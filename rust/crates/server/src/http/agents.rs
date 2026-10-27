@@ -14,7 +14,7 @@ use ts_rs::TS;
 
 use super::{api_routes, blocking, Api, ApiError, AppState, OkOr, Params, Required, Routed};
 use crate::agents::approve::{self, Connected, KeyAsked, LogLine, MadeKey, Waiting};
-use crate::agents::tunnel::{self, Provider, Ready, Setup, TailscaleSays, TunnelState};
+use crate::agents::tunnel::{self, CloudflareSays, Provider, Ready, Setup, TailscaleSays, TunnelState};
 use crate::agents::{self, Ctx};
 use crate::app::App;
 
@@ -25,6 +25,7 @@ pub fn routes() -> Routed {
         post "/api/agents/tunnel/start" => start_tunnel;
         post "/api/agents/tunnel/stop" => stop_tunnel;
         post "/api/agents/tunnel/look" => look;
+        post "/api/agents/tunnel/sign-in" => sign_in;
         post "/api/agents/check" => check;
         post "/api/agents/requests/allow" => allow;
         post "/api/agents/requests/deny" => deny;
@@ -57,6 +58,8 @@ pub struct AgentsStatus {
     /// What Tailscale said of this machine when last asked: asked when Tailscale is
     /// chosen, when its tunnel starts, and when the person asks again.
     pub tailscale: Option<TailscaleSays>,
+    /// What is done of Cloudflare's setup, read from the files Bagholder keeps for it.
+    pub cloudflare: CloudflareSays,
     pub tunnel: TunnelState,
     pub ready: Option<Ready>,
     pub waiting: Vec<Waiting>,
@@ -87,6 +90,7 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
     }
     out.ready = app.agents.ready();
     out.tailscale = app.agents.tailscale();
+    out.cloudflare = tunnel::cloudflare_says(&tunnel::files(&app.home, Provider::Cloudflare));
     out.address = app.agents.ctx().map(|c| c.host()).filter(|h| !h.is_empty()).map(|h| format!("https://{h}")).unwrap_or_default();
     out.programs = Provider::ALL.iter().filter(|p| p.program().is_some()).map(|p| ProgramFound { provider: *p, path: tunnel::find(*p).map(|x| x.display().to_string()) }).collect();
     let mut read = || -> Result<(), String> {
@@ -217,7 +221,8 @@ async fn start_tunnel(State(state): State<AppState>) -> Api<OkOr> {
         if s.provider == Provider::Tailscale {
             app.agents.look_at_tailscale();
         }
-        let command = tunnel::command(&s, &path.display().to_string(), port).ok_or("This tunnel has no command.")?;
+        let folder = tunnel::files(&app.home, s.provider);
+        let command = tunnel::command(&s, &path.display().to_string(), port, &folder).ok_or("This tunnel has no command.")?;
         let signal = app.events.clone();
         app.agents.tunnels().start(s.provider, tunnel::guarded(&command)?, Arc::new(move || signal.signal()))?;
         app.agents.set_ready(None);
@@ -237,6 +242,38 @@ async fn stop_tunnel(State(state): State<AppState>) -> Api<OkOr> {
     })
     .await?;
     Ok(Json(OkOr::ok()))
+}
+
+/// The provider's sign-in, run by Bagholder: its link opens from the panel, and
+/// what it writes stays in Bagholder's folder for that provider.
+async fn sign_in(State(state): State<AppState>, Required(provider): Required<SignInAsked>) -> Api<OkOr> {
+    let app = state.app.clone();
+    let done = blocking(move || -> Result<(), String> {
+        let p = provider.provider;
+        let program = p.program().ok_or("Your own proxy has no sign-in here.")?;
+        let path = tunnel::find(p).ok_or_else(|| format!("{program} is not installed on this computer: follow its first step."))?;
+        let folder = tunnel::files(&app.home, p);
+        std::fs::create_dir_all(&folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&folder, std::fs::Permissions::from_mode(0o700)).map_err(|e| format!("{}: {e}", folder.display()))?;
+        }
+        let (command, env) = tunnel::sign_in(p, &path.display().to_string(), &folder).ok_or_else(|| format!("Bagholder runs no sign-in for {program}: follow its steps."))?;
+        let (argv, mut guard_env) = tunnel::guarded(&command)?;
+        guard_env.extend(env);
+        let signal = app.events.clone();
+        app.agents.tunnels().sign_in(p, (argv, guard_env), Arc::new(move || signal.signal()))?;
+        app.events.signal();
+        Ok(())
+    })
+    .await?;
+    Ok(Json(done.map_or_else(OkOr::err, |()| OkOr::ok())))
+}
+
+#[derive(Deserialize, TS)]
+pub struct SignInAsked {
+    pub provider: Provider,
 }
 
 /// Tailscale asked again, when the person has signed in or let Funnel on since.

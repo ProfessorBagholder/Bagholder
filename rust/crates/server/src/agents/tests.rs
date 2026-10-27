@@ -713,21 +713,54 @@ fn tailscale_s_status_shows_each_step_done() {
     assert!(not_answering.installed && !not_answering.signed_in);
 }
 
+/// Cloudflare is set up from Bagholder alone: its sign-in runs with Bagholder's
+/// folder for it as its home, so it writes there and never over a sign-in the
+/// person keeps for anything else; the tunnel is made, routed and run by one
+/// command, named for the public name, from that sign-in and the credentials it
+/// writes beside it. What is done is read from those files.
+#[test]
+fn cloudflare_is_signed_in_and_run_from_bagholder_s_own_folder() {
+    use tunnel::{Provider, Setup};
+    let home = tempfile::tempdir().unwrap();
+    let folder = tunnel::files(home.path(), Provider::Cloudflare);
+    assert!(folder.starts_with(home.path()));
+    let (login, env) = tunnel::sign_in(Provider::Cloudflare, "cloudflared", &folder).unwrap();
+    assert_eq!(login, ["cloudflared", "tunnel", "login"]);
+    for var in ["HOME", "USERPROFILE"] {
+        assert!(env.contains(&(var.to_string(), folder.display().to_string())), "{var}: {env:?}");
+    }
+    assert!(tunnel::sign_in(Provider::Tailscale, "tailscale", &folder).is_none(), "Tailscale is signed in with its own app");
+    let s = Setup { provider: Provider::Cloudflare, name: "agents.example.com".into(), funnel_port: None, sends_host: None };
+    let c = tunnel::command(&s, "cloudflared", 4321, &folder).unwrap();
+    let after = |flag: &str| c.iter().position(|a| a == flag).map(|i| c[i + 1].clone()).unwrap_or_else(|| panic!("{flag} in {c:?}"));
+    assert!(std::path::Path::new(&after("--origincert")).starts_with(&folder));
+    assert!(std::path::Path::new(&after("--cred-file")).starts_with(&folder));
+    assert_eq!(after("--name"), "bagholder-agents-example-com");
+    assert_eq!(after("--hostname"), "agents.example.com");
+    assert_eq!(after("--url"), "http://127.0.0.1:4321");
+    assert!(!c.iter().any(|a| a == "run" || a.contains(".cloudflared") && !a.starts_with(&folder.display().to_string())), "{c:?}");
+    // done as the files say
+    assert!(!tunnel::cloudflare_says(&folder).signed_in);
+    std::fs::create_dir_all(folder.join(".cloudflared")).unwrap();
+    std::fs::write(folder.join(".cloudflared").join("cert.pem"), "made up").unwrap();
+    assert!(tunnel::cloudflare_says(&folder).signed_in);
+}
+
 #[test]
 fn the_tailscale_command_never_runs_in_the_background() {
     let setups = [Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: None, sends_host: None }, Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: Some(8443), sends_host: None }];
     for s in setups {
-        let c = tunnel::command(&s, "tailscale", 4321).unwrap();
+        let c = tunnel::command(&s, "tailscale", 4321, std::path::Path::new("/kept")).unwrap();
         assert!(!c.iter().any(|a| a.starts_with("--bg")), "{c:?}");
         assert_eq!(c[1], "funnel");
         assert!(c.contains(&"127.0.0.1:4321".to_string()));
     }
     // every provider's command targets this listener alone, with fixed arguments
     for p in [Provider::Cloudflare, Provider::Ngrok, Provider::Zrok] {
-        let c = tunnel::command(&Setup { provider: p, name: "agents.example.com".into(), funnel_port: None, sends_host: None }, "x", 4321).unwrap();
+        let c = tunnel::command(&Setup { provider: p, name: "agents.example.com".into(), funnel_port: None, sends_host: None }, "x", 4321, std::path::Path::new("/kept")).unwrap();
         assert!(c.iter().any(|a| a.contains("127.0.0.1:4321")), "{p:?}: {c:?}");
     }
-    assert!(tunnel::command(&Setup { provider: Provider::Own, name: "a.example.com".into(), funnel_port: None, sends_host: None }, "x", 1).is_none());
+    assert!(tunnel::command(&Setup { provider: Provider::Own, name: "a.example.com".into(), funnel_port: None, sends_host: None }, "x", 1, std::path::Path::new("/kept")).is_none());
     use tunnel::{Provider, Setup};
 }
 

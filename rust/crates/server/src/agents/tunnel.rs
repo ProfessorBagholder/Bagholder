@@ -87,13 +87,29 @@ pub fn clean_name(s: &str) -> Result<String, String> {
 }
 
 /// The command Bagholder starts for `setup`, with fixed arguments: the program's
-/// path first. None for the person's own proxy, which is theirs to run.
-pub fn command(setup: &Setup, program: &str, port: u16) -> Option<Vec<String>> {
+/// path first. `folder` holds the provider's own files for this tunnel
+/// ([`files`]). None for the person's own proxy, which is theirs to run.
+pub fn command(setup: &Setup, program: &str, port: u16, folder: &std::path::Path) -> Option<Vec<String>> {
     let target = format!("127.0.0.1:{port}");
     let args: Vec<String> = match setup.provider {
         // in the foreground: `--bg` would keep it serving after Bagholder ends (§4.3a)
         Provider::Tailscale => vec!["funnel".into(), format!("--https={}", setup.funnel_port.unwrap_or(443)), target],
-        Provider::Cloudflare => vec!["tunnel".into(), "run".into(), "--url".into(), format!("http://{target}"), "bagholder-agents".into()],
+        // the tunnel named for the public name, made and given its DNS record the first
+        // time, from the sign-in Bagholder keeps (`--name` creates, routes and runs)
+        Provider::Cloudflare => vec![
+            "tunnel".into(),
+            "--no-autoupdate".into(),
+            "--origincert".into(),
+            cloudflare_cert(folder).display().to_string(),
+            "--cred-file".into(),
+            cloudflare_credentials(folder, &setup.name).display().to_string(),
+            "--name".into(),
+            cloudflare_tunnel(&setup.name),
+            "--hostname".into(),
+            setup.name.clone(),
+            "--url".into(),
+            format!("http://{target}"),
+        ],
         Provider::Ngrok => vec!["http".into(), format!("--url={}", setup.name), target],
         // zrok v2.0.8: the reserved name in the public namespace, no terminal UI
         Provider::Zrok => vec!["share".into(), "public".into(), target, "--headless".into(), "-n".into(), format!("public:{}", setup.name)],
@@ -137,6 +153,56 @@ pub fn find(provider: Provider) -> Option<PathBuf> {
     }
     let exe = if cfg!(windows) { format!("{program}.exe") } else { program.to_string() };
     std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(&exe)).find(|p| p.is_file()))
+}
+
+/// Where Bagholder keeps a provider's own files for the agents' tunnel (a sign-in,
+/// a tunnel's credentials): in the data folder, apart from anything else the
+/// provider keeps on this computer, and gone with the agents' data when it is
+/// cleared.
+pub fn files(home: &std::path::Path, provider: Provider) -> PathBuf {
+    home.join("agents").join(provider.program().unwrap_or("own"))
+}
+
+/// Cloudflare's tunnel for a public name: one per name, so two copies of Bagholder
+/// on one account never share one.
+pub fn cloudflare_tunnel(name: &str) -> String {
+    format!("bagholder-{}", name.replace(['.', ':'], "-"))
+}
+
+/// Cloudflare's sign-in, as `cloudflared tunnel login` writes it under the home it
+/// is given.
+fn cloudflare_cert(folder: &std::path::Path) -> PathBuf {
+    folder.join(".cloudflared").join("cert.pem")
+}
+
+/// A Cloudflare tunnel's credentials, as `--name` writes them when it makes it.
+fn cloudflare_credentials(folder: &std::path::Path, name: &str) -> PathBuf {
+    folder.join(format!("{}.json", cloudflare_tunnel(name)))
+}
+
+/// What the panel shows done for Cloudflare: installed, and signed in from Bagholder.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudflareSays {
+    pub installed: bool,
+    pub signed_in: bool,
+}
+
+pub fn cloudflare_says(folder: &std::path::Path) -> CloudflareSays {
+    CloudflareSays { installed: find(Provider::Cloudflare).is_some(), signed_in: cloudflare_cert(folder).is_file() }
+}
+
+/// The sign-in Bagholder runs for the person, where the provider has one it can
+/// run: the link it prints opens from the panel. Cloudflare's writes its sign-in
+/// under `folder`, which it is given as its home, never the person's own.
+pub fn sign_in(provider: Provider, program: &str, folder: &std::path::Path) -> Option<(Vec<String>, Vec<(String, String)>)> {
+    match provider {
+        Provider::Cloudflare => {
+            let home = folder.display().to_string();
+            Some((vec![program.to_string(), "tunnel".into(), "login".into()], vec![("HOME".into(), home.clone()), ("USERPROFILE".into(), home)]))
+        }
+        _ => None,
+    }
 }
 
 /// What Tailscale states of this machine, by which the panel shows each of its
@@ -195,6 +261,8 @@ const LINES_KEPT: usize = 20;
 pub struct TunnelState {
     /// The provider of the tunnel running, if one is.
     pub running: Option<Provider>,
+    /// Whether what runs is the provider's sign-in, not the tunnel.
+    pub signing_in: bool,
     /// The command it was started with.
     pub command: Vec<String>,
     /// Its last lines, as it wrote them.
@@ -217,7 +285,16 @@ impl Tunnels {
 
     /// Start `argv` with `env` (`guarded`: the tunnel through `bagholder
     /// tunnel-guard`, ending with this process). Refused while one runs, naming it.
-    pub fn start(&mut self, provider: Provider, (argv, env): Guarded, signal: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+    pub fn start(&mut self, provider: Provider, guarded: Guarded, signal: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        self.run(provider, false, guarded, signal)
+    }
+
+    /// The provider's sign-in, run as the tunnel is, one child at a time.
+    pub fn sign_in(&mut self, provider: Provider, guarded: Guarded, signal: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+        self.run(provider, true, guarded, signal)
+    }
+
+    fn run(&mut self, provider: Provider, signing_in: bool, (argv, env): Guarded, signal: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
         if let Some(running) = self.state.lock().unwrap_or_else(|e| e.into_inner()).running {
             return Err(format!("A tunnel is running already ({running:?}): stop it first."));
         }
@@ -228,7 +305,7 @@ impl Tunnels {
         let mut child = cmd.spawn().map_err(|e| format!("The tunnel could not start: {e}"))?;
         {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
-            *s = TunnelState { running: Some(provider), command: argv.clone(), lines: Vec::new(), exited: None };
+            *s = TunnelState { running: Some(provider), signing_in, command: argv.clone(), lines: Vec::new(), exited: None };
         }
         let lines: Arc<Mutex<VecDeque<String>>> = Arc::default();
         for out in [child.stdout.take().map(|o| Box::new(o) as Box<dyn std::io::Read + Send>), child.stderr.take().map(|e| Box::new(e) as Box<dyn std::io::Read + Send>)].into_iter().flatten() {
@@ -262,7 +339,12 @@ impl Tunnels {
             self.child = None;
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
             s.running = None;
-            s.exited = Some(format!("The tunnel ended: {status}"));
+            s.exited = match (s.signing_in, status.success()) {
+                (true, true) => None,
+                (true, false) => Some(format!("The sign-in ended without signing in: {status}")),
+                (false, _) => Some(format!("The tunnel ended: {status}")),
+            };
+            s.signing_in = false;
         }
     }
 
@@ -282,6 +364,7 @@ impl Tunnels {
         }
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.running = None;
+        s.signing_in = false;
     }
 }
 
