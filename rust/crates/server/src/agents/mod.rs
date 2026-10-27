@@ -45,6 +45,14 @@ pub const READS_BURST: u32 = 10;
 pub const REQUEST_LIFE: SignedDuration = SignedDuration::from_mins(10);
 /// How long an authorization code handed to the agent's page may wait to be exchanged.
 pub const CODE_LIFE: SignedDuration = SignedDuration::from_mins(5);
+/// How often the waiting page may ask after one sign-in.
+pub const POLL_EVERY: SignedDuration = SignedDuration::from_secs(1);
+
+/// The sign-ins that have ended, gone: called on a write the person or an agent
+/// makes (an answer, a new sign-in), never on a read.
+pub fn end_expired(store: &AgentsBook, now: Timestamp) -> bagholder_book::Result<()> {
+    store.end_expired(now - REQUEST_LIFE, now - CODE_LIFE)
+}
 /// How long an access token is good for.
 pub const ACCESS_LIFE: SignedDuration = SignedDuration::from_hours(1);
 /// A refresh token is good until it is used, or for this long.

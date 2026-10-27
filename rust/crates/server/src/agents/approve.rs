@@ -76,11 +76,11 @@ fn e(err: impl ToString) -> String {
     err.to_string()
 }
 
-/// The sign-ins waiting, the ended ones gone first.
+/// The sign-ins waiting: a read, never a write (the page's status asks it on every
+/// step), so an ended one is left out here and goes on the next write.
 pub fn waiting(store: &AgentsBook, now: Timestamp) -> Result<Vec<Waiting>, String> {
-    store.end_expired(now - super::REQUEST_LIFE).map_err(e)?;
     let mut out = Vec::new();
-    for r in store.waiting().map_err(e)? {
+    for r in store.waiting(now - super::REQUEST_LIFE).map_err(e)? {
         let client = store.client(&r.client_id).map_err(e)?;
         out.push(Waiting {
             id: r.id,
@@ -120,7 +120,7 @@ pub fn connected(store: &AgentsBook) -> Result<Vec<Connected>, String> {
 /// The person's answer to a waiting sign-in. Refused when it is not waiting (it
 /// ended, or was answered).
 pub fn answer(store: &AgentsBook, id: &str, allowed: bool, now: Timestamp) -> Result<(), String> {
-    store.end_expired(now - super::REQUEST_LIFE).map_err(e)?;
+    super::end_expired(store, now).map_err(e)?;
     if store.answer(id, allowed, now).map_err(e)? {
         Ok(())
     } else {

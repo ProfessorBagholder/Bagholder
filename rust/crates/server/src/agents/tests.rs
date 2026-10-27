@@ -176,7 +176,7 @@ impl Harness {
         assert_eq!(page.status, StatusCode::OK, "{}", page.text());
         let text = page.text();
         let id = text.split("var id=\"").nth(1).and_then(|r| r.split('"').next()).expect("the request's id").to_string();
-        let code = self.store().waiting().unwrap().into_iter().find(|r| r.id == id).expect("a waiting request").code;
+        let code = self.store().waiting(bagholder_core::jiff::Timestamp::MIN).unwrap().into_iter().find(|r| r.id == id).expect("a waiting request").code;
         (id, code)
     }
 
@@ -351,6 +351,7 @@ fn a_waiting_page_s_polls_never_use_up_the_allowance_before_sign_in() {
     let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
     for n in 0..3 * BEFORE_SIGN_IN_PER_MINUTE {
         assert_eq!(h.get(&format!("/oauth/authorize/status?request={id}")).status, StatusCode::OK, "poll {n}");
+        h.advance(POLL_EVERY);
     }
     assert_eq!(h.get("/.well-known/oauth-protected-resource").status, StatusCode::OK, "the allowance is whole");
     // a poll naming no request is a stranger's call, and spends it
@@ -359,6 +360,70 @@ fn a_waiting_page_s_polls_never_use_up_the_allowance_before_sign_in() {
         refused |= h.get(&format!("/oauth/authorize/status?request={}", secret::request_id())).status == StatusCode::TOO_MANY_REQUESTS;
     }
     assert!(refused, "unknown ids are bounded");
+}
+
+/// A waiting page asks after its sign-in at most once a `POLL_EVERY`: one that asks
+/// sooner is told to wait, and the sign-in still answers after.
+#[test]
+fn a_waiting_page_asking_again_within_the_second_is_told_to_wait() {
+    let h = harness();
+    let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    let poll = || h.get(&format!("/oauth/authorize/status?request={id}"));
+    assert_eq!(poll().status, StatusCode::OK);
+    assert_eq!(poll().status, StatusCode::TOO_MANY_REQUESTS);
+    h.advance(POLL_EVERY);
+    assert_eq!(poll().json()["state"], "waiting");
+}
+
+/// A denial ends its sign-in once its page has read it: asked again, there is none.
+#[test]
+fn a_denied_sign_in_ends_once_its_page_has_read_the_denial() {
+    let h = harness();
+    let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    approve::answer(&h.store(), &id, false, h.ctx.now()).unwrap();
+    let poll = || h.get(&format!("/oauth/authorize/status?request={id}"));
+    assert_eq!(poll().json()["state"], "denied");
+    h.advance(POLL_EVERY);
+    assert_eq!(poll().status, StatusCode::NOT_FOUND);
+    assert!(h.store().request(&id).unwrap().is_none(), "nothing kept of it");
+}
+
+/// An allowed sign-in's code is minted once: the page asking again is told it is
+/// done and is handed no other, and the one handed still exchanges.
+#[test]
+fn an_allowed_sign_in_s_code_is_minted_once() {
+    let h = harness();
+    let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    approve::answer(&h.store(), &id, true, h.ctx.now()).unwrap();
+    let poll = || h.get(&format!("/oauth/authorize/status?request={id}")).json();
+    let first = poll();
+    assert_eq!(first["state"], "allowed");
+    for _ in 0..3 {
+        h.advance(POLL_EVERY);
+        assert_eq!(poll(), json!({ "state": "done" }), "no second code");
+    }
+    let code = first["redirect"].as_str().unwrap().split("code=").nth(1).unwrap().split('&').next().unwrap().to_string();
+    let t = h.form("/oauth/token", &[("grant_type", "authorization_code"), ("code", &code), ("redirect_uri", CALLBACK), ("client_id", CIMD), ("code_verifier", VERIFIER), ("resource", &format!("https://{HOST}/mcp"))]);
+    assert_eq!(t.status, StatusCode::OK, "{}", t.text());
+    assert!(h.store().request(&id).unwrap().is_none(), "exchanged: it ends");
+}
+
+/// A code never exchanged ends `CODE_LIFE` after it was handed: the page asking
+/// after it finds none, the code no longer exchanges, and the next sign-in made
+/// ends what is left of it.
+#[test]
+fn an_allowed_sign_in_whose_code_is_never_exchanged_ends() {
+    let h = harness();
+    let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    approve::answer(&h.store(), &id, true, h.ctx.now()).unwrap();
+    let first = h.get(&format!("/oauth/authorize/status?request={id}")).json();
+    let code = first["redirect"].as_str().unwrap().split("code=").nth(1).unwrap().split('&').next().unwrap().to_string();
+    h.advance(CODE_LIFE + SignedDuration::from_secs(1));
+    assert_eq!(h.get(&format!("/oauth/authorize/status?request={id}")).status, StatusCode::NOT_FOUND);
+    let t = h.form("/oauth/token", &[("grant_type", "authorization_code"), ("code", &code), ("redirect_uri", CALLBACK), ("client_id", CIMD), ("code_verifier", VERIFIER), ("resource", &format!("https://{HOST}/mcp"))]);
+    assert_eq!(t.status, StatusCode::BAD_REQUEST, "{}", t.text());
+    h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    assert!(h.store().request(&id).unwrap().is_none(), "gone at the next sign-in made");
 }
 
 #[test]
@@ -400,7 +465,7 @@ fn allow_and_deny_are_unreachable_through_the_agents_listener() {
         assert_eq!(h.ask("POST", p, &[("content-type", "application/json")], json!({ "id": id }).to_string().into_bytes()).status, StatusCode::NOT_FOUND, "{p}");
         assert!(crate::http::route_table().iter().any(|e| e.path == p && e.method == "post"), "{p} is the page's");
     }
-    assert_eq!(h.store().waiting().unwrap().len(), 2 - 1, "still waiting");
+    assert_eq!(h.store().waiting(bagholder_core::jiff::Timestamp::MIN).unwrap().len(), 2 - 1, "still waiting");
 }
 
 #[test]
@@ -493,7 +558,7 @@ fn a_metadata_document_naming_another_client_is_refused() {
     let a = h.authorize(CIMD, CALLBACK, &[]);
     assert_eq!(a.status, StatusCode::BAD_REQUEST);
     assert!(a.text().contains("another client_id"), "{}", a.text());
-    assert!(h.store().waiting().unwrap().is_empty());
+    assert!(h.store().waiting(bagholder_core::jiff::Timestamp::MIN).unwrap().is_empty());
 }
 
 /// A metadata document is fetched from the checked address, and one whose name
@@ -530,7 +595,7 @@ fn a_sixth_pending_request_is_refused() {
     let a = h.authorize(CIMD, CALLBACK, &[]);
     assert_eq!(a.status, StatusCode::TOO_MANY_REQUESTS);
     // one ends, and another may wait
-    let id = h.store().waiting().unwrap()[0].id.clone();
+    let id = h.store().waiting(bagholder_core::jiff::Timestamp::MIN).unwrap()[0].id.clone();
     approve::answer(&h.store(), &id, false, h.ctx.now()).unwrap();
     assert_eq!(h.authorize(CIMD, CALLBACK, &[]).status, StatusCode::OK);
 }

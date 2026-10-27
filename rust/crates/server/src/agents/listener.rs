@@ -46,11 +46,28 @@ impl Bucket {
     }
 }
 
-/// The buckets: one before sign-in for every caller together, one per agent.
+/// The buckets: one before sign-in for every caller together, one per agent; and
+/// when each sign-in's waiting page last asked after it.
 #[derive(Default)]
 pub struct Limits {
     before: Option<Bucket>,
     agents: BTreeMap<String, Option<Bucket>>,
+    polls: BTreeMap<String, Timestamp>,
+}
+
+/// A waiting page's ask after the sign-in `id`, a request the store keeps:
+/// refused when it asked less than `POLL_EVERY` ago. Only kept requests are
+/// counted, and one is forgotten once its life is over, so this holds a few.
+pub fn poll(ctx: &Ctx, id: &str, now: Timestamp) -> Result<(), Response> {
+    let mut l = ctx.limits.lock().unwrap_or_else(|e| e.into_inner());
+    l.polls.retain(|_, at| *at >= now - super::REQUEST_LIFE);
+    if let Some(at) = l.polls.get(id) {
+        if now < *at + super::POLL_EVERY {
+            return Err(too_many(super::POLL_EVERY.as_secs().max(1) as u64));
+        }
+    }
+    l.polls.insert(id.to_string(), now);
+    Ok(())
 }
 
 /// An answer of `status` with an error in words, as JSON.

@@ -20,6 +20,7 @@ use serde_json::{json, Value};
 use super::listener::{refused, said};
 use super::{fetch, secret, Ctx};
 use bagholder_book::agents::{Client, NewRequest};
+use bagholder_core::jiff::Timestamp;
 
 fn unavailable(e: impl ToString) -> Response {
     said(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable", &e.to_string())
@@ -255,7 +256,7 @@ pub async fn authorize(State(ctx): State<Arc<Ctx>>, Query(q): Query<AuthorizeQue
             Ok(s) => s,
             Err(e) => return unavailable(e),
         };
-        if let Err(e) = store.end_expired(now - super::REQUEST_LIFE) {
+        if let Err(e) = super::end_expired(&store, now) {
             return unavailable(e);
         }
         let (id, code) = (secret::request_id(), secret::code());
@@ -316,10 +317,21 @@ fn back(redirect: &str, params: &[(&str, &str)], state: Option<&str>, iss: &str)
     format!("{redirect}{}{qs}", if redirect.contains('?') { "&" } else { "?" })
 }
 
+/// Whether a request has ended by now, kept or not: one with no code handed after
+/// `REQUEST_LIFE`, one whose code was handed after `CODE_LIFE`.
+pub fn ended(r: &bagholder_book::agents::Request, now: Timestamp) -> bool {
+    match r.code_at {
+        None => r.made_at < now - super::REQUEST_LIFE,
+        Some(at) => at < now - super::CODE_LIFE,
+    }
+}
+
 /// `/oauth/authorize/status?request={id}`: the request this id names alone (brief
 /// 73, 5): waiting, or the redirect back to the agent once the person answered. A
 /// poll naming a request takes nothing from the allowance before sign-in, so the
-/// waiting page never uses it up; one naming none takes a call, as any stranger's.
+/// waiting page never uses it up, and is answered at most once a `POLL_EVERY`; one
+/// naming none takes a call, as any stranger's. An answer ends the request: a
+/// denial once its page has read it, an allowed one's code is handed once.
 pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -> Response {
     blocking(move || {
         let not = || super::listener::spend_before_sign_in(&ctx).err().unwrap_or_else(|| said(StatusCode::NOT_FOUND, "not_found", "No such sign-in."));
@@ -330,19 +342,21 @@ pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -
             Ok(s) => s,
             Err(e) => return unavailable(e),
         };
-        if let Err(e) = store.end_expired(now - super::REQUEST_LIFE) {
-            return unavailable(e);
-        }
         let r = match store.request(&id) {
-            Ok(Some(r)) => r,
-            Ok(None) => return not(),
+            Ok(Some(r)) if !ended(&r, now) => r,
+            Ok(_) => return not(),
             Err(e) => return unavailable(e),
         };
+        if let Err(too_soon) = super::listener::poll(&ctx, &r.id, now) {
+            return too_soon;
+        }
         let iss = ctx.base();
         match r.answer {
             None => axum::Json(json!({ "state": "waiting" })).into_response(),
-            Some(false) => axum::Json(json!({ "state": "denied", "redirect": back(&r.redirect_uri, &[("error", "access_denied")], r.state.as_deref(), &iss) })).into_response(),
-            Some(true) if r.code_used => axum::Json(json!({ "state": "done" })).into_response(),
+            Some(false) => match store.drop_request(&r.id) {
+                Ok(()) => axum::Json(json!({ "state": "denied", "redirect": back(&r.redirect_uri, &[("error", "access_denied")], r.state.as_deref(), &iss) })).into_response(),
+                Err(e) => unavailable(e),
+            },
             Some(true) => {
                 let code = secret::secret("bhcode_");
                 match store.hand_code(&r.id, &secret::hash(&code), now) {

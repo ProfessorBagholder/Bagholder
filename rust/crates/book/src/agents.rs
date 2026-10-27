@@ -182,11 +182,14 @@ impl AgentsBook {
 
     // ---- requests ----
 
-    /// Every request older than `older_than` that was never answered ended, with
-    /// each registered client never approved that has no request left.
-    pub fn end_expired(&self, older_than: jiff::Timestamp) -> Result<()> {
+    /// Every request that has ended, gone: one made before `older_than` with no
+    /// code handed (never answered, denied and never read, or allowed and never
+    /// collected), and one whose code was handed before `codes_older_than` and never
+    /// exchanged (an exchanged one goes at the exchange). With them, each
+    /// registered client never approved that has no request left.
+    pub fn end_expired(&self, older_than: jiff::Timestamp, codes_older_than: jiff::Timestamp) -> Result<()> {
         self.atomically(|| {
-            self.conn().execute("DELETE FROM agent_requests WHERE answer IS NULL AND made_at < ?", [at_text(older_than)])?;
+            self.conn().execute("DELETE FROM agent_requests WHERE (code_at IS NULL AND made_at < ?1) OR code_at < ?2", params![at_text(older_than), at_text(codes_older_than)])?;
             self.conn().execute(
                 "DELETE FROM agent_clients WHERE kind = 'registered' AND approved = 0 AND made_at < ?1
                  AND id NOT IN (SELECT client_id FROM agent_requests)",
@@ -196,9 +199,10 @@ impl AgentsBook {
         })
     }
 
-    /// The requests still waiting on the person, oldest first.
-    pub fn waiting(&self) -> Result<Vec<Request>> {
-        self.requests_where("answer IS NULL", [])
+    /// The requests made at or after `made_since` still waiting on the person,
+    /// oldest first: an older one has ended, whether or not it is gone yet.
+    pub fn waiting(&self, made_since: jiff::Timestamp) -> Result<Vec<Request>> {
+        self.requests_where("answer IS NULL AND made_at >= ?1", [at_text(made_since)])
     }
 
     pub fn request(&self, id: &str) -> Result<Option<Request>> {
@@ -278,11 +282,11 @@ impl AgentsBook {
         Ok(n == 1)
     }
 
-    /// The authorization code handed out for an allowed request, by its hash: one
-    /// handed before it is replaced, and no longer exchanges.
+    /// The authorization code handed out for an allowed request, by its hash, once:
+    /// false when one was handed already.
     pub fn hand_code(&self, id: &str, hash: &[u8], at: jiff::Timestamp) -> Result<bool> {
         let n = self.conn().execute(
-            "UPDATE agent_requests SET code_hash = ?2, code_at = ?3 WHERE id = ?1 AND answer = 'allowed' AND code_used = 0",
+            "UPDATE agent_requests SET code_hash = ?2, code_at = ?3 WHERE id = ?1 AND answer = 'allowed' AND code_hash IS NULL",
             params![id, hash, at_text(at)],
         )?;
         Ok(n == 1)

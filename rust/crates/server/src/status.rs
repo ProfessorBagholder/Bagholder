@@ -139,6 +139,9 @@ pub fn status(app: &Arc<App>) -> Status {
     sources.extend(app.figures.get().and_then(|f| f.read(broker_failures)).unwrap_or_default());
     sources.extend(crate::feeds::feed_failures(app));
     sources.extend(orders::order_failures(app));
+    // the agents' part reads their tables: never while holding the app's state,
+    // which a CSV import takes inside its own write
+    let agents = crate::http::agents::status(app);
     let st = app.state.lock().unwrap();
     let connected = st.connected && sess.as_ref().map(|x| !x.access_token.is_empty()).unwrap_or(false);
     let error = failures(&st, &sources);
@@ -173,7 +176,7 @@ pub fn status(app: &Arc<App>) -> Status {
         imported: st.imported.clone(),
         model_download: bagholder_market::localmodel::downloading().map(|(received, size)| ModelDownload { received, size }),
         notify: notify_status,
-        agents: crate::http::agents::status(app),
+        agents,
     }
 }
 

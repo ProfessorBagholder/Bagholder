@@ -397,4 +397,37 @@ mod tests {
         app.agents.switch_off();
         crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], bagholder_core::jiff::Timestamp::now()).unwrap();
     }
+
+    /// The page's status reads the agents' tables and never writes them, Agents off
+    /// or on, with a sign-in kept past its life among them: the store's commits are
+    /// where they were. It ran on every status step while holding the app's state,
+    /// which a CSV import takes inside its own write.
+    #[test]
+    fn the_page_s_status_never_writes_the_book_agents_off_or_on() {
+        use bagholder_book::agents::{Client, NewRequest};
+        let _g = crate::tests_common::guard();
+        let app = crate::tests_common::app();
+        let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(1).enable_all().build().unwrap();
+        // the header's own reads record their first answer once (`feeds::feed_answered`)
+        crate::status::status(&app);
+        let a = store(&app).unwrap();
+        let long_ago = bagholder_core::jiff::Timestamp::now() - agents::REQUEST_LIFE - agents::REQUEST_LIFE;
+        let client = Client { id: "c-status".into(), metadata: false, name: "An agent".into(), redirect_uris: vec!["https://agent.example/cb".into()], made_at: long_ago, approved: false };
+        a.keep_client(&client, agents::UNAPPROVED_KEPT).unwrap();
+        let r = NewRequest { id: "0123456789abcdef0123456789abcdef", code: "ABCDEF", client_id: "c-status", who: "agent.example", redirect_uri: "https://agent.example/cb", state: None, challenge: "x", resource: "https://agents.example/mcp" };
+        assert!(a.add_request(&r, long_ago, agents::PENDING_KEPT).unwrap());
+        for on in [false, true] {
+            if on {
+                switch_on(&app, rt.handle()).unwrap();
+            }
+            let before = app.events.stamp()[crate::events::Source::Store as usize];
+            let s = crate::status::status(&app);
+            assert_eq!(s.agents.on, on);
+            assert!(s.agents.waiting.is_empty(), "a sign-in past its life is not waiting");
+            assert_eq!(app.events.stamp()[crate::events::Source::Store as usize], before, "Agents {}: nothing written", if on { "on" } else { "off" });
+            assert!(a.request("0123456789abcdef0123456789abcdef").unwrap().is_some(), "and nothing removed");
+        }
+        app.agents.switch_off();
+        crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], bagholder_core::jiff::Timestamp::now()).unwrap();
+    }
 }
