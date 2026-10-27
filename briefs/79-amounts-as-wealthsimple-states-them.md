@@ -20,32 +20,32 @@ What the code shows today:
 
 **The history is read for the journal only:** each trade, its round trip and result, the Cashflow rows, the notes. Nothing the journal works out is ever shown or used as an account's amount.
 
-**The figures are the ones Wealthsimple shows the person.** Where Wealthsimple has more than one read of an amount (the balance types, `SPEC.md:403`; the ticket's `FetchTradingBalanceBuyingPower`), the one Bagholder shows is the one Wealthsimple's own web app shows for that account, established by the capture in §3.
+**The figures are the ones Wealthsimple shows the person.** Where Wealthsimple has more than one read of an amount (the balance types, `SPEC.md:403`; the ticket's `FetchTradingBalanceBuyingPower`), the one Bagholder shows is the one Wealthsimple's own web app shows for that account, chosen in the plan (§3).
 
 ## 2. What goes
 
 All of it is code whose only purpose is the rebuild or its agreement:
 1. **Bagholder's own cash:** `Matched.cash`, `cash_of`, `Continued.cash`, the engine's cash shares (`shares`, `ByFamily`, `total`, `add_shares` and the cash part of `match_all`/`rematch_families`).
 2. **The broker check:** `equity.rs:98-271` (`Difference`, `BrokerCheck`, `broker_checks`, `Held`, `held`), `checks`, `recheck`, `Entity::BrokerCheck`, `Figures.checks`, `PositionFig.broker_qty`, and `Matched.last_price` where only the check reads it.
-3. **The header lines that compare or reconcile:** cash disagrees, units disagree (`status.rs:201-223`), a statement month does not reconcile, feed movements no statement lists (`:415-454`), and `settled_conversions` (`:248-330`). No sentence of the app may say Bagholder's figures differ from Wealthsimple's.
+3. **The header lines that compare or reconcile:** cash disagrees, units disagree (`status.rs:201-223`), a statement month does not reconcile, feed movements no statement lists (`:415-454`), and `settled_conversions` (`:248-330`). No sentence of the app may say Bagholder's figures differ from Wealthsimple's. **Amended 2026-10-27:** the lines for rows the mapping cannot place or kept with a problem (`status.rs:235-404`) go too. The owner, of an ATM reimbursement row in a chequing account: "obviously you cannot account for every possible transaction that could happen in a checking account." Under §1 such a row cannot touch an amount, so it is never a header error; the plan says where, if anywhere already on the page, such a row is seen, adding nothing.
 4. **The gate on a mapping version:** `gated_rederive`, `REFUSED_VERSIONS`, the retry after a pull (`figures.rs:459-473`, `:894-1027`, `broker_reads.rs:426`).
 5. **The monthly statements, whole:** the read (`FetchMonthlyStatementWithTransactions`, the one request sent with the web page's own headers, `client.rs:44-65`), the walk and the units step (`broker/src/statements.rs`, 1,547 lines), `wealthsimple/src/statement.rs`, the statement-only helpers in the book, the pull's call (`pull.rs:366-380`), the stand-in's statement shapes and `READ_BY_2_10_9`, and their tests and data: about 2,770 lines of production code, 3,000 of tests and 0.68 MB of recordings (the D reader's list, in the PR). Their bookings served cash only, except the units step, which fed the journal a coin fill's units.
 6. **`CashByDay`** and the rebuilt past holdings. A past day's units, book value and cash are the positions read as of that day (its `sec-c` lines are that day's cash, `read.rs:149-161`), read when first needed and kept.
 
-**The units step is not kept.** The journal takes a fill's units as the activity feed states them, which is what Wealthsimple's own activity list shows for it. Whether the feed's coin units leave a round trip open where Wealthsimple states none held is read off the capture (§3); the stand-in cannot show it today, as it states a coin's units equal on both sides (`generated.rs:266-274`). If the capture shows it, the plan proposes the journal's rule with that recorded case before the build; the existing dust write-off (`ledger.rs:1523-1538`) is tried first.
+**The units step is not kept.** The journal takes a fill's units as the activity feed states them, which is what Wealthsimple's own activity list shows for it. Whether the feed's coin units leave a round trip open where Wealthsimple states none held is not shown by any recorded form (the stand-in states a coin's units equal on both sides, `generated.rs:266-274`). The existing dust write-off (`ledger.rs:1523-1538`) stands; a case the owner meets is recorded first and its rule follows, never a guess.
 
 **Records an earlier build booked from statements** (the current read wins): the first read under this change withdraws every live record booked from a statement, and every feed record a statement fill superseded is live again. No migration: the statement tables are left unread, and their removal waits for the next schema change.
 
-## 3. Before the build: one capture, read-only
+## 3. The capture: withdrawn (2026-10-27)
 
-Recorded once on the owner's book through the bridge, read-only, every figure made up but replaced consistently so that equal figures stay equal, nothing of the owner's committed. It settles, for every account kind the owner holds (TFSA, RRSP, non-registered, margin, crypto, the linked USD account, an account with options, short and long):
-- which read gives each account's **units now, during the day**: the balances read's `sec-s`/`sec-o` entries, `FetchIdentityPositions` (named in `docs/plans/stage-3b-wealthsimple.md:41`, no document in the repository), or the positions read asked as of today. Recorded side by side with the positions as of yesterday, so that whether they agree is read off the recording;
-- the **book value** each read states, and in which currency Wealthsimple's app shows it (the pull asks `currency: CAD` and never `currencyOverride`, `client.rs:305`);
-- the **cash** Wealthsimple's web app shows for each account, beside the `TRADING` balance and `tradingBalanceViewV2.cash`, with a working order open in one account;
-- whether the positions read answers **a past day** for every account kind (past days in §1 depend on it);
-- coins: the units a coin position states beside its fills' units in the feed.
+Three bridge runs on the owner's Mac could not take it: a downloaded script was refused until the owner trusted their own repository, a session reading its own permissions was refused as a bypass, and reading the output of a script that used the owner's sign-in was refused as personal data, rightly. No session reads the owner's sign-in or what it returns. So the plan decides each point the capture was to record from the code and the recorded replies already in the repository, and names its basis:
+- **units now:** the balances read's `sec-s`/`sec-o` entries (`read.rs:184`, read every 5 minutes; one edited recorded reply), or the positions read asked as of today; the plan chooses and says why;
+- **book value:** its currency as the positions read is asked (`client.rs:305`);
+- **the cash shown:** which balance type, from the recorded replies and `SPEC.md:403`;
+- **past days:** the positions read as of a day (recorded for several days);
+- **coins:** as the recorded feed and positions state them.
 
-The recorded replies join `wealthsimple/tests/replies` with a README line naming what was cut, and the stand-in states every such read from them (brief 77 §1).
+The check that the choice is right is the owner's own use of the release: every amount equal to what Wealthsimple shows them. A difference they report is a recorded form to add, never a header line.
 
 ## 4. Proof
 
@@ -55,16 +55,16 @@ The recorded replies join `wealthsimple/tests/replies` with a README line naming
 - **The journal stands.** The golden figures file's diff names every journal figure that moves (only the coin fills a statement superseded may, each named). Over every recorded form at twelve seeds, the journal leaves no "took more than the book held" line and no row unplaced or kept with a problem.
 - **The release check** on a copy of the owner's book: every amount equal to Wealthsimple's, every comparing line gone, reported per line as identical, new or worse.
 
-## 5. Open, settled by the capture or the plan, never by a guess
+## 5. Open, settled by the plan from what is recorded, never by a guess
 
-- Which read states current units (above). Until it is recorded, nothing in the build depends on it.
+- Which read states current units (§3).
 - Whether Wealthsimple's book value differs from the journal's cost for a deposit, a transfer in or a return of capital (`stage-3b-wealthsimple.md:65`). It does not matter to the rule: the holding shows Wealthsimple's, and the journal keeps its own for its trades.
 - Stock dividends and coin fees charged in units: whether the feed states them (the checkers found the statement forms, no feed row). With units from Wealthsimple they no longer touch a holding; for the journal, the plan says what the recorded feed shows.
 
 ## 6. The order and the PRs
 
-The agents build (#639) first, as the owner ordered; this takes the coin units change's place. Then: the capture (§3) and the stand-in reads from it, a PR with no reading change; the plan (CLAUDE.md: a refactor across crates is written first), naming every file removed and every test kept; one build PR doing §1 and §2 with §4's tests, released MINOR (what a user sees changes: the amounts are Wealthsimple's and the comparing lines are gone). `docs/architecture.md:93`, `:121` and `:146` and `SPEC.md`'s statements section say the rule in the same PR; `docs/decisions.md` records the owner's words.
+The agents build (#639) first, as the owner ordered; this takes the coin units change's place. Then the plan (§3 says what it decides in the capture's place) (CLAUDE.md: a refactor across crates is written first), naming every file removed and every test kept; one build PR doing §1 and §2 with §4's tests, released MINOR (what a user sees changes: the amounts are Wealthsimple's and the comparing lines are gone). `docs/architecture.md:93`, `:121` and `:146` and `SPEC.md`'s statements section say the rule in the same PR; `docs/decisions.md` records the owner's words.
 
 ## 7. Not included
 
-The header lines from the journal's reading, not from an amount: "took N more than the book held" (`status.rs:224-234`) and rows the mapping cannot place or kept with a problem (`:235-404`); under §1 they can no longer touch an amount, and §4 holds that no recorded form produces them; the journal's deposited lots and the opening-balance form; fees and execution days from statements (the journal reads neither today); dropping the statement tables; brief 75's PR 4 and PR 5; anything else on the page.
+The "took N more than the book held" line (`status.rs:224-234`), from the journal's reading, not an amount; §4 holds that no recorded form produces it; the journal's deposited lots and the opening-balance form; fees and execution days from statements (the journal reads neither today); dropping the statement tables; brief 75's PR 4 and PR 5; anything else on the page.
