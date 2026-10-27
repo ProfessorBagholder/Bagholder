@@ -426,7 +426,7 @@ mod tests {
         let long_ago = bagholder_core::jiff::Timestamp::now() - agents::REQUEST_LIFE - agents::REQUEST_LIFE;
         let client = Client { id: "c-status".into(), metadata: false, name: "An agent".into(), redirect_uris: vec!["https://agent.example/cb".into()], made_at: long_ago, approved: false };
         a.keep_client(&client, agents::UNAPPROVED_KEPT).unwrap();
-        let r = NewRequest { id: "0123456789abcdef0123456789abcdef", code: "ABCDEF", client_id: "c-status", who: "agent.example", redirect_uri: "https://agent.example/cb", state: None, challenge: "x", resource: "https://agents.example/mcp" };
+        let r = NewRequest { id: "0123456789abcdef0123456789abcdef", code: "ABCDEF", client_id: "c-status", client_name: "An agent", who: "agent.example", redirect_uri: "https://agent.example/cb", state: None, challenge: "x", resource: "https://agents.example/mcp" };
         assert!(a.add_request(&r, long_ago, agents::PENDING_KEPT).unwrap());
         for on in [false, true] {
             if on {

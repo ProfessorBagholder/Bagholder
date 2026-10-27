@@ -81,13 +81,12 @@ fn e(err: impl ToString) -> String {
 pub fn waiting(store: &AgentsBook, now: Timestamp) -> Result<Vec<Waiting>, String> {
     let mut out = Vec::new();
     for r in store.waiting(now - super::REQUEST_LIFE).map_err(e)? {
-        let client = store.client(&r.client_id).map_err(e)?;
         out.push(Waiting {
+            checked: metadata(&r.client_id),
             id: r.id,
             code: r.code,
             who: r.who,
-            name: client.as_ref().map(|c| c.name.clone()).unwrap_or_default(),
-            checked: client.as_ref().is_some_and(|c| c.metadata),
+            name: r.client_name,
             // registered as https: should one not read as such, it is shown whole
             redirect_host: super::fetch::https_host(&r.redirect_uri).map_or_else(|_| r.redirect_uri.clone(), |h| h.0),
             made_at: r.made_at.to_string(),
@@ -117,14 +116,33 @@ pub fn connected(store: &AgentsBook) -> Result<Vec<Connected>, String> {
     Ok(out)
 }
 
+/// Whether a client id is a metadata document's URL: its client is the document's,
+/// fetched as it asks, and kept only once the person allows it.
+pub fn metadata(client_id: &str) -> bool {
+    client_id.starts_with("https://")
+}
+
 /// The person's answer to a waiting sign-in. Refused when it is not waiting (it
-/// ended, or was answered).
+/// ended, or was answered). Allowed, a metadata document's client is kept from
+/// what its sign-in holds, the first time it is: until now it lived in the sign-in.
 pub fn answer(store: &AgentsBook, id: &str, allowed: bool, now: Timestamp) -> Result<(), String> {
     super::end_expired(store, now).map_err(e)?;
-    if store.answer(id, allowed, now).map_err(e)? {
-        Ok(())
-    } else {
-        Err("This sign-in is no longer waiting: it ended, or was answered.".into())
+    let answered = store.atomically(|| {
+        let r = store.request(id)?;
+        if !store.answer(id, allowed, now)? {
+            return Ok(false);
+        }
+        if let Some(r) = r.filter(|r| allowed && metadata(&r.client_id)) {
+            if store.client(&r.client_id)?.is_none() {
+                let c = bagholder_book::agents::Client { id: r.client_id, metadata: true, name: r.client_name, redirect_uris: vec![r.redirect_uri], made_at: now, approved: false };
+                store.keep_client(&c, super::UNAPPROVED_KEPT)?;
+            }
+        }
+        Ok(true)
+    });
+    match answered.map_err(e)? {
+        true => Ok(()),
+        false => Err("This sign-in is no longer waiting: it ended, or was answered.".into()),
     }
 }
 

@@ -39,7 +39,11 @@ pub struct Client {
 pub struct Request {
     pub id: String,
     pub code: String,
+    /// A registered client's id, or a metadata document's https URL: that client is
+    /// kept only once the person allows it.
     pub client_id: String,
+    /// The name the client gave as it asked.
+    pub client_name: String,
     pub who: String,
     pub redirect_uri: String,
     pub state: Option<String>,
@@ -57,6 +61,7 @@ pub struct NewRequest<'a> {
     pub id: &'a str,
     pub code: &'a str,
     pub client_id: &'a str,
+    pub client_name: &'a str,
     pub who: &'a str,
     pub redirect_uri: &'a str,
     pub state: Option<&'a str>,
@@ -153,12 +158,10 @@ impl AgentsBook {
                 params![c.id, kind, c.name, redirects, at_text(c.made_at)],
             )?;
             if !c.metadata {
-                self.conn().execute(
-                    "DELETE FROM agent_clients WHERE id IN (
-                        SELECT id FROM agent_clients WHERE kind = 'registered' AND approved = 0
-                        ORDER BY made_at DESC, rowid DESC LIMIT -1 OFFSET ?1)",
-                    [unapproved_kept as i64],
-                )?;
+                let beyond = "SELECT id FROM agent_clients WHERE kind = 'registered' AND approved = 0
+                              ORDER BY made_at DESC, rowid DESC LIMIT -1 OFFSET ?1";
+                self.conn().execute(&format!("DELETE FROM agent_requests WHERE client_id IN ({beyond})"), [unapproved_kept as i64])?;
+                self.conn().execute(&format!("DELETE FROM agent_clients WHERE id IN ({beyond})"), [unapproved_kept as i64])?;
             }
             Ok(())
         })
@@ -216,7 +219,7 @@ impl AgentsBook {
 
     fn requests_where<P: rusqlite::Params>(&self, filter: &str, p: P) -> Result<Vec<Request>> {
         let sql = format!(
-            "SELECT id, code, client_id, who, redirect_uri, state, challenge, resource, made_at, answer, code_at, code_used
+            "SELECT id, code, client_id, client_name, who, redirect_uri, state, challenge, resource, made_at, answer, code_at, code_used
              FROM agent_requests WHERE {filter} ORDER BY made_at, rowid"
         );
         let mut stmt = self.conn().prepare(&sql)?;
@@ -227,22 +230,24 @@ impl AgentsBook {
                 r.get::<_, String>(2)?,
                 r.get::<_, String>(3)?,
                 r.get::<_, String>(4)?,
-                r.get::<_, Option<String>>(5)?,
-                r.get::<_, String>(6)?,
+                r.get::<_, String>(5)?,
+                r.get::<_, Option<String>>(6)?,
                 r.get::<_, String>(7)?,
                 r.get::<_, String>(8)?,
-                r.get::<_, Option<String>>(9)?,
+                r.get::<_, String>(9)?,
                 r.get::<_, Option<String>>(10)?,
-                r.get::<_, i64>(11)?,
+                r.get::<_, Option<String>>(11)?,
+                r.get::<_, i64>(12)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, code, client_id, who, redirect_uri, state, challenge, resource, made, answer, code_at, used) = row?;
+            let (id, code, client_id, client_name, who, redirect_uri, state, challenge, resource, made, answer, code_at, used) = row?;
             out.push(Request {
                 id,
                 code,
                 client_id,
+                client_name,
                 who,
                 redirect_uri,
                 state,
@@ -265,9 +270,9 @@ impl AgentsBook {
                 return Ok(false);
             }
             self.conn().execute(
-                "INSERT INTO agent_requests(id, code, client_id, who, redirect_uri, state, challenge, resource, made_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![r.id, r.code, r.client_id, r.who, r.redirect_uri, r.state, r.challenge, r.resource, at_text(at)],
+                "INSERT INTO agent_requests(id, code, client_id, client_name, who, redirect_uri, state, challenge, resource, made_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![r.id, r.code, r.client_id, r.client_name, r.who, r.redirect_uri, r.state, r.challenge, r.resource, at_text(at)],
             )?;
             Ok(true)
         })

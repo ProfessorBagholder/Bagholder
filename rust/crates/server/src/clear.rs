@@ -294,7 +294,7 @@ mod tests {
             let a = f.book().unwrap().agents();
             let client = bagholder_book::agents::Client { id: "https://agent.example/client.json".into(), metadata: true, name: "An agent".into(), redirect_uris: vec!["https://agent.example/cb".into()], made_at: t, approved: false };
             a.keep_client(&client, 20).unwrap();
-            let r = bagholder_book::agents::NewRequest { id: "req-1", code: "ABCDEF", client_id: &client.id, who: "agent.example", redirect_uri: "https://agent.example/cb", state: None, challenge: "c", resource: "https://example.ts.net/mcp", };
+            let r = bagholder_book::agents::NewRequest { id: "req-1", code: "ABCDEF", client_id: &client.id, client_name: "An agent", who: "agent.example", redirect_uri: "https://agent.example/cb", state: None, challenge: "c", resource: "https://example.ts.net/mcp", };
             assert!(a.add_request(&r, t, 5).unwrap());
             a.add_grant("grant-1", &client.id, "An agent", "agent.example", "https://example.ts.net/mcp", t).unwrap();
             a.add_token(&[1; 32], false, "grant-1", t).unwrap();

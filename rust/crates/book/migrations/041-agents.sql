@@ -3,10 +3,10 @@
 -- random bytes, never the secret itself; every time is checked when it is next
 -- touched, never on a clock.
 
--- A client asking to sign in: one whose metadata document Bagholder fetched (its id is
--- that document's https URL), or one registered by the agent itself (its id made
--- here). A registered one never approved is dropped with its request, and the
--- oldest beyond the bound when another registers.
+-- A client signing in: one whose metadata document Bagholder fetched (its id is that
+-- document's https URL), kept once the person allows it, or one registered by the
+-- agent itself (its id made here). A registered one never approved is dropped with
+-- its request, and the oldest beyond the bound when another registers.
 CREATE TABLE agent_clients (
     id TEXT PRIMARY KEY,
     kind TEXT NOT NULL CHECK (kind IN ('metadata', 'registered')),
@@ -24,7 +24,11 @@ CREATE TABLE agent_clients (
 CREATE TABLE agent_requests (
     id TEXT PRIMARY KEY,
     code TEXT NOT NULL UNIQUE,
-    client_id TEXT NOT NULL REFERENCES agent_clients(id) ON DELETE CASCADE,
+    -- a registered client's id, or a metadata document's https URL, whose client is
+    -- kept only once the person allows it: until then the request holds what it said
+    client_id TEXT NOT NULL,
+    -- the name the client gave as it asked
+    client_name TEXT NOT NULL,
     -- who is asking, as both pages show it: the metadata document's host, or a
     -- registered client's redirect host
     who TEXT NOT NULL,

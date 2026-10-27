@@ -493,16 +493,77 @@ fn tokens_are_refused_for_another_resource_when_expired_and_once_cut_off() {
     let _ = grant;
 }
 
+/// The token endpoint takes `client_id` and holds it to the client the code or the
+/// refresh token was issued to (RFC 6749 §4.1.3): left out, or another's, it is
+/// refused (brief 80 §3.3).
+#[test]
+fn the_token_endpoint_requires_the_client_the_grant_was_issued_to() {
+    let h = harness();
+    let code_for = |h: &Harness| {
+        let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+        approve::answer(&h.store(), &id, true, h.ctx.now()).unwrap();
+        let s = h.get(&format!("/oauth/authorize/status?request={id}")).json();
+        s["redirect"].as_str().unwrap().split("code=").nth(1).unwrap().split('&').next().unwrap().to_string()
+    };
+    let resource = format!("https://{HOST}/mcp");
+    let exchange = |code: &str, client: Option<&str>| {
+        let mut f = vec![("grant_type", "authorization_code"), ("code", code), ("redirect_uri", CALLBACK), ("code_verifier", VERIFIER), ("resource", resource.as_str())];
+        if let Some(c) = client {
+            f.push(("client_id", c));
+        }
+        h.form("/oauth/token", &f)
+    };
+    for client in [None, Some("https://other.example/client.json")] {
+        let code = code_for(&h);
+        let t = exchange(&code, client);
+        assert_eq!((t.status, t.json()["error"].clone()), (StatusCode::BAD_REQUEST, json!("invalid_grant")), "{client:?}");
+    }
+    let (_, refresh, _) = h.sign_in();
+    for client in [None, Some("https://other.example/client.json")] {
+        let mut f = vec![("grant_type", "refresh_token"), ("refresh_token", refresh.as_str())];
+        if let Some(c) = client {
+            f.push(("client_id", c));
+        }
+        assert_eq!(h.form("/oauth/token", &f).status, StatusCode::BAD_REQUEST, "{client:?}");
+    }
+    assert_eq!(h.form("/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &refresh), ("client_id", CIMD)]).status, StatusCode::OK);
+}
+
+/// A metadata document's client is kept only once the person allows it (brief 80
+/// §2.2): refused authorizations, a sign-in waiting, and one denied keep nothing of
+/// it; allowed, it is kept under its document's name.
+#[test]
+fn a_metadata_client_is_kept_only_once_allowed() {
+    let h = harness();
+    let kept = |h: &Harness| h.store().client(CIMD).unwrap();
+    // refused before any request is made: a redirect not its own, no PKCE, another resource
+    assert_eq!(h.authorize(CIMD, "https://agent.example/elsewhere", &[]).status, StatusCode::BAD_REQUEST);
+    assert_eq!(h.authorize(CIMD, CALLBACK, &[("code_challenge_method", "plain")]).status, StatusCode::BAD_REQUEST);
+    assert_eq!(h.authorize(CIMD, CALLBACK, &[("resource", "https://elsewhere.example/mcp")]).status, StatusCode::BAD_REQUEST);
+    assert!(kept(&h).is_none());
+    // waiting, then denied
+    let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    assert!(kept(&h).is_none(), "a sign-in waiting keeps nothing of its client");
+    approve::answer(&h.store(), &id, false, h.ctx.now()).unwrap();
+    assert!(kept(&h).is_none(), "nor one denied");
+    // allowed
+    let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    approve::answer(&h.store(), &id, true, h.ctx.now()).unwrap();
+    let c = kept(&h).expect("kept once allowed");
+    assert!(c.metadata);
+    assert_eq!(c.name, "Agent Example");
+}
+
 #[test]
 fn a_refresh_token_used_twice_ends_the_grant() {
     let h = harness();
     let (_, refresh, _) = h.sign_in();
-    let first = h.form("/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &refresh)]);
+    let first = h.form("/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &refresh), ("client_id", CIMD)]);
     assert_eq!(first.status, StatusCode::OK, "{}", first.text());
     let fresh = first.json()["access_token"].as_str().unwrap().to_string();
     assert_eq!(h.mcp("/mcp", Some(&fresh)).status, StatusCode::OK);
     // the old one again: someone else holds it
-    let again = h.form("/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &refresh)]);
+    let again = h.form("/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &refresh), ("client_id", CIMD)]);
     assert_eq!(again.status, StatusCode::BAD_REQUEST);
     assert_eq!(again.json()["error"], "invalid_grant");
     assert_eq!(h.mcp("/mcp", Some(&fresh)).status, StatusCode::UNAUTHORIZED, "the grant ended with it");

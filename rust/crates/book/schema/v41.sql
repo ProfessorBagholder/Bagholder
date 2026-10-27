@@ -168,7 +168,11 @@ CREATE TABLE agent_reads (
 CREATE TABLE agent_requests (
     id TEXT PRIMARY KEY,
     code TEXT NOT NULL UNIQUE,
-    client_id TEXT NOT NULL REFERENCES agent_clients(id) ON DELETE CASCADE,
+    -- a registered client's id, or a metadata document's https URL, whose client is
+    -- kept only once the person allows it: until then the request holds what it said
+    client_id TEXT NOT NULL,
+    -- the name the client gave as it asked
+    client_name TEXT NOT NULL,
     -- who is asking, as both pages show it: the metadata document's host, or a
     -- registered client's redirect host
     who TEXT NOT NULL,

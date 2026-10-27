@@ -184,9 +184,9 @@ fn asking(ctx: &Ctx, client_id: &str, redirect_uri: &str) -> Result<Asking, Stri
         }
         let uris: Vec<String> = doc.get("redirect_uris").and_then(Value::as_array).map(|a| a.iter().filter_map(|v| v.as_str().map(str::to_string)).collect()).unwrap_or_default();
         let name: String = doc.get("client_name").and_then(Value::as_str).unwrap_or("").chars().filter(|c| !c.is_control()).take(80).collect();
-        let c = Client { id: client_id.to_string(), metadata: true, name, redirect_uris: uris, made_at: ctx.now(), approved: false };
-        store.keep_client(&c, super::UNAPPROVED_KEPT).map_err(|e| e.to_string())?;
-        c
+        // kept only once the person allows it (`approve::answer`): until then it
+        // lives in its sign-in, so a refused or unanswered one stores nothing
+        Client { id: client_id.to_string(), metadata: true, name, redirect_uris: uris, made_at: ctx.now(), approved: false }
     } else {
         store.client(client_id).map_err(|e| e.to_string())?.filter(|c| !c.metadata).ok_or_else(|| format!("no client {client_id} is registered here"))?
     };
@@ -260,7 +260,7 @@ pub async fn authorize(State(ctx): State<Arc<Ctx>>, Query(q): Query<AuthorizeQue
             return unavailable(e);
         }
         let (id, code) = (secret::request_id(), secret::code());
-        let r = NewRequest { id: &id, code: &code, client_id: &asking.client.id, who: &asking.who, redirect_uri, state: q.state.as_deref(), challenge: &challenge, resource: &resource };
+        let r = NewRequest { id: &id, code: &code, client_id: &asking.client.id, client_name: &asking.client.name, who: &asking.who, redirect_uri, state: q.state.as_deref(), challenge: &challenge, resource: &resource };
         match store.add_request(&r, now, super::PENDING_KEPT) {
             Ok(true) => {}
             Ok(false) => {
@@ -414,7 +414,7 @@ pub async fn token(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Resp
                 let fresh = r.code_at.is_some_and(|at| at + super::CODE_LIFE > now);
                 let fits = r.answer == Some(true)
                     && fresh
-                    && get("client_id").is_none_or(|c| c == r.client_id)
+                    && get("client_id") == Some(r.client_id.as_str())
                     && get("redirect_uri") == Some(r.redirect_uri.as_str())
                     && get("resource").is_none_or(|x| x == r.resource)
                     && r.resource == ctx.resource()
@@ -427,7 +427,7 @@ pub async fn token(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Resp
                     Ok(false) => return grant_error("invalid_grant", "The code was used already."),
                     Err(e) => return unavailable(e),
                 }
-                let name = store.client(&r.client_id).ok().flatten().map(|c| c.name).filter(|n| !n.is_empty()).unwrap_or_else(|| r.who.clone());
+                let name = if r.client_name.is_empty() { r.who.clone() } else { r.client_name.clone() };
                 let grant = secret::id("bhg_");
                 if let Err(e) = store.add_grant(&grant, &r.client_id, &name, &r.who, &r.resource, now).and_then(|()| store.drop_request(&r.id)) {
                     return unavailable(e);
@@ -442,7 +442,7 @@ pub async fn token(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Resp
                     Ok(_) => return grant_error("invalid_grant", "No such refresh token."),
                     Err(e) => return unavailable(e),
                 };
-                if t.grant.withdrawn_at.is_some() || t.expires_at <= now || get("client_id").is_some_and(|c| c != t.grant.client_id) || get("resource").is_some_and(|x| x != t.grant.resource) {
+                if t.grant.withdrawn_at.is_some() || t.expires_at <= now || get("client_id") != Some(t.grant.client_id.as_str()) || get("resource").is_some_and(|x| x != t.grant.resource) {
                     return grant_error("invalid_grant", "This refresh token does not stand.");
                 }
                 match store.use_refresh(&hash, now) {
