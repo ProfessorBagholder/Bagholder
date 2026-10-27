@@ -96,6 +96,10 @@ cd ../rust && cargo run --release --bin bagholder
 
 The app opens at `http://127.0.0.1:8765` in your browser. Use that address as written; `localhost` is refused on purpose, since the server only answers its own machine.
 
+### From another device
+
+To open it from elsewhere, put a tunnel or reverse proxy with a login of its own in front of it, on the same machine, and list the name it serves the app under in `BAGHOLDER_HOSTS` (comma-separated, each exactly as the address bar shows it, `name` or `name:port`). The app then answers that name as it answers `127.0.0.1:8765`, and only from its own machine, where the proxy runs: any other name, and any request from another machine, is refused. The app has no sign-in of its own, so the proxy's login is the only one: list only a name nobody reaches without it. An entry the app cannot read stops it at start, naming the entry.
+
 ### Starting at login
 
 Bagholder sets nothing up to start itself; each platform's own means does it. Use the full path to the `bagholder` you unpacked (an update replaces the files in place, so the path stays right). `BAGHOLDER_NO_BROWSER=1` keeps it from opening a browser tab at every login.

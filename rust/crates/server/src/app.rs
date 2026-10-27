@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.10.13";
+pub const APP_VERSION: &str = "2.11.0";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -259,6 +259,10 @@ pub struct App {
     pub home: PathBuf,
     pub root: PathBuf,
     pub bind_host: String,
+    /// The names, besides 127.0.0.1 and the port, the server answers to
+    /// (`BAGHOLDER_HOSTS`, `parse_hosts`): a proxy's on this machine, in front of
+    /// it with a login of its own. None unless the person lists them.
+    pub hosts: Mutex<Vec<String>>,
     pub port: Mutex<u16>,
     pub started_at: String,
     pub state: Watched<State>,
@@ -340,6 +344,7 @@ impl App {
             home,
             root,
             bind_host,
+            hosts: Mutex::new(Vec::new()),
             port: Mutex::new(0),
             started_at: now_iso(),
             state: Watched::new(State::default(), events.clone()),
@@ -572,6 +577,31 @@ pub fn env_text(name: &str) -> Result<Option<String>, String> {
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is set to something that is not text")),
     }
+}
+
+/// `BAGHOLDER_HOSTS` read: a comma-separated list of exact host names as a Host
+/// header carries them, `name` or `name:port`, lowercased. Empty, nothing listed.
+/// An entry that is empty, has a space, or is not a host name with an optional
+/// port is refused, naming it, and the app does not start: fail closed.
+pub fn parse_hosts(text: &str) -> Result<Vec<String>, String> {
+    if text.is_empty() {
+        return Ok(Vec::new());
+    }
+    let label = |l: &str| !l.is_empty() && l.len() <= 63 && l.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'-') && !l.starts_with('-') && !l.ends_with('-');
+    let mut out = Vec::new();
+    for entry in text.split(',') {
+        let (name, port) = match entry.rsplit_once(':') {
+            Some((n, p)) => (n, Some(p)),
+            None => (entry, None),
+        };
+        let name_ok = name.len() <= 253 && name.split('.').all(label);
+        let port_ok = port.is_none_or(|p| !p.is_empty() && p.len() <= 5 && p.bytes().all(|c| c.is_ascii_digit()) && p.parse::<u32>().is_ok_and(|n| (1..=65535).contains(&n)));
+        if !name_ok || !port_ok {
+            return Err(format!("BAGHOLDER_HOSTS lists {entry:?}: each entry is a host name, or a host name and a port, with no space, separated by commas"));
+        }
+        out.push(entry.to_ascii_lowercase());
+    }
+    Ok(out)
 }
 
 /// The data folder's lock, held for the life of the process.
