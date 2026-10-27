@@ -189,6 +189,9 @@ Brief 77 §4 is withdrawn. The owner: "those are things that must be caught duri
 - **Lifetime:** foreground only. Afterwards `tailscale funnel status` shows nothing of the preview's.
 - The Cloudflare Access gate is only for the main copy's fixed link, later. The order is unchanged: agents → coin units → previews.
 
+### Small follow-up for the next commit to master
+- `events.rs`: `test_a_page_opening_wakes_the_figure_path_with_quotes_owed` (#641) went in under the doc comment of `test_quotes_are_owed_while_a_page_is_open_whatever_it_shows`. Move that test's own comment back above it (the Architect, not a condition).
+
 ### The cleanup PR (the Architect's ruling, 2026-10-27; after the agents build, one PR, no owner decision)
 For each removal, the PR says why nothing calls it: a function nothing calls can be a missing call (#640 was one).
 1. Remove four functions nothing calls on 920d24a:
