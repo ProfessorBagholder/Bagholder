@@ -22,182 +22,49 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-26 ~23:10 UTC, written by the home-server CTO session before a compaction)
+## 2. Where things stand (2026-10-27 ~22:30 UTC, written by the home-server CTO session)
 
 ### Released, newest first (`gh release list` is the truth)
-- **v2.10.12** (#629, merge a446c1a2): a booking the statements walk made from a statement, which the feed now states, is withdrawn (`withdraw_stated_by_the_feed`, before `restore_withdrawn`). Every kept row is paired with all the account's transactions in the kept months' span, feed first, and only a booking left unpaired is withdrawn. The gate on a copy of the owner's book: the walk withdrew 5 bookings, and the USD line was gone with nothing new or worse. Published 20:04, Latest, 8 assets.
-- **v2.10.11** (#624): a pending card spend (`SPEND`/`PREPAID`) holds its amount. The owner's CAD line cleared.
-- **v2.10.10** (#622): takes back 2.10.9.
+- **v2.11.4** (#642): an account's history is read whole whenever its day is due, over every id it has had (the closed one too), so the days an earlier build stored wrong are stated again.
+- **v2.11.3** (#641); **v2.11.2** (#640: the local model stops with the app); **v2.11.0** (#636: `BAGHOLDER_HOSTS`).
 
-### Merged today without a release
-- #625: the made-up broker states only recorded statement forms; `Shape::Assigned`.
-- #626: suites run once (PR on Linux; macOS and Windows on the release tag).
-- #627: the PR jobs read master's shared caches (`suite`, `demo-server`) without saving; `suite-cache.yml` builds them on a master push on a miss; capacity is not re-measured on master.
-- #628: `tests_figures_golden.rs` and `tests/golden/figures.json` (12 seeds, header lines sorted). `BAGHOLDER_BLESS=1` writes the file. Building and running it takes about 3 minutes here.
+### In flight
+- **#643 → v2.11.5** (branch `history-on-start`, worktree `hn`, head cb813f46; cleared by the Architect at dbbf5f92, and the last commit only removes a duplicate `#[test]`):
+  - a run's first sync restates every history (`pull_restating`; `App::history_restated` is set once that pull completes, whatever failed in it). The owner: "waiting for a whole day to pass for a correction is not acceptable";
+  - the header keeps only the units lines and the "took more" lines. The cash lines, the lines for rows the mapping cannot place and the statement lines are gone (brief 79 §2.3 as amended; the units sentence stays until brief 79's build);
+  - the browser job failed once, on `dataflow.spec.ts` "each interaction keeps within its request budget" (one watch in the idle minute). The code was identical to two heads that passed it, so it was rerun (see Other follow-ups);
+  - **after it publishes:** tell the owner to update (the first sync after the start restates every history), then check their book on the Mac (below).
+- **The chart spike's cause** (proven with read-only ratio reads of the owner's book):
+  - 2.10.2 re-read the history of accounts with two Wealthsimple ids on one id, and stored years of `account_days` at zero;
+  - the pull read history only from `last + 1`, so those days were never read again;
+  - 2.10.4 summed both ids for new days, so the charts jumped at the end.
+  
+  #642 and #643 state those days again.
+- **#639 agents anywhere → v2.12.0** (branch `agents-anywhere`, worktree `aa`):
+  - brief 80 (57 findings) is all in. The local head 1d70d27a merges master with #642. It is not pushed: the last pushed head is e95e5190;
+  - next: merge master again once #643 is in, bump to 2.12.0, run the touched tests, push one head, set the PR text from `scratchpad/pr639-new.md` (fix its test counts), and message the Architect;
+  - on clearance and green: merge, release, and **tell the Architect the moment 2.12.0 is published**.
 
-### The owner's book
-- On 2.10.12 the book should have no header line once it syncs. But a gate copy taken at 22:18 still showed the USD line, so the owner hadn't synced 2.10.12 yet. They were told to update and sync.
-- Never say "fixed" until the owner's screen or a gate shows it.
-- **Privacy:** never name the owner's securities, coins or account nicknames in anything pushed (handoff, commits, PRs, issues). The owner said "forget about scrubbing history": never rewrite history or scrub old files.
+### Checking the owner's book on their Mac
+- **The owner's words (2026-10-27):** "a local session can poll the db to get the data it needs… it can launch the real app on my mac and verify what the browser shows. why do you keep putting more back on me?" Verify there yourself; never hand the owner a step.
+- **Reads:** `sqlite3 -readonly` on the book only. Report ratios, dates and labels: never amounts, ids, names or account nicknames.
+- **Never read** the sign-in, `session.json`, or anything a request made with the sign-in returns. The Mac's permission check refuses it ([PII Data Handling]), rightly. Never ask a bridge session to read or change Claude's settings ([Auto-Mode Bypass]).
+- **The check after 2.11.5:** for each account, the combined series has no step on the day the history is restated, and no run of zero days inside an open account's life.
+- **How:** find the Mac's bridge with `list_environments`. One full first prompt: quote the owner's words, include the cleanup block, and archive the session after its report.
 
-### Brief 77, what is left, in order
-1. **#631 (§4, the gated rederive): merged** (730abe16), no release.
-2. **#632: merged** (b9017f9c), no release; it ships with (c).
-3. **#633 = (c): CLOSED unmerged.** The canary on the owner's book held it; the closing comment states the four causes by rule, with no figures. Branch `statement-fills` kept on origin for reference (`delivery()`, the recorded `contract_of`, the take-back run once); its local worktree and branch are gone.
-   - **The causes, by rule** (from a before/after diff of a read-only copy):
-     1. The supersede took the statement's cash for coin fills, but a coin fill's statement cash is before Wealthsimple's fee, and the feed's amount is the cash that moved.
-     2. The omitted-fill booking took fills the feed does list: where the feed's share security isn't called by the statement's symbol, and where a coin fill's units and cash both differ.
-     3. `book.store` under 2.10.9's `fill_key` restored the records 2.10.10 took back.
-     4. In the walk, `fills_of` ran before (b)'s pre-pass and changed a currency that agreed.
-   - **The Architect's redesign (2026-10-26):**
-     1. The statement's cash never supersedes the feed's. `FeeFolded` (invented) goes, replaced by the recorded coin forms (the fill before the fee, with "Fee charged $F" where written). 2.10.8's units supersede stays.
-     2. (c) = identity pairing as a MATCHING rule only, inside `match_rows`: a statement fill row pairs with the feed's fill of the same side, security and units on the row's day or within the posting window, whatever the cash. Nothing booked or superseded from it; a month closes by its balances as now. The golden should show header lines leaving with no figure moving.
-     3. Guards: the fills step after the pre-pass and only for currencies still differing; a statement row booked only where the month then closes; a book rule, with its own test, that a record a take-back removed is never made live by a store under its key.
-     4. Captures first, from recorded forms only: how the feed names a share security the statement calls by its symbol (`names_it` failed on two such), against the positions; and the coin fill forms.
-   - **Captures done** (Mac, read-only; real names and figures came to this session only, never pushed):
-     - **Share shape:** a Canadian listing interlisted in the US. The feed's fill rows (DIY_BUY/DIY_SELL) and their `security.stock.symbol` say "SYM.TO", in CAD. The statement row says "SYM - NAME: Bought|Sold N shares (executed at D)" (also "… at $P per share"), in CAD, no FX rate. The book also holds the US listing under bare "SYM" in USD, so `names_it` matched the US one and the old rule booked every row there.
-     - **Share variant:** two CAD listings of one company, "SYM" (earlier) and "SYM.TO" (later).
-     - **Coins:** statement units at ten places equal the feed's `assetQuantity`. Cash in two forms: (a) with "Fee charged $F", equal to the feed's amount; (b) without fee text, the fill before the fee (smaller on a buy, larger on a sell).
-   - **The Architect said PROCEED (2026-10-26 ~23:05), with these precisions:**
-     - The matching pairs a statement fill row with the account's own FEED FILLS, never the instruments table.
-     - Pair on: same side and units, the row's day or the posting window, an instrument called the row's symbol or the symbol with ".TO", and cash in the row's currency. Where two CAD listings carry the names, the fill on the day decides. No row is ever booked under a listing.
-     - Record the ".TO" row form with its `security` object as the feed states it, AND the two coin sales' feed sides (form (a) rows that paired with nothing; not yet seen), before any rule claims them. A form not recorded is recorded first, never typed.
-     - The three guards go in with the rule, each with its test.
-     - The golden diff must be header lines only. If a figure moves, stop and say which.
-   - **Next, in order:**
-     1. Record the forms: the feed's "SYM.TO" row with its `security` object, made up, into `wealthsimple/tests/replies/wealthsimple/` beside the recorded feed kinds. Then a Mac capture of the two coin sales' feed sides; extend `scratchpad/diag/capture.py`, run it on a made-up book first, and print only the needed fields with id-bearing keys dropped.
-     2. Generator shapes from them: the ".TO" listing; `CoinFeeCharged` (a); `CoinBeforeFee` (b), replacing `FeeFolded`. Branch from master (#633's `statement-fills` is only for reference).
-     3. The twelve-seed sweep on 2.10.12's walk, to show the stops ("a buy only the statement states").
-     4. The matching rule inside `match_rows`. Guards: (i) the fills step after the pre-pass and only for currencies still differing; (ii) a statement row booked only where the month then closes; (iii) a book rule, with its own test, that a record a take-back removed is never made live by a store under its key.
-     5. Golden diff, header lines only.
-     6. Version bump, the canary on the owner's book (Mac gate; `pull-broker --statements-only` runs the walk AND the fills step), PR, Architect, release.
-   - Reusable from #633's branch: the recorded `contract_of` form, `delivery()` for an assignment's shares, the take-back once per book.
-   - The diag scripts and every scratch file holding the owner's data were deleted on 2026-10-27. The gate prompt pattern is in the memory file `bagholder-delegation-playbook.md`.
-   - **Never** name the owner's securities, coins or account nicknames in this file, a commit, a PR or an issue: the repository is public (a push naming two of them was caught and replaced on 2026-10-26).
-4. The agents build (worktree `aa`, branch `agents-anywhere`, local WIP 87d3a815, never pushed). It must include in-app setup, and the owner checks one real connection per agent before release.
-
-### Since the compaction (2026-10-26 evening, UTC into 2026-10-27)
-- **(c) dropped** (Architect's go): no recorded fill row states other cash than the feed's in a way identity pairing would close; its only source was the typed `FeeFolded`. Its three guards went with it.
-- **#634 merged** (aeccf555), no release: `FILL_FORMS` = `Interlisted`, `Coin2025`, `LimitOrder`, `SplitFill`, each from recorded forms. The typed `FeeFolded`/`FeedOmits`/`FxFunded` are `READ_BY_2_10_9`, only so `tests/take_back.rs` can re-read its two stored books; they go with `take_back_2_10_9`. The split fill's rows were recorded again with their zero. The notation keeps a zero as `0` and writes a fee's coin symbol as `SYM`. `feed-fill-dot-to.json` sits beside the statement forms, where no replay reads it. The golden gained gross units bought/sold per account and symbol; its header lines went from 373 to 2.
-- **#635 merged** (341c0608), **v2.10.13 released** 2026-10-27 ~02:10 UTC: every release job green, 8 assets, Latest. The owner was told to update and sync; expected on their screen: the USD trading line gone and the June 2026 round trip back. Not yet confirmed by them.
-  - The units step reads no fill from a row stating no units. At every pull it first withdraws (`Book::withdraw`) a statement fill record whose row reads as no fill or as the feed's units; `Book::mapped` gives the feed record's units.
-  - `fills` returns (taken, given back), and the offline walk prints both.
-  - Canary PASS: the candidate gave back the copy's zero-unit fills (none left), and the header went from one line to none.
-  - The owner's live book still had the USD trading line at 01:10 UTC, so it had had no 2.10.12 sync. The owner should update to 2.10.13 and sync.
-- **Settled from recorded sides:**
-  - (a) Later-form coin purchases: the feed's units are the executed units rounded to 6 places; the units step misses them (it pairs by cash, and the fill row is before the fee). Sales' units are equal.
-  - (b) The coin limit sells' feed rows carry only the placement date (one revision, no execution field); their units are rounded too. The walk's 31-day pass pairs them; the step's 7-day window does not.
-  - The "cent under" on later-form coin purchases held in that form's first month only.
-- **Next (Architect's order):** the coin units.
-  1. A generator commit: every coin fill, in both forms, has its executed units to 10 places on the statement and rounded to 6 in the feed.
-  2. The sweep shows which fills the step misses: later-form purchases and limit sells.
-  3. One change, a subtraction: the units step pairs through the walk's own `match_rows` (combined pass, 31-day late pass) instead of its own pairing. The statement fill record carries its row's day, so a superseded limit sell is dated at execution. A first-month purchase a cent under pairs with nothing and keeps the feed's units; say so in the PR.
-  4. Then PR B.
-
-### Brief 78 (the owner's go, 2026-10-27)
-- **§1, #636 merged** (856d409d), **v2.11.0** tagged as its own release: `BAGHOLDER_HOSTS` lists exact host names a proxy on the same machine may send. `host_ok` answers a listed name only from loopback (`peer_ok` unchanged); `app::parse_hosts` refuses the start on a bad entry. Docs: README "From another device", architecture §12, decisions.md (brief 15 d3 struck as superseded).
-- **§2, the preview tooling: waits for the owner** to name the Cloudflare account and domain. Never use `~/.cloudflared/cert.pem` (2025) or the running `cloudflared.service` (memory `cloudflare-account-confirmed-first.md`). Fresh credentials from the named account go only in the tool's own folder (`~/.claude/tools/preview/`, mode 600), never the repository. Facts checked in Cloudflare's docs: a named tunnel routes by hostname (a leading wildcard is allowed, a catch-all rule is required); its ingress has no hot reload, so a route change is a replica swap (start the new connector, wait until it serves, stop the old); `originRequest.access` (`required`, `teamName`, `audTag`); Access applications take a wildcard; Quick Tunnels buffer SSE, so they are out. Then: a shared `CARGO_TARGET_DIR` under flock/nice, measure command-to-link minutes, a live run from the owner's phone, one link reported, `preview --gc` only if anything were left.
-- **The smoke test's leftovers were removed on 2026-10-27:** the portless proxy stopped, `~/.portless` deleted, the package uninstalled, `/tmp/portless-smoke` and its worktree removed. Three things need the owner (sudo or refused by the permission check): portless's CA in the system trust store, Node v24.22.1 under `~/.nvm`, and the test folders in `/tmp`. They were given one line to run.
-- **v2.11.0 published** 2026-10-27: every release job green, 8 assets, Latest (`releases/latest` confirmed).
-- **Tests' temp folders: #637 merged** (a60aa696), no release (tests only). Single tests take `tempfile::tempdir()`. The two run-long homes live in `tests_common::run_folder`, removed by `atexit`. `bin/check-test-leftovers.sh` (from #589) runs the Linux suite in tests.yml and the macOS/Windows suites in release.yml on a fresh temp folder, and fails on anything left. The browser job is out, with the reason in its comment. The release suites first run under it at the next tag. A run killed by a signal still leaves its one folder.
-- **Refused by the permission check, put to the owner:** closing #589 as superseded (an outside write I hadn't been asked to make; the owner can say "close #589"), and the /tmp sweep of the 396 `bh-*`/`bagholder-*` folders older than a day. The owner was given one line covering that sweep, portless's CA (sudo) and `~/.nvm/versions/node/v24.22.1` (nvm's default is `node`, i.e. v26, so nothing depends on it).
-- **A sign-in bug, proven, waiting on the owner's go** (they were signed out after updating to 2.10.13; their app runs on their Mac): at start, `boot_session` with a saved, unexpired sign-in and no answer from Wealthsimple leaves `connected` false. `heard(NotAsked)` keeps `connected && live`, and `connected` starts false. The page then offers "Connect Wealthsimple", which opens the sign-in Chrome window. A throwaway test showed connected=false, error "unreachable: the connection dropped", and the saved login still on disk. The rule dates from 8ae43bed (2026-10-04, 2.2.2). Whether this is what hit the owner is unknown; the app logs no reason when it drops a sign-in. Proposed to the owner: at start, an unexpired saved sign-in counts as connected until Wealthsimple refuses it, and an unanswered check is retried; plus a log line saying why a sign-in is dropped. Not built until they say go.
-- The sign-in window itself is not new: `login::start_login_browser`, reached only from the page's "Connect Wealthsimple" (menu or empty screen). It uses its own profile in the app's folder and picks Chrome before Brave (`find_chrome`), as it has since the Rust port (2026-09-16).
-
-### Agents anywhere: the owner's focus (2026-10-27)
-- **The owner:** cloud agents (Claude.ai, ChatGPT, Grok Bot, Muse, Dots) connect through a standard MCP URL over the person's own tunnel. The stdio/Claude Desktop config route is not what they want. Test with Tailscale first; Cloudflare after (they have accounts and domains). **Nothing specific to the owner's accounts may go in the app**: every user picks a tunnel and is walked through it.
-- **Order:** agents anywhere (#639) → **brief 79** (architecture-briefs f811cb19, `briefs/79-amounts-as-wealthsimple-states-them.md`; read it whole first) → the cleanup PR → previews (over Funnel).
-  - **Brief 79:** the owner: "it should be completely impossible for Bagholder to somehow have the wrong amounts vs WS when all it does is pull from WS."
-    - **Every amount is Wealthsimple's, read by the pull:** cash, units, book value, account value, buying power and margin, past days too. Market value is WS units × our quote. The history feeds the journal only.
-    - **What goes:** `Matched.cash`, the broker check, the header lines that compare or reconcile, the gate, the monthly statements (whole) and `CashByDay`.
-    - **Order (§6):** 1) one read-only capture (§3), which settles which read states units now (sec-s/sec-o entries skipped at read.rs:184), the book value's currency, the cash the web app shows, past days, and coins; 2) the plan; 3) one build PR with §4's tests, MINOR.
-    - **The test that makes the rule hold:** a book with a spoiled history still shows WS's amounts exactly.
-  - **The capture (§3): the original script again; option 1 is ON HOLD (the Architect, 2026-10-27, later the same day).**
-    - **What happened:** the first try (a Python script on the Mac) failed. `gh` hit TLS, and the curl download was refused as [Code from External]. Both are Claude Code settings on the Mac, not the task. The owner: "This absolutely has something to do with claude permissions, and we should not have to continually revisit that on simple benign tasks like github commands or accessing a website."
-    - **The fix is the owner's:** the Architect gives them one command for the Mac's `~/.claude/settings.json`. It backs the file up, then adds `gh *` to `sandbox.excludedCommands` and `Bash(gh *)` to `permissions.allow`. It also names the ProfessorBagholder org as trusted source control in `autoMode.environment`, with an `autoMode.allow` exception for running scripts from its branches ("$defaults" kept in both lists).
-    - **Next, once the owner confirms it is applied:** rerun the original capture in a fresh bridge session.
-      - Use the script from branch `capture-79-script` (46c16822, `capture79.py`, sha256 `f71025ad93156254f2f51a54a6383e00d3ca455407e5f7d41e154f8640c5ed41`); the prompt checks the hash.
-      - Quote the owner's go in their own words: "tell CTO to go ahead with all that".
-      - If anything is still refused, send the Architect the exact denial text from /permissions → Recently denied. Don't work around it.
-      - The branch and `scratchpad/cap79` were deleted under option 1, then restored from the object store at the same commit. Keep both until the capture is settled.
-    - **The held option-1 work:** local branch `pull-broker-capture`, commit 34cb0359, in `scratchpad/cap`, not pushed. It holds the made-up-figures mode in `anonymise.rs`, not compiled. Don't continue it unless the Architect lifts the hold; remove it once the capture is settled.
-    - **Option 1, as ruled before the hold:** a capture mode of the existing feature-gated `pull-broker`, the first PR of brief 79 §6 (no reading change), merged after #639:
-      - the wealthsimple client, read-only, never renewing the sign-in and never writing the book;
-      - made-up figures from `anonymise.rs` (extended; no second anonymiser);
-      - output to a folder named on the command line;
-      - every BalanceType the introspection lists, side by side;
-      - introspection of the Query type's fields for every positions and balance read, which settles whether a current-positions read exists.
-    - **Tests on the stand-in:** the §3 facts it prints match what the stand-in states, and a leak test, planted with one field left unanonymised.
-    - **On the Mac:** clone over the sandbox-proxy tunnel and build `--features pull-broker`, as the release gate does. The first prompt quotes the owner's go: "tell CTO to go ahead with all that". Never ask the owner to approve anything in a bridge session.
-    - **The 2026-10-26 captures** read a `sqlite3 -readonly .backup` of the book, never the sign-in.
-  - **#641 merged** (eeda743e); **v2.11.3** is building. **v2.11.2 is published** (the local model stops with the app). Its first macOS suite run failed the leftover check on one `.tmpXXXX` folder and a re-run passed: an intermittent macOS leftover to find. **On hold (the Architect, 2026-10-27): the coin units and the gate removal; start neither.** A design brief supersedes both. The owner: "it should be completely impossible for Bagholder to somehow have the wrong amounts vs WS when all it does is pull from WS." Every amount an account shows or acts on (cash per currency, units, book value, account value, buying power) will be taken exactly as Wealthsimple states it. The history will be read only for the journal, and the broker check and its header lines go. **#638 merged (920d24a7), v2.11.1 released** 2026-10-27 (Latest, 8 assets; the release suites passed under the new leftover check on macOS and Windows).
-- **Done on `agents-anywhere` since the audit** (pushed, head 00b5f0cb):
-  - the panel reads the log through the read layer;
-  - Tailscale's steps are read from `tailscale status --json` (`TailscaleSays`, `POST /api/agents/tunnel/look`);
-  - tunnel output links are clickable;
-  - the address is given only once checked;
-  - one key per agent copy;
-  - the redirect host is shown, with a refused-callers log;
-  - the own-proxy Host fix (`Ctx.receives`);
-  - the page refuses the agents' name even when listed;
-  - status polls are outside the pre-sign-in bucket for known ids;
-  - `get_at` has a total deadline (`Until`);
-  - **the tunnel guard's inherited signal mask is cleared** (the tunnel outlived the server; `tests/tunnel_guard.rs`);
-  - clippy is clean;
-  - the docs and the owner's 2026-10-27 decision are in.
-- **The live test, 2026-10-27 (the owner's yes; a made-up book; everything stopped and removed afterwards):**
-  - **Funnel:** this server's Traefik holds 443, so Funnel's 443 traffic reached Traefik, with its self-signed certificate. The app now finds a program on 443 at the tailnet address and uses 8443 (cdb43d00). On 8443: WebFetch from outside reached it, the app's check said Ready, and an MCP session over `/mcp/key` listed the 4 tools and read trades.
-  - **Claude.ai did not reach Funnel on 8443:** nothing arrived at the listener, watched with `ss`. The same copy through a temporary no-account Cloudflare link on 443 (the owner approved it; HOME isolated, so the old cert was never used) connected. Claude.ai signed in with OAuth (CIMD client "claude.ai"; I approved code JAEAJM on the local API after matching it). A fresh cloud session using the owner's claude.ai Bagholder connector called lists, trades and positions with no errors. **End-to-end proven.**
-  - **To fix in #639:**
-    - (a) When 443 is taken, the panel must say that Claude.ai did not reach Funnel on 8443 in testing; free 443 or choose another tunnel. Today it moves to 8443 and shows Ready.
-    - (b) The `positions` answer was ~83,000 characters (Claude saved it to a file): make it compact.
-    - (c) Run the check by itself once the tunnel is up (today it is a button).
-  - **A leftover found, on master too:** `localmodel::spawn` (market/src/localmodel.rs) starts the llamafile summarizer as a plain child. Both test copies left one running after the server exited (killed by me). Its own PR: run it through the guard, as the tunnel is, with a test like `tests/tunnel_guard.rs`.
-  - **The shared cargo target:** worktrees share artifacts across checkouts (same metadata hash), so another checkout can leave a stale crate; `touch crates/*/src/lib.rs` forces a rebuild.
-- **Left:**
-  - the measurements (plan §5: archive size with and without rmcp's feature, build time, tunnel memory, a capacity row for an HTTP read through the listener);
-  - Cloudflare's, ngrok's and zrok's steps still name commands (the owner wants no terminal);
-  - the conformance job: running `@modelcontextprotocol/conformance` here was refused by the permission check ("Code from External"), so it is not included; say so in the PR;
-  - the review-ready PR text, with the deviations listed below.
-- **The work:** branch `agents-anywhere` (worktree `aa`), draft **#639** (CI only, not for review). Master merged in (3fda0ebe), plus 1092dc59: the listener's 5 s drain is argued in `TIMED_WAITS`, and tunnel-guard's stderr in `TERMINAL`.
-- **This server is already on Tailscale:** tailnet `professorbagholder.github`, Funnel allowed, nothing served. I asked the owner whether I may use Funnel here to test on the made-up book. **Do not use it until they say yes.**
-- **The audit against the plan (2026-10-27); what is left:**
-  - **Page:**
-    - the panel makes a GET outside the read layer (`api.test.ts` "reads only through the read layer" fails on #639);
-    - the address and copy buttons show before the check says Ready;
-    - each Muse/Grok copy click makes a new key;
-    - the redirect hostname is computed (`approve.rs:91`) but never shown;
-    - refusals by unknown callers (agent `""`) never show;
-    - only the "install" step is detected as done (sign-in is not);
-    - e2e "side by side" queries `tr` but the panel uses `<label>`.
-  - **Defects:**
-    - Own proxy: `host_of` returns `sends_host`, stored as `agents.host`, so the issuer, resource and address name the proxy's internal Host;
-    - `BAGHOLDER_HOSTS` could list the agents host and expose Allow/Deny on the page listener;
-    - the public waiting page polls status every 2 s against the global 60/min pre-sign-in bucket (two pages use it up);
-    - the CIMD fetch's 5 s is per socket, not a total.
-  - **Tests missing:** `stopping_the_server_stops_the_tunnel`; the conformance job (`@modelcontextprotocol/conformance`, reported-only); an e2e of a metadata-document client.
-  - **Docs:** SPEC agents-5 still "not built"; architecture §12 "planned" and §14; decisions "Held by … once built".
-  - **Measurements (plan §5):** size, build time, memory, a capacity row.
-  - **Deviations to state in the PR:** no `mcp_http.rs`/`grants.rs` (rmcp in `listener.rs`, storage in `book/src/agents.rs`); Allow takes the id in the body; tokens are looked up by SHA-256 in SQL, not `memcmp`; forwarded headers are never trusted and not logged; tests_mcp is replaced by a narrower scan; `AgentsBook` writes only the agent tables.
-
-### Local model leftover: #640 (2.11.2)
-- **Cleared by the Architect at f5a8207e:** merge once rust and container are green, then release 2.11.2 (PATCH).
-  - main calls `localmodel::shutdown()` after `http::serve`;
-  - provision stops a model whose start failed;
-  - the test is tests/exit_with.rs `a_copy_that_stops_leaves_no_local_model_running`.
-- **Follow-up once #639's guard lands:** the model starts through the guard, and the call in main goes (one mechanism). The stop after a failed start stays.
-
-### Removing the gate on a mapping version (ON HOLD: superseded by the coming design brief; architecture-briefs 48184fa2)
-Brief 77 §4 is withdrawn. The owner: "those are things that must be caught during development" and "then how would anyone ever know it's wrong". A missed mistake must show as the page's ordinary disagreement line (status.rs:812) and be repaired by the next release's read.
-1. Remove:
-   - `gated_rederive`;
-   - `REFUSED_VERSIONS` (the `rederive.refused` setting);
-   - the retry after a pull (figures.rs:459-469, broker_reads.rs:426);
-   - the gate's tests;
-   - `restate_walk_records`, if nothing else uses it.
-2. `rederive_all` derives directly again, and the next pull's walk restates. Say whether anything shows doubled between the open and that pull; if so, name it with a stand-in test.
-3. A stored `rederive.refused` key: drop it, or show that nothing reads it.
-4. A test: a mapping version that leaves an account disagreeing shows as the disagreement line in the page's data. With the gate back, the test fails.
+### Next, in order (the owner's go, 2026-10-27: "tell CTO to go ahead with all that")
+1. #643 → 2.11.5, then the check on the Mac.
+2. #639 → 2.12.0.
+3. **The sign-in at start (a proven bug; fix it without asking).** At start, `boot_session` with a saved, unexpired sign-in and no answer from Wealthsimple leaves `connected` false. The page then offers "Connect Wealthsimple", which opens the sign-in window. A throwaway test showed `connected=false`, the error "unreachable: the connection dropped", and the saved sign-in still on disk. The rule dates from 8ae43bed (2.2.2).
+   - The fix: an unexpired saved sign-in counts as connected until Wealthsimple refuses it, and an unanswered check is asked again.
+   - Also: a log line saying why a sign-in is dropped.
+   - The owner says their sign-in has not expired. Never theorise to them about tokens.
+4. **Brief 79** (architecture-briefs, `briefs/79-amounts-as-wealthsimple-states-them.md`, amended at b73a9106; read it whole first). The capture is withdrawn. The plan decides §3's points from the code and the recorded replies, naming the basis of each, and names every file removed and every test kept. Then one build PR, released MINOR. The research started 2026-10-27.
+5. **agents-every-tunnel:** Cloudflare without a terminal, after #639.
+6. The cleanup PR (below).
+7. Previews over Funnel (below).
+- `capture-79-script`, `scratchpad/cap79`, `pull-broker-capture` and `scratchpad/cap` are gone; the capture is withdrawn for good.
+- After #639's guard lands, the local model starts through the guard and main's call goes (one mechanism). The stop after a failed start stays.
 
 ### Previews (brief 78 §2 amended by the owner, architecture-briefs 750fcf76)
 - **The link:** Tailscale Funnel on this server's tailnet, https://<machine>.<tailnet>.ts.net[:port]. No Cloudflare and no domain.
@@ -205,7 +72,7 @@ Brief 77 §4 is withdrawn. The owner: "those are things that must be caught duri
 - **`BAGHOLDER_HOSTS`:** the name exactly as the Host header carries it, with `:8443`/`:10000`.
 - **Content:** no login, so a made-up book with `DRY_ORDERS` only.
 - **Lifetime:** foreground only. Afterwards `tailscale funnel status` shows nothing of the preview's.
-- The Cloudflare Access gate is only for the main copy's fixed link, later. The order is unchanged: agents → coin units → previews.
+- The Cloudflare Access gate is only for the main copy's fixed link, later. The order: agents → brief 79 → the cleanup PR → previews.
 
 ### Small follow-up for the next commit to master
 - `events.rs`: `test_a_page_opening_wakes_the_figure_path_with_quotes_owed` (#641) went in under the doc comment of `test_quotes_are_owed_while_a_page_is_open_whatever_it_shows`. Move that test's own comment back above it (the Architect, not a condition).
@@ -227,9 +94,10 @@ For each removal, the PR says why nothing calls it: a function nothing calls can
 - **PR B** (the wider lints): after brief 77.
 
 ### Other follow-ups
-- The header's lines come in a different order from one opening to the next (#628 sorts them in the golden file only). This needs an owner decision before anything visible changes.
-- `take_back_2_10_9`: make its SQL filter one query, and remove it at the next stop release.
-- The version-36 carry with a superseded coin fill.
+- **The idle-minute request in the browser test** (`dataflow.spec.ts` "each interaction keeps within its request budget", failed once on #643's cb813f46): a watch naming book, cashflow, notifications and status was sent during the idle minute. The likely cause: the filter change's watch waits for the screens drawn from what was kept (`sayWanted` waits on `drawing`), and on a slow runner it went out after the measure's fixed second, so it was counted in the next window. Prove it, then make the measure wait for the page to have said what it shows, not a fixed second.
+- **The intermittent `.tmpXXXXXX` leftover** (macOS and Linux suites): still not found. `bin/check-test-leftovers.sh` now lists every path left (#643): when it fails, the listing names the test. Fix it; never rerun.
+- The header's lines come in a different order from one opening to the next (#628 sorts them in the golden file only). This needs an owner decision before anything visible changes; after brief 79 only the "took more" lines are left.
+- `take_back_2_10_9`, `READ_BY_2_10_9` and the version-36 carry of a superseded coin fill go with brief 79's removal of the statements.
 - Older items, not rechecked: the `install-check` branch, the short-interest bug (options sent to FINRA), PR #589, and the open dependabot PRs.
 
 ### Delegation, learned today
@@ -244,7 +112,7 @@ For each removal, the PR says why nothing calls it: a function nothing calls can
 - **Merging.** A merge whose commit writes a new workflow file blob is refused (the token has no `workflow` scope). Merge master into the branch first and push; git pushes are allowed.
 
 ### Workspace
-- Worktrees in this session's scratchpad: `aa` (agents), `g558` (paused, the owner's call), `ho` (this file).
+- Worktrees in this session's scratchpad: `aa` (#639), `aa2` (`agents-every-tunnel`, after #639), `hn` (#643; remove with its branch once merged), `g558` (paused, the owner's call), `ho` (this file).
 - The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. It was removed at 196 GB on 2026-10-26 because the disk filled; on 2026-10-27 its `debug/incremental` (19 GB) was removed, leaving 16 GB. Keep it under ~30 GB (`du -sh`), and remove it when the day's branches merge. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, and only the named tests a change touches. The server crate is a bin: `-p bagholder-server --bin bagholder <filter>`.
 
 ### How a release goes (all delegated: Architect clearance + green checks = merge and release)
