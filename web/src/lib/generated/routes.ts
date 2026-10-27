@@ -1,7 +1,7 @@
 // Generated from the server's route table (`api_routes!`). Do not edit: change the
 // route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.
 
-import type { AgentId, AgentLog, KeyAsked, LogAsked, MadeKey, Setup, SwitchAsked } from './agents'
+import type { AgentId, AgentLog, KeyAsked, LogAsked, MadeKey, Setup, SignInAsked, SwitchAsked } from './agents'
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, Details, TradesDoc } from './figures'
@@ -76,6 +76,7 @@ export interface Routes {
   'POST /api/agents/tunnel/start': { answer: OkOr }
   'POST /api/agents/tunnel/stop': { answer: OkOr }
   'POST /api/agents/tunnel/look': { answer: OkOr }
+  'POST /api/agents/tunnel/sign-in': { body: SignInAsked; answer: OkOr }
   'POST /api/agents/check': { answer: OkOr }
   'POST /api/agents/requests/allow': { body: AgentId; answer: OkOr }
   'POST /api/agents/requests/deny': { body: AgentId; answer: OkOr }

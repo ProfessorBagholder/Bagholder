@@ -71,8 +71,13 @@
           }
         ],
         "tailscale": null,
+        "cloudflare": {
+          "installed": true,
+          "signedIn": false
+        },
         "tunnel": {
           "running": null,
+          "signingIn": false,
           "command": [],
           "lines": [],
           "exited": null

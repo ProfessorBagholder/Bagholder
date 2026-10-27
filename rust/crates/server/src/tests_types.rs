@@ -363,7 +363,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "HistoryAnswer" | "HistoryQuery" => "chart",
         "TradesDoc" | "Detail" | "Details" => "figures",
         "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" => "model_api",
-        "SwitchAsked" | "Setup" | "AgentId" | "KeyAsked" | "MadeKey" | "LogAsked" | "AgentLog" => "agents",
+        "SwitchAsked" | "SignInAsked" | "Setup" | "AgentId" | "KeyAsked" | "MadeKey" | "LogAsked" | "AgentLog" => "agents",
         other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
     }
 }

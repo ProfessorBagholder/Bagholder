@@ -34,11 +34,17 @@ httpsPortTaken: boolean,
  */
 said: string, };
 
+export type CloudflareSays = { installed: boolean, signedIn: boolean, };
+
 export type TunnelState = { 
 /**
  * The provider of the tunnel running, if one is.
  */
 running: Provider | null, 
+/**
+ * Whether what runs is the provider's sign-in, not the tunnel.
+ */
+signingIn: boolean, 
 /**
  * The command it was started with.
  */
@@ -98,13 +104,19 @@ address: string, programs: Array<ProgramFound>,
  * What Tailscale said of this machine when last asked: asked when Tailscale is
  * chosen, when its tunnel starts, and when the person asks again.
  */
-tailscale: TailscaleSays | null, tunnel: TunnelState, ready: Ready | null, waiting: Array<Waiting>, connected: Array<Connected>, 
+tailscale: TailscaleSays | null, 
+/**
+ * What is done of Cloudflare's setup, read from the files Bagholder keeps for it.
+ */
+cloudflare: CloudflareSays, tunnel: TunnelState, ready: Ready | null, waiting: Array<Waiting>, connected: Array<Connected>, 
 /**
  * What could not be read, in words.
  */
 error: string, };
 
 export type SwitchAsked = { on: boolean, };
+
+export type SignInAsked = { provider: Provider, };
 
 export type AgentId = { id: string, };
 
