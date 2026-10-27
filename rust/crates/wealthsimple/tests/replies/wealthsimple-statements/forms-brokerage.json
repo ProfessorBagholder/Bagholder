@@ -82,15 +82,6 @@
      },
      {
       "__typename": "BrokerageMonthlyStatementTransactions",
-      "transactionDate": "2034-03-03",
-      "transactionType": "BUY",
-      "description": "XQK - Examplia Wobbleworks Plc.: Bought 4.8200 shares at $3.00 per share (executed at 2034-03-02)",
-      "cashMovement": "0.0",
-      "balance": "39.9",
-      "unit": "XQK"
-     },
-     {
-      "__typename": "BrokerageMonthlyStatementTransactions",
       "transactionDate": "2034-03-09",
       "transactionType": "CONT",
       "description": "Contribution (executed at 2034-03-09)",
@@ -349,15 +340,6 @@
       "cashMovement": "14.46",
       "balance": "60.41",
       "unit": "$CAD"
-     },
-     {
-      "__typename": "BrokerageMonthlyStatementTransactions",
-      "transactionDate": "2034-03-03",
-      "transactionType": "SELL",
-      "description": "XQR - Examplia Wobbleworks Plc.: Sold 4.8200 shares at $3.00 per share (executed at 2034-02-27)",
-      "cashMovement": "0.0",
-      "balance": "39.9",
-      "unit": "XQR"
      },
      {
       "__typename": "BrokerageMonthlyStatementTransactions",
@@ -663,15 +645,6 @@
        },
        {
         "__typename": "BrokerageMonthlyStatementTransactions",
-        "transactionDate": "2034-03-03",
-        "transactionType": "BUY",
-        "description": "XQK - Examplia Wobbleworks Plc.: Bought 4.8200 shares at $3.00 per share (executed at 2034-03-02)",
-        "cashMovement": "0.0",
-        "balance": "39.9",
-        "unit": "XQK"
-       },
-       {
-        "__typename": "BrokerageMonthlyStatementTransactions",
         "transactionDate": "2034-03-09",
         "transactionType": "CONT",
         "description": "Contribution (executed at 2034-03-09)",
@@ -935,15 +908,6 @@
         "__typename": "BrokerageMonthlyStatementTransactions",
         "transactionDate": "2034-03-03",
         "transactionType": "SELL",
-        "description": "XQR - Examplia Wobbleworks Plc.: Sold 4.8200 shares at $3.00 per share (executed at 2034-02-27)",
-        "cashMovement": "0.0",
-        "balance": "39.9",
-        "unit": "XQR"
-       },
-       {
-        "__typename": "BrokerageMonthlyStatementTransactions",
-        "transactionDate": "2034-03-03",
-        "transactionType": "SELL",
         "description": "Sale of 7.2177302134 XQT (executed at 2034-03-03)",
         "cashMovement": "0.0",
         "balance": "39.9",
@@ -1202,10 +1166,19 @@
         "__typename": "BrokerageMonthlyStatementTransactions",
         "transactionDate": "2034-03-03",
         "transactionType": "BUY",
-        "description": "XQL - Examplia Wobbleworks Plc.: Bought 4.8200 shares at $3.00 per share (executed at 2034-03-02), FX Rate: 1.8536",
+        "description": "XQL - Examplia Wobbleworks Plc.: Bought 0.0000 shares at $3.00 per share (executed at 2034-03-02), FX Rate: 1.8536",
         "cashMovement": "-14.46",
         "balance": "10.79",
         "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-03",
+        "transactionType": "BUY",
+        "description": "XQL - Examplia Wobbleworks Plc.: Bought 4.8200 shares at $3.00 per share (executed at 2034-03-02)",
+        "cashMovement": "0.0",
+        "balance": "10.79",
+        "unit": "XQL"
        },
        {
         "__typename": "BrokerageMonthlyStatementTransactions",
@@ -1391,10 +1364,19 @@
         "__typename": "BrokerageMonthlyStatementTransactions",
         "transactionDate": "2034-03-21",
         "transactionType": "SELL",
-        "description": "XQS - Examplia Wobbleworks Plc.: Sold 4.8200 shares at $3.00 per share (executed at 2034-03-17), FX Rate: 1.8536",
+        "description": "XQS - Examplia Wobbleworks Plc.: Sold 0.0000 shares at $3.00 per share (executed at 2034-03-17), FX Rate: 1.8536",
         "cashMovement": "14.46",
         "balance": "-35.00",
         "unit": "$USD"
+       },
+       {
+        "__typename": "BrokerageMonthlyStatementTransactions",
+        "transactionDate": "2034-03-21",
+        "transactionType": "SELL",
+        "description": "XQS - Examplia Wobbleworks Plc.: Sold 4.8200 shares at $3.00 per share (executed at 2034-03-17)",
+        "cashMovement": "0.0",
+        "balance": "-35.00",
+        "unit": "XQS"
        },
        {
         "__typename": "BrokerageMonthlyStatementTransactions",
