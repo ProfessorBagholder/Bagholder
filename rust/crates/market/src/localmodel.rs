@@ -380,7 +380,8 @@ fn provision() {
         return;
     }
     set("starting", "");
-    if spawn(&path) && wait_started() {
+    let started = spawn(&path);
+    if started && wait_started() {
         let mut st = state().lock().unwrap();
         st.endpoint = format!("http://{}:{}", MANAGED_HOST, managed_port());
         st.model = "local".into();
@@ -389,6 +390,11 @@ fn provision() {
         drop(st);
         changed();
     } else {
+        // one that came up and never answered is stopped: left running, it holds the
+        // port for good, and the next attempt's fails in turn
+        if started {
+            shutdown();
+        }
         set("failed", "server did not start");
     }
 }

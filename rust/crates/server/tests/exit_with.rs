@@ -77,3 +77,52 @@ fn a_process_already_gone_refuses_the_start() {
     let logs: String = std::fs::read_dir(home.path()).map(|d| d.filter_map(|e| e.ok()).filter(|e| e.path().extension().is_some_and(|x| x == "log")).map(|e| std::fs::read_to_string(e.path()).unwrap_or_default()).collect()).unwrap_or_default();
     assert!(format!("{said}{logs}").contains("is not running"), "it says why: {said}{logs}");
 }
+
+/// A copy that stops leaves no local model it started: the summaries' model server
+/// stops with it. A stand-in model (a script answering `/health` on the port it is
+/// given) is in the data folder, asked for as the filings feed asks for it; then
+/// the copy is stopped through its own stop.
+#[cfg(unix)]
+#[test]
+fn a_copy_that_stops_leaves_no_local_model_running() {
+    use std::io::{Read, Write};
+    use std::os::unix::fs::PermissionsExt;
+    let (home, user_home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
+    let models = home.path().join("models");
+    std::fs::create_dir_all(models.join("www")).unwrap();
+    std::fs::write(models.join("www").join("health"), "ok").unwrap();
+    let model = models.join("summarizer.llamafile");
+    std::fs::write(&model, "#!/bin/sh\nport=\"\"\nwhile [ $# -gt 0 ]; do [ \"$1\" = \"--port\" ] && port=\"$2\"; shift; done\necho $$ > \"$(dirname \"$0\")/pid\"\nexec python3 -m http.server \"$port\" --bind 127.0.0.1 --directory \"$(dirname \"$0\")/www\"\n").unwrap();
+    std::fs::set_permissions(&model, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let sha: String = openssl::sha::sha256(&std::fs::read(&model).unwrap()).iter().map(|b| format!("{b:02x}")).collect();
+    let model_port = TcpListener::bind("127.0.0.1:0").unwrap().local_addr().unwrap().port();
+    let mut owner = starter();
+    let mut child = server(home.path(), user_home.path(), owner.id()).env("BAGHOLDER_LLAMAFILE_SHA256", &sha).env("BAGHOLDER_LLM_PORT", model_port.to_string()).spawn().unwrap();
+    let mut out = BufReader::new(child.stdout.take().unwrap()).lines();
+    let listening = out.by_ref().map_while(Result::ok).find(|l| l.contains("http://127.0.0.1:")).expect("the server listened");
+    std::thread::spawn(move || out.for_each(drop));
+    let port = listening.rsplit(':').next().unwrap().trim().trim_end_matches('/').to_string();
+    // the filings feed asks whether summaries can be read, which brings the model up
+    let mut s = std::net::TcpStream::connect(format!("127.0.0.1:{port}")).unwrap();
+    write!(s, "GET /api/filings/feed?scope=all HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nConnection: close\r\n\r\n").unwrap();
+    let mut answer = String::new();
+    s.read_to_string(&mut answer).unwrap();
+    let pid_file = models.join("pid");
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    while !pid_file.exists() && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let pid = std::fs::read_to_string(&pid_file).expect("the model was started").trim().to_string();
+    let running = |pid: &str| Command::new("kill").args(["-0", pid]).stderr(Stdio::null()).status().is_ok_and(|s| s.success());
+    assert!(running(&pid), "the model runs while the copy does");
+    owner.kill().unwrap();
+    owner.wait().unwrap();
+    assert!(child.wait().unwrap().success(), "it stopped through its own stop");
+    let still = running(&pid);
+    if still {
+        // the test's own leftover goes, whatever the assertion says
+        #[expect(clippy::let_underscore_must_use, reason = "cleaning up after a failure the assertion below reports")]
+        let _ = Command::new("kill").arg(&pid).status();
+    }
+    assert!(!still, "no local model is left running after the copy stopped");
+}
