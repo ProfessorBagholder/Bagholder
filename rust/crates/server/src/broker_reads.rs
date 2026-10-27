@@ -301,7 +301,9 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
     // the day's window is met by a whole pull, never by one of the activity alone
     // (a book from before the mark: its last pull of any kind)
     let last_daily = book.last_read(conn, bagholder_broker::pull::DAILY_READ).map_err(|e| e.to_string())?.or(last_pull);
-    let pull = asked || pull_due(last_daily, now, &zone) || none_read(&book, conn)? || fill_due.is_some_and(|d| d <= now);
+    // a run's first pass pulls whole, its histories restated (`App::history_restated`)
+    let restate = !app.history_restated.load(Ordering::SeqCst);
+    let pull = asked || restate || pull_due(last_daily, now, &zone) || none_read(&book, conn)? || fill_due.is_some_and(|d| d <= now);
     let read = due(pull, open, opened != *served, last_cash, now);
     // every opening up to here is served by this pass, whatever the read's outcome
     // (a failed one is read again after its rest)
@@ -405,7 +407,10 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     set_step(app, "Checking session…");
     let mut adapter = Wealthsimple::new(Client::new(&app.net, file));
     let today = adapter.day(now);
-    let pulled = if daily {
+    let restate = daily && !app.history_restated.load(Ordering::SeqCst);
+    let pulled = if restate {
+        bagholder_broker::pull::pull_restating(book, &mut adapter, conn, today, now, &mut |s| set_step(app, &step_text(&s)))
+    } else if daily {
         bagholder_broker::pull::pull(book, &mut adapter, conn, today, now, &mut |s| set_step(app, &step_text(&s)))
     } else {
         bagholder_broker::pull::pull_activity(book, &mut adapter, conn, today, now, &mut |s| set_step(app, &step_text(&s)))
@@ -417,6 +422,10 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
             return Err(e.to_string());
         }
     };
+    // restated once every history answered; one that did not is restated at the next
+    if restate && !report.failures.iter().any(|(part, _)| part.starts_with("history:")) {
+        app.history_restated.store(true, Ordering::SeqCst);
+    }
     // what was stored is applied whatever else failed
     set_step(app, "Saving…");
     // the rows and the statements read with them, applied in one write
@@ -425,12 +434,6 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     applied?;
     // a mapping version refused before, tried again with what the broker states now
     f.retry_refused(now)?;
-    // each month whose statement the book does not reconcile with, said in the header
-    let unreconciled = f.read(|e| [crate::status::unreconciled(e, &report.statements.unreconciled), crate::status::feed_only(e, &report.statements.feed_only)].concat()).unwrap_or_default();
-    let said = unreconciled.join(" ");
-    // kept in the book, so a restart says what the last pull found until the next one
-    book.set_setting(crate::status::STATEMENTS_SAID, (!said.is_empty()).then_some(said.as_str()), now).map_err(|e| e.to_string())?;
-    app.state.lock().unwrap().statement_error = said;
     if report.statements.read > 0 || report.statements.booked > 0 {
         log(&format!("bagholder: statements: {} read, {} movements the activity feed left out booked, {} moves between accounts joined", report.statements.read, report.statements.booked, report.statements.joined));
     }

@@ -133,7 +133,7 @@ pub fn status(app: &Arc<App>) -> Status {
     let off = update::updates_off();
     let mut sources: Vec<String> = vec![];
     sources.extend(app.figures.get().map(|f| f.source_failures(app.net.started()).unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default());
-    sources.extend(app.figures.get().and_then(|f| f.read(broker_failures)).unwrap_or_default());
+    sources.extend(app.figures.get().and_then(|f| f.read(journal_failures)).unwrap_or_default());
     sources.extend(crate::feeds::feed_failures(app));
     sources.extend(orders::order_failures(app));
     let st = app.state.lock().unwrap();
@@ -180,7 +180,7 @@ pub fn status(app: &Arc<App>) -> Status {
 /// failure is said in the header until that source succeeds). Empty when
 /// nothing is failing; one failure met by two readers is said once.
 pub fn failures(st: &app::State, sources: &[String]) -> String {
-    let own = [st.error.as_str(), st.statement_error.as_str(), st.portfolio_error.as_str(), st.figures_error.as_str(), st.start_error.as_str(), st.open_error.as_str()];
+    let own = [st.error.as_str(), st.portfolio_error.as_str(), st.figures_error.as_str(), st.start_error.as_str(), st.open_error.as_str()];
     let mut said: Vec<String> = vec![];
     for s in own.into_iter().chain(sources.iter().map(String::as_str)).map(str::trim).filter(|e| !e.is_empty()).map(sentence) {
         if !said.contains(&s) {
@@ -190,37 +190,17 @@ pub fn failures(st: &app::State, sources: &[String]) -> String {
     said.join(" ")
 }
 
-/// Where the book disagrees with the broker, one sentence each (`SPEC.md` §4,
-/// the header's failures): each difference the broker check finds between the
-/// book's holdings and cash and the broker's statement, unless it may still be a
-/// fill not read into the book yet (`Difference::pending`), and each sale or
-/// move that took out more units than the book held. Each is said while the
-/// derivation finds it and gone with the next derivation that agrees. Figures
-/// are written exactly: a difference below the tables' rounding would read as
-/// two equal numbers.
-pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
-    use bagholder_engine::equity::Difference;
+/// Each sale or move that took out more units than the book held, one sentence
+/// each, said while the derivation finds it and gone with the next one that
+/// agrees: the journal's own reading. Where the book's holdings or cash differ
+/// from what Wealthsimple states, or a row of Wealthsimple's is not placed, the
+/// header says nothing: every amount shown is Wealthsimple's (brief 79; the
+/// owner, 2026-10-27: "obviously you cannot account for every possible
+/// transaction that could happen in a checking account").
+pub fn journal_failures(e: &bagholder_engine::Engine) -> Vec<String> {
     let inputs = e.inputs();
     let figures = e.figures();
-    // in the order a reader looks them up, never by the ids' random order: by
-    // account name, then cash by currency, then the holdings by what they say
-    let mut checks: Vec<_> = figures.checks.iter().map(|c| (crate::wire::build::account_name(inputs, c.account), c)).collect();
-    checks.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.account.cmp(&b.1.account)));
     let mut out = vec![];
-    for (_, c) in checks {
-        let (broker, account) = (broker_label(inputs, c.account), in_account(inputs, c.account));
-        let (mut cash, mut held) = (vec![], vec![]);
-        for d in c.differences.iter().filter(|d| !d.pending()) {
-            let (list, said) = match d {
-                Difference::Units { instrument, own, broker: stated, .. } => (&mut held, format!("{} in {account}: {broker} states {}, the book {}.", symbol(inputs, *instrument), units(*stated), own.as_ref().map(|o| format!("holds {}", exact(*o))).unwrap_or_else(|g| format!("cannot count its units ({})", g.words().join(", "))))),
-                Difference::Cash { currency, own, broker: stated, .. } => (&mut cash, format!("{currency} cash in {account}: {broker} states {}, the book {}.", money(*stated), own.as_ref().map(|o| format!("holds {}", money(*o))).unwrap_or_else(|g| format!("cannot sum it ({})", g.words().join(", "))))),
-            };
-            list.push(said);
-        }
-        held.sort();
-        out.extend(cash);
-        out.extend(held);
-    }
     let beyond = &figures.matched.beyond;
     if !beyond.is_empty() {
         let wanted: std::collections::BTreeSet<_> = beyond.iter().map(|b| &b.transaction).collect();
@@ -232,224 +212,7 @@ pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
             out.push(format!("{what} of {} in {}{day} took {} more than the book held.", symbol(inputs, b.instrument), in_account(inputs, b.account), units(b.qty)));
         }
     }
-    out.extend(unread_rows(inputs));
     out
-}
-
-/// Every problem the book found with a source's row, said until it is resolved
-/// (`docs/decisions.md` 2026-10-04: every problem with a Wealthsimple row is said
-/// in the header, not only rows it has no rule for), in the existing sentence:
-/// how many, why in the mapping's words, and the first day each reason occurs.
-/// - a row the mapping could not place (`Kind::Unclassified`): counted in no figure;
-/// - a row placed with a problem: kept, the problem said;
-/// - a row that gave no transaction at all (one that could not be read): counted
-///   in no figure, said by its source and when it first arrived.
-/// The problem a conversion's record carries while the side paid is not stated by it.
-const CONVERSION_SIDE_UNSTATED: &str = "conversion-side-unstated";
-
-/// The conversions whose record states only the side received, and whose side paid
-/// another of the book's records states: a conversion leg paying out, from a record
-/// that pays only (a statement's row booked for it, or the side read from the
-/// broker's stated cash), in the same account on the same day, in another currency.
-/// Each paying leg settles one conversion: on a day of several, they are paired one
-/// to one wherever the currencies allow it (a matching), and a conversion left over
-/// stays unsettled.
-fn settled_conversions(inputs: &bagholder_engine::input::Inputs) -> std::collections::BTreeSet<bagholder_core::RecordId> {
-    use bagholder_core::transaction::Kind;
-    use bagholder_core::{AccountId, Currency, RecordId};
-    use std::collections::{BTreeMap, BTreeSet};
-    type Day = (AccountId, bagholder_core::jiff::civil::Date);
-    // each record's conversion legs: the currencies it receives and pays
-    let mut legs: BTreeMap<RecordId, (Day, BTreeSet<Currency>, BTreeSet<Currency>, bool)> = BTreeMap::new();
-    for t in &inputs.ledger.transactions {
-        let e = legs.entry(t.id.record).or_insert(((t.account, t.trade_date), BTreeSet::new(), BTreeSet::new(), true));
-        match (t.kind, t.cash) {
-            (Kind::CurrencyConversion, Some(c)) if c.amount.is_negative() => {
-                e.2.insert(c.currency);
-            }
-            (Kind::CurrencyConversion, Some(c)) => {
-                e.1.insert(c.currency);
-            }
-            _ => e.3 = false,
-        }
-    }
-    let flagged = |r: &RecordId| inputs.ledger.records.get(r).is_some_and(|i| i.problems.iter().any(|p| p.code == CONVERSION_SIDE_UNSTATED));
-    let key = |r: &RecordId| inputs.ledger.records.get(r).map(|i| i.source_key.as_str());
-    // a side paid read for several conversions of its day, from the broker's cash
-    // that day, settles each it names that received another currency
-    let mut settled = BTreeSet::new();
-    let mut shared: BTreeSet<RecordId> = BTreeSet::new();
-    for (record, (day, received, paid, only_conversion)) in &legs {
-        let names = key(record).and_then(bagholder_wealthsimple::statement::paid_conversions).unwrap_or_default();
-        if !only_conversion || !received.is_empty() || paid.is_empty() || names.len() < 2 {
-            continue;
-        }
-        shared.insert(*record);
-        for (c, (d, got, _, _)) in legs.iter().filter(|(c, _)| key(c).is_some_and(|k| names.contains(&k))) {
-            if d == day && flagged(c) && got.len() == 1 && got.is_disjoint(paid) {
-                settled.insert(*c);
-            }
-        }
-    }
-    // per account and day: the one-sided conversions (the currency received) and the paying legs
-    let mut days: BTreeMap<Day, (Vec<(RecordId, Currency)>, Vec<Currency>)> = BTreeMap::new();
-    for (record, (day, received, paid, only_conversion)) in &legs {
-        if !only_conversion || shared.contains(record) || settled.contains(record) {
-            continue;
-        }
-        match (received.iter().collect::<Vec<_>>().as_slice(), paid.is_empty()) {
-            ([one], true) if flagged(record) => days.entry(*day).or_default().0.push((*record, **one)),
-            ([], false) => days.entry(*day).or_default().1.extend(paid.iter().copied()),
-            _ => {}
-        }
-    }
-    for (conversions, paying) in days.values() {
-        // the largest pairing of conversions to paying legs in another currency
-        // (Kuhn's augmenting paths; a day holds a handful)
-        let mut taken: Vec<Option<usize>> = vec![None; paying.len()];
-        fn place(i: usize, conversions: &[(RecordId, Currency)], paying: &[Currency], taken: &mut [Option<usize>], seen: &mut [bool]) -> bool {
-            for j in 0..paying.len() {
-                if paying[j] == conversions[i].1 || seen[j] {
-                    continue;
-                }
-                seen[j] = true;
-                if taken[j].is_none_or(|k| place(k, conversions, paying, taken, seen)) {
-                    taken[j] = Some(i);
-                    return true;
-                }
-            }
-            false
-        }
-        for i in 0..conversions.len() {
-            place(i, conversions, paying, &mut taken, &mut vec![false; paying.len()]);
-        }
-        settled.extend(taken.iter().flatten().map(|i| conversions[*i].0));
-    }
-    settled
-}
-
-pub fn unread_rows(inputs: &bagholder_engine::input::Inputs) -> Vec<String> {
-    use bagholder_core::transaction::Kind;
-    use std::collections::{BTreeMap, BTreeSet};
-    type Whys = BTreeMap<String, (usize, bagholder_core::jiff::civil::Date)>;
-    let note = |m: &mut Whys, why: String, day: bagholder_core::jiff::civil::Date| {
-        let e = m.entry(why).or_insert((0, day));
-        e.0 += 1;
-        e.1 = e.1.min(day);
-    };
-    let why_of = |ps: &[&bagholder_core::record::Problem], default: &str| -> Vec<String> {
-        if ps.is_empty() {
-            vec![default.to_string()]
-        } else {
-            ps.iter().map(|p| p.detail.trim().trim_end_matches('.').to_string()).collect()
-        }
-    };
-    // account → why → (rows, first day), for rows not placed and rows placed with a problem
-    let mut unplaced: BTreeMap<bagholder_core::AccountId, Whys> = BTreeMap::new();
-    let mut flawed: BTreeMap<bagholder_core::AccountId, Whys> = BTreeMap::new();
-    // a record is said once, by its first transaction's account and its earliest day
-    let mut first: BTreeMap<bagholder_core::RecordId, (bagholder_core::AccountId, bagholder_core::jiff::civil::Date, bool)> = BTreeMap::new();
-    for t in &inputs.ledger.transactions {
-        let e = first.entry(t.id.record).or_insert((t.account, t.trade_date, false));
-        e.1 = e.1.min(t.trade_date);
-        e.2 |= t.kind == Kind::Unclassified;
-    }
-    let settled = settled_conversions(inputs);
-    let open = |r: &bagholder_core::record::Problem, record: &bagholder_core::RecordId| !(r.code == CONVERSION_SIDE_UNSTATED && settled.contains(record));
-    for (record, (account, day, unclassified)) in &first {
-        // a problem the book has since settled is not said (a conversion's side paid
-        // booked from another of the broker's records)
-        let problems: Vec<&bagholder_core::record::Problem> = inputs.ledger.records.get(record).map(|r| r.problems.iter().filter(|p| open(p, record)).collect()).unwrap_or_default();
-        if *unclassified {
-            for why in why_of(&problems, "a row its mapping does not place") {
-                note(unplaced.entry(*account).or_default(), why, *day);
-            }
-        } else if !problems.is_empty() {
-            for why in why_of(&problems, "") {
-                note(flawed.entry(*account).or_default(), why, *day);
-            }
-        }
-    }
-    // records that gave no transaction: said by their source, on the day they arrived
-    let placed: BTreeSet<_> = first.keys().collect();
-    let mut unread: BTreeMap<Option<bagholder_core::ConnectionId>, Whys> = BTreeMap::new();
-    for (record, info) in &inputs.ledger.records {
-        if placed.contains(record) || info.problems.is_empty() {
-            continue;
-        }
-        let day = info.first_received_at.map(|t| t.to_zoned(inputs.clock.home.clone()).date()).unwrap_or(inputs.clock.today);
-        for why in why_of(&info.problems.iter().collect::<Vec<_>>(), "") {
-            note(unread.entry(info.connection).or_default(), why, day);
-        }
-    }
-    let list = |whys: &Whys| whys.iter().map(|(why, (c, first))| if *c == 1 { format!("{why}, on {first}") } else { format!("{why}, {c} rows, the first on {first}") }).collect::<Vec<_>>().join("; ");
-    let count = |whys: &Whys| -> usize { whys.values().map(|(c, _)| c).sum() };
-    let rows = |n: usize| if n == 1 { "A row".to_string() } else { format!("{n} rows") };
-    let mut out: Vec<(String, String)> = Vec::new();
-    for (account, whys) in &unplaced {
-        let n = count(whys);
-        let verb = if n == 1 { "could not be placed and counts" } else { "could not be placed and count" };
-        out.push((crate::wire::build::account_name(inputs, *account), format!("{} in {} {verb} in no figure: {}.", rows(n), in_account(inputs, *account), list(whys))));
-    }
-    for (account, whys) in &flawed {
-        let n = count(whys);
-        let verb = if n == 1 { "was kept with a problem" } else { "were kept with a problem" };
-        out.push((crate::wire::build::account_name(inputs, *account), format!("{} in {} {verb}: {}.", rows(n), in_account(inputs, *account), list(whys))));
-    }
-    for (connection, whys) in &unread {
-        out.push((String::new(), format!("{} from {} gave nothing the book can count: {}.", rows(count(whys)), from(inputs, *connection), list(whys))));
-    }
-    out.sort();
-    out.into_iter().map(|(_, s)| s).collect()
-}
-
-/// Where a record came from, as the person knows it: its connection's broker, by
-/// the label the book keeps for it; a file imported by hand has none.
-fn from(inputs: &bagholder_engine::input::Inputs, connection: Option<bagholder_core::ConnectionId>) -> String {
-    match connection {
-        None => "an imported file".into(),
-        Some(c) => inputs.ledger.accounts.values().find(|a| a.account.connection == c).map(|a| a.broker_label.clone()).filter(|l| !l.is_empty()).unwrap_or_else(|| "a connected broker".into()),
-    }
-}
-
-/// Where the book keeps what the last pull's statements said, for a restart.
-pub const STATEMENTS_SAID: &str = "statements.said";
-
-/// Each month whose statement the book does not reconcile with, one sentence
-/// each (`docs/plans/statement-gaps.md`): nothing of that month on is booked
-/// from the statements until it does.
-pub fn unreconciled(e: &bagholder_engine::Engine, list: &[bagholder_broker::statements::Unreconciled]) -> Vec<String> {
-    const MONTHS: [&str; 12] = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
-    let inputs = e.inputs();
-    list.iter()
-        .map(|u| {
-            let (broker, account) = (broker_label(inputs, u.account), in_account(inputs, u.account));
-            let month = format!("{} {}", MONTHS[(u.month.month() - 1) as usize], u.month.year());
-            let what = match (&u.why, u.statement) {
-                (Some(why), _) => format!("{broker}'s {month} statement: {why}"),
-                (None, Some(s)) => format!("{broker}'s {month} statement closes at {}, the book at {}", money(s), money(u.book)),
-                (None, None) => format!("{broker}'s {month} statement states no closing balance for every account behind it"),
-            };
-            format!("{} cash in {account}: {what}; nothing from that month on is booked from the statements.", u.currency)
-        })
-        .collect()
-}
-
-/// Each account's movements the activity feed states and no statement lists,
-/// one sentence per account and currency: how many, what they come to, and the
-/// first one's day. They stay in the book as the feed states them.
-pub fn feed_only(e: &bagholder_engine::Engine, list: &[bagholder_broker::statements::FeedOnly]) -> Vec<String> {
-    let inputs = e.inputs();
-    list.iter()
-        .map(|f| {
-            let total = f.rows.iter().try_fold(bagholder_core::Dec::ZERO, |a, (_, v)| a.checked_add(*v).ok());
-            let first = f.rows.iter().map(|(d, _)| *d).min().map(|d| d.to_string()).unwrap_or_default();
-            let n = f.rows.len();
-            let what = if n == 1 { "1 movement".to_string() } else { format!("{n} movements") };
-            let sum = total.map(|t| format!(", {} in all,", money(t))).unwrap_or_default();
-            format!("{} cash in {}: the activity feed has {what}{sum} that no {} statement lists, the first on {first}.", f.currency, in_account(inputs, f.account), broker_label(inputs, f.account))
-        })
-        .collect()
 }
 
 /// What took the units out, as a sentence opens with it.
@@ -468,11 +231,6 @@ fn kind_phrase(k: bagholder_core::transaction::Kind) -> &'static str {
         Kind::StakingMove => "A staking move",
         _ => "A record",
     }
-}
-
-/// The broker an account is held at, as the person calls it.
-fn broker_label(inputs: &bagholder_engine::input::Inputs, a: bagholder_core::AccountId) -> String {
-    inputs.ledger.accounts.get(&a).map(|x| x.broker_label.clone()).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "The broker".into())
 }
 
 /// `the TFSA` for an account named by what it is, its own name for one the
@@ -498,17 +256,6 @@ fn units(q: bagholder_core::Dec) -> String {
     } else {
         format!("{} units", exact(q))
     }
-}
-
-/// `$1,234.50`, `−$0.005`: at least cents, every place the value has.
-fn money(v: bagholder_core::Dec) -> String {
-    let t = grouped(v.abs().to_text());
-    let t = match t.split_once('.') {
-        None => format!("{t}.00"),
-        Some((_, f)) if f.len() < 2 => format!("{t}0"),
-        Some(_) => t,
-    };
-    format!("{}${t}", if v.is_negative() { "\u{2212}" } else { "" })
 }
 
 /// A quantity with thousands separators and every place it has.
@@ -711,9 +458,10 @@ mod tests {
         let mut feed = crate::events::Feed::open(app.clone());
         assert!(app.events.watch(&app, feed.id(), [("status".to_string(), crate::events::Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
         let first = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
-        // the recorded month is not the account's whole history: the broker check disagrees
+        // the recorded month is not the account's whole history, so the book's holdings
+        // differ from Wealthsimple's: the header says nothing of it
         let base = error(&app);
-        assert!(!base.is_empty() && first.contains(&format!("\"error\":{}", serde_json::to_string(&base).unwrap())), "only the broker check fails yet: {first}");
+        assert!(!base.contains("Wealthsimple states") && first.contains(&format!("\"error\":{}", serde_json::to_string(&base).unwrap())), "{first}");
         let mut signals = app.events.subscribe();
         signals.mark_unchanged();
         let said = health::failure(&record(&app, LABELS[0].0, OutcomeKind::Unreachable)).unwrap();
@@ -726,33 +474,6 @@ mod tests {
         assert!(signals.has_changed().unwrap());
         let sent = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
         assert!(sent.contains("\"error\"") && !sent.contains(&said), "{sent}");
-    }
-
-    #[test]
-    fn a_month_that_does_not_reconcile_is_one_sentence_naming_the_account_month_and_both_balances_and_stands_in_the_header() {
-        let (_h, app) = pulled();
-        let f = app.figures.get().unwrap();
-        let account = f.read(|e| *e.inputs().ledger.accounts.keys().next().unwrap()).unwrap();
-        let u = |statement: Option<&str>, why: Option<&str>| bagholder_broker::statements::Unreconciled {
-            account,
-            month: "2025-06-01".parse().unwrap(),
-            currency: bagholder_core::Currency::CAD,
-            statement: statement.map(|s| bagholder_core::Dec::parse(s).unwrap()),
-            book: bagholder_core::Dec::parse("-35630.9").unwrap(),
-            why: why.map(str::to_string),
-        };
-        let said = f.read(|e| super::unreconciled(e, &[u(Some("19.1"), None), u(None, None), u(Some("1"), Some("a sell only the statement states, which is not booked from it"))])).unwrap();
-        let name = f.read(|e| super::in_account(e.inputs(), account)).unwrap();
-        assert_eq!(said[0], format!("CAD cash in {name}: Wealthsimple's June 2025 statement closes at $19.10, the book at \u{2212}$35,630.90; nothing from that month on is booked from the statements."));
-        assert!(said[1].contains("states no closing balance for every account behind it"), "{}", said[1]);
-        assert!(said[2].contains("a sell only the statement states"), "{}", said[2]);
-        // what the feed states that no statement lists: one sentence, a count and a total
-        let f_only = bagholder_broker::statements::FeedOnly { account, currency: bagholder_core::Currency::parse("USD").unwrap(), rows: vec![("2025-01-15".parse().unwrap(), bagholder_core::Dec::parse("2.06").unwrap()), ("2026-01-07".parse().unwrap(), bagholder_core::Dec::parse("12.87").unwrap())] };
-        let said_f = f.read(|e| super::feed_only(e, &[f_only])).unwrap();
-        assert_eq!(said_f[0], format!("USD cash in {name}: the activity feed has 2 movements, $14.93 in all, that no Wealthsimple statement lists, the first on 2025-01-15."));
-        // it stands in the header's line with every other failure
-        app.state.lock().unwrap().statement_error = said[0].clone();
-        assert!(error(&app).contains(&said[0]), "{}", error(&app));
     }
 
     /// An app on the recorded month's book, its figures built.
@@ -768,7 +489,11 @@ mod tests {
     }
 
     #[test]
-    fn test_where_the_book_and_the_broker_disagree_on_units_it_is_said_until_they_agree() {
+    /// Where the book's units and Wealthsimple's differ, the header says nothing of
+    /// it: every amount shown is Wealthsimple's (brief 79), and the header never says
+    /// Bagholder's figures differ from them. Before 2.11.5 it said a sentence per
+    /// holding until they agreed.
+    fn test_where_the_book_and_the_broker_disagree_on_units_the_header_says_nothing() {
         use bagholder_book::statements::UnitsLine;
         let (_home, app) = pulled();
         let f = app.figures.get().unwrap();
@@ -809,47 +534,14 @@ mod tests {
         signals.mark_unchanged();
         more.insert(instrument, stated);
         state(&more);
-        let said = format!("{symbol} in {name}: Wealthsimple states {} units, the book holds {}.", super::exact(stated), super::exact(own));
+        assert_ne!(stated, own);
         let line = error(&app);
-        assert!(line.contains(&said), "{said:?} in {line:?}");
-        // the open page is sent the header's error
-        assert!(signals.has_changed().unwrap());
+        assert_eq!(line, before, "the header says nothing of {symbol} in {name}");
+        assert!(!line.contains("Wealthsimple states") && !line.contains("could not be placed"), "{line:?}");
+        // nor is the open page told of it
         let sent = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
-        assert!(sent.contains(&said), "{sent}");
-        // the broker's next statement agrees: the sentence goes
-        more.insert(instrument, own);
-        state(&more);
-        let line = error(&app);
-        let this = format!("{symbol} in {name}: ");
-        assert!(!line.contains(&this), "{line:?}");
-        // and nothing else changed
-        let rest = |l: &str| l.split(". ").map(|s| s.trim_end_matches('.').to_string()).filter(|s| !s.starts_with(&this)).collect::<Vec<_>>();
-        assert_eq!(rest(&line), rest(&before));
-    }
-
-    /// Two conversions on one day whose records state only the side received,
-    /// their side paid read together from the day's cash in one record naming
-    /// both: neither is said as kept with a problem (a made-up broker's book).
-    #[test]
-    fn conversions_one_side_paid_names_are_each_settled_by_it() {
-        use bagholder_wealthsimple::generated::{Generated, Shape, Size};
-        let home = tempfile::tempdir().unwrap();
-        let today: bagholder_core::jiff::civil::Date = "2026-10-08".parse().unwrap();
-        let at: Timestamp = "2026-10-08T20:00:00Z".parse().unwrap();
-        let (book, _) = bagholder_book::Book::open_in(home.path(), crate::app::APP_VERSION, at).unwrap();
-        let connection = book.add_connection(&bagholder_core::Broker::named("wealthsimple"), "Wealthsimple", at).unwrap();
-        let mut g = Generated::shaped(Size { accounts: 8, instruments: 16, trades: 60, months: 12, seed: 13, deep: 0 }, today, &[Shape::FundingIntent, Shape::Statements]);
-        g.convert_today("gen-account-0", 10_000);
-        g.convert_today("gen-account-0", 25_000);
-        let mut ws = bagholder_wealthsimple::adapter::Wealthsimple::new(g);
-        let r = bagholder_broker::pull::pull(&book, &mut ws, connection, today, at, &mut |_| {}).unwrap();
-        assert!(r.failures.is_empty(), "{:?}", r.failures);
-        drop(book);
-        let f = crate::figures::Figures::open(home.path(), at).unwrap();
-        f.state_zone("America/Toronto", at).unwrap();
-        let said = f.read(|e| super::unread_rows(e.inputs())).unwrap();
-        let today_said = said.iter().filter(|s| s.contains("side received") && s.contains("2026-10-08")).collect::<Vec<_>>();
-        assert!(today_said.is_empty(), "{said:?}");
+        assert!(!sent.contains("Wealthsimple states"), "{sent}");
+        let _ = signals.has_changed();
     }
 
     #[test]
@@ -881,10 +573,6 @@ mod tests {
         assert_eq!(super::units(d("0")), "none");
         assert_eq!(super::units(d("1")), "1 unit");
         assert_eq!(super::units(d("100000")), "100,000 units");
-        assert_eq!(super::money(d("36434.77")), "$36,434.77");
-        assert_eq!(super::money(d("-12.5")), "\u{2212}$12.50");
-        assert_eq!(super::money(d("0.005")), "$0.005");
-        assert_eq!(super::money(d("100")), "$100.00");
     }
 }
 

@@ -32,7 +32,7 @@ fn figures_through(seed: u64, carried: bool) -> (Value, usize) {
     let now = today.to_zoned(bagholder_core::jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(bagholder_core::jiff::SignedDuration::from_hours(20)).unwrap();
     let home = tempfile::tempdir().unwrap();
     let statements = bagholder_book::mapping::Mapping::source(&bagholder_wealthsimple::statement::StatementMapping);
-    let (report, booked) = {
+    let (_, booked) = {
         let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
         // the zone the page states, as a person's first visit keeps it
         book.state_zone("America/Toronto", now).unwrap();
@@ -74,10 +74,7 @@ fn figures_through(seed: u64, carried: bool) -> (Value, usize) {
                 (name, json!({"cash": text(cash), "units": text(units), "bought": text(bought), "sold": text(sold)}))
             })
             .collect();
-        let mut header = crate::status::broker_failures(e);
-        header.extend(crate::status::unreconciled(e, &report.statements.unreconciled));
-        header.extend(crate::status::feed_only(e, &report.statements.feed_only));
-        header.extend(crate::status::unread_rows(inputs));
+        let mut header = crate::status::journal_failures(e);
         // the lines, not their order, which differs from one opening to the next
         header.sort();
         json!({"accounts": accounts, "header": header})

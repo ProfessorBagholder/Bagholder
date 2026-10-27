@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.11.4";
+pub const APP_VERSION: &str = "2.11.5";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -46,9 +46,6 @@ pub struct State {
     /// The figure path's opening was tried, so a header read finding it closed
     /// tries again; never set where a step before it stopped it on purpose.
     pub open_tried: bool,
-    /// Each month whose broker statement the book does not reconcile with, as
-    /// the last pull found it; cleared by a pull that finds none.
-    pub statement_error: String,
     pub sync_fails: i64,
     pub sync_first_fail: String,
     pub login_attempt: i64,
@@ -301,6 +298,10 @@ pub struct App {
     pub net: bagholder_net::Net,
     /// Sync now was asked: the broker's reads pull at once (`broker_reads`).
     pub pull_asked: AtomicBool,
+    /// This run's first whole pull has read every account's daily history whole:
+    /// a day an earlier build stored wrong is put right as the app starts, never a
+    /// day later (`broker_reads`; the owner, 2026-10-27).
+    pub history_restated: AtomicBool,
     /// Fills of Bagholder's own orders whose Wealthsimple row the book does not
     /// hold yet, by Wealthsimple's order id, and when each was first seen waiting.
     pub fill_waits: Mutex<std::collections::BTreeMap<String, bagholder_core::jiff::Timestamp>>,
@@ -363,6 +364,7 @@ impl App {
             figures: std::sync::OnceLock::new(),
             net,
             pull_asked: AtomicBool::new(false),
+            history_restated: AtomicBool::new(false),
             fill_waits: Mutex::new(std::collections::BTreeMap::new()),
             following: std::sync::atomic::AtomicU64::new(0),
         })
