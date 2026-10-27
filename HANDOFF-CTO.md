@@ -112,9 +112,16 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
     - **What goes:** `Matched.cash`, the broker check, the header lines that compare or reconcile, the gate, the monthly statements (whole) and `CashByDay`.
     - **Order (§6):** 1) one read-only capture (§3), which settles which read states units now (sec-s/sec-o entries skipped at read.rs:184), the book value's currency, the cash the web app shows, past days, and coins; 2) the plan; 3) one build PR with §4's tests, MINOR.
     - **The test that makes the rule hold:** a book with a spoiled history still shows WS's amounts exactly.
-  - **The capture (§3): option 1, the Architect's ruling (2026-10-27).**
-    - **What happened:** the first try (a Python script on the Mac) failed. `gh` hit TLS, and the curl download was refused as [Code from External]. The branch and the scratch script are deleted, and the session is archived.
-    - **What it becomes:** a capture mode of the existing feature-gated `pull-broker`, the first PR of brief 79 §6 (no reading change), merged after #639:
+  - **The capture (§3): the original script again; option 1 is ON HOLD (the Architect, 2026-10-27, later the same day).**
+    - **What happened:** the first try (a Python script on the Mac) failed. `gh` hit TLS, and the curl download was refused as [Code from External]. Both are Claude Code settings on the Mac, not the task. The owner: "This absolutely has something to do with claude permissions, and we should not have to continually revisit that on simple benign tasks like github commands or accessing a website."
+    - **The fix is the owner's:** the Architect gives them one command for the Mac's `~/.claude/settings.json`. It backs the file up, then adds `gh *` to `sandbox.excludedCommands` and `Bash(gh *)` to `permissions.allow`. It also names the ProfessorBagholder org as trusted source control in `autoMode.environment`, with an `autoMode.allow` exception for running scripts from its branches ("$defaults" kept in both lists).
+    - **Next, once the owner confirms it is applied:** rerun the original capture in a fresh bridge session.
+      - Use the script from branch `capture-79-script` (46c16822, `capture79.py`, sha256 `f71025ad93156254f2f51a54a6383e00d3ca455407e5f7d41e154f8640c5ed41`); the prompt checks the hash.
+      - Quote the owner's go in their own words: "tell CTO to go ahead with all that".
+      - If anything is still refused, send the Architect the exact denial text from /permissions → Recently denied. Don't work around it.
+      - The branch and `scratchpad/cap79` were deleted under option 1, then restored from the object store at the same commit. Keep both until the capture is settled.
+    - **The held option-1 work:** local branch `pull-broker-capture`, commit 34cb0359, in `scratchpad/cap`, not pushed. It holds the made-up-figures mode in `anonymise.rs`, not compiled. Don't continue it unless the Architect lifts the hold; remove it once the capture is settled.
+    - **Option 1, as ruled before the hold:** a capture mode of the existing feature-gated `pull-broker`, the first PR of brief 79 §6 (no reading change), merged after #639:
       - the wealthsimple client, read-only, never renewing the sign-in and never writing the book;
       - made-up figures from `anonymise.rs` (extended; no second anonymiser);
       - output to a folder named on the command line;
