@@ -12,7 +12,7 @@ use bagholder_book::Book;
 use bagholder_broker::pull::{pull, Report};
 use bagholder_core::Broker;
 use bagholder_wealthsimple::adapter::Wealthsimple;
-use bagholder_wealthsimple::generated::{Generated, Shape, Size, SHAPES, STATED_OTHERWISE};
+use bagholder_wealthsimple::generated::{Generated, Shape, Size, READ_BY_2_10_9, SHAPES};
 
 /// The reason 2.10.9 gave a feed record a statement fill took the place of.
 const RESTATED_IN_2_10_9: &str = "the broker's statement states the fill otherwise";
@@ -31,7 +31,7 @@ fn book_of(name: &str) -> tempfile::TempDir {
 fn read(home: &std::path::Path, hour: i64) -> (Book, Report) {
     let today: jiff::civil::Date = "2026-10-25".parse().unwrap();
     let now = today.to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(jiff::SignedDuration::from_hours(hour)).unwrap();
-    let shapes: Vec<Shape> = SHAPES.iter().chain(STATED_OTHERWISE.iter()).copied().collect();
+    let shapes: Vec<Shape> = SHAPES.iter().chain(READ_BY_2_10_9.iter()).copied().collect();
     let size = Size { accounts: 8, instruments: 16, trades: 60, months: 12, seed: 13, deep: 0 };
     let (book, _) = Book::open_in(home, "test", now).unwrap();
     let connection = book.connections().unwrap().into_iter().find(|c| c.broker == Broker::named("wealthsimple")).unwrap().id;

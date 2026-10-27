@@ -5,9 +5,11 @@
 
 The one feed kind the same capture found and the recorded feed lacked, `SPEND`/`PREPAID`, was added to `../wealthsimple/edited-activity-one-per-kind.json`.
 
+A US share's fill the statement writes as two rows was recorded again on 2026-10-26 from a read-only copy of the owner's book, because the first capture's made-up values had replaced its zero: in the USD list, the cash at `Bought 0.0000 shares at $P per share (executed at D), FX Rate: R` (`unit` the currency) and, beside it, the units at no cash, the same symbol, price and execution (`unit` the symbol), a sale alike. `forms-brokerage.json` holds the pair as recorded. The feed's fill row of a Canadian listing the statement writes by its bare symbol, named `SYM.TO` by the feed and its `security`, is `feed-fill-dot-to.json` (with made-up values; it sits here, beside the forms, so no replay of `../wealthsimple` reads it).
+
 ## The recorded forms
 
-Every form of row the four statements above write, one line each: the statement's `__typename`, the row's `transactionType`, its description's form, and what its `unit` names. A form writes a date as `D`, a number as `N` (a leading `-` or `$` kept), the leading ticker as `SYM` wherever it recurs, the security's name between ` - ` and `:` as `NAME`, a contract's `CALL` or `PUT` as `RIGHT`, a coin's symbol after `Purchase of N ` or `Sale of N ` as `SYM`, and the free text after `Margin Interest Charges for ` as `NAME`; a symbol in any other place stays as recorded (made up). The unit style is `currency` (`$CAD`, `$USD`), `symbol`, `null`, or `absent` where the row has no `unit` (a cash statement's). `tests/forms.rs` holds the made-up broker (`src/generated.rs`) to state no row of a form not listed here.
+Every form of row the four statements above write, one line each: the statement's `__typename`, the row's `transactionType`, its description's form, and what its `unit` names. A form writes a date as `D`, a number as `N` and a zero as `0` (a leading `-` or `$` kept), the leading ticker as `SYM` wherever it recurs, the security's name between ` - ` and `:` as `NAME`, a contract's `CALL` or `PUT` as `RIGHT`, a coin's symbol after `Purchase of N `, `Sale of N ` or a fill's fee's `… of N ` as `SYM`, and the free text after `Margin Interest Charges for ` as `NAME`; a symbol in any other place stays as recorded (made up). The unit style is `currency` (`$CAD`, `$USD`), `symbol`, `null`, or `absent` where the row has no `unit` (a cash statement's). `tests/forms.rs` holds the made-up broker (`src/generated.rs`) to state no row of a form not listed here.
 
 ```
 typename | code | form | unit style
@@ -17,11 +19,11 @@ BrokerageMonthlyStatementObject | BUY | Purchase of N SYM (executed at D) | symb
 BrokerageMonthlyStatementObject | BUY | Purchase of N SYM (executed at D), FX Rate: N | currency
 BrokerageMonthlyStatementObject | BUY | Purchase of N SYM (executed at D), FX Rate: N | null
 BrokerageMonthlyStatementObject | BUY | Purchase of N SYM (executed at D), FX Rate: N, Fee charged $N | null
+BrokerageMonthlyStatementObject | BUY | SYM - NAME: Bought 0 shares at $N per share (executed at D), FX Rate: N | currency
 BrokerageMonthlyStatementObject | BUY | SYM - NAME: Bought N shares (executed at D) | currency
 BrokerageMonthlyStatementObject | BUY | SYM - NAME: Bought N shares (executed at D) | null
 BrokerageMonthlyStatementObject | BUY | SYM - NAME: Bought N shares at $N per share (executed at D) | currency
 BrokerageMonthlyStatementObject | BUY | SYM - NAME: Bought N shares at $N per share (executed at D) | symbol
-BrokerageMonthlyStatementObject | BUY | SYM - NAME: Bought N shares at $N per share (executed at D), FX Rate: N | currency
 BrokerageMonthlyStatementObject | BUYTOCLOSE | SYM N USD RIGHT D: Bought N contract (executed at D) | currency
 BrokerageMonthlyStatementObject | BUYTOCLOSE | SYM N USD RIGHT D: Bought N contract (executed at D), Fee: $N | currency
 BrokerageMonthlyStatementObject | BUYTOCLOSE | SYM N USD RIGHT D: Bought N contract (executed at D), Fee: $N | null
@@ -43,12 +45,12 @@ BrokerageMonthlyStatementObject | EXPIRY | SYM N USD RIGHT D: Expired -N contrac
 BrokerageMonthlyStatementObject | EXPIRY | SYM N USD RIGHT D: Expired N contract (executed at D) | symbol
 BrokerageMonthlyStatementObject | FEE | ACCOUNTING_REIMBURSEMENT (executed at D) | null
 BrokerageMonthlyStatementObject | FEE | Fee charge of N in XQN - Examplecoin | null
-BrokerageMonthlyStatementObject | FEE | Fee for purchase of N XQP (executed at D), FX Rate: N | currency
-BrokerageMonthlyStatementObject | FEE | Fee for sale of N XQR (executed at D), FX Rate: N | currency
+BrokerageMonthlyStatementObject | FEE | Fee for purchase of N SYM (executed at D), FX Rate: N | currency
+BrokerageMonthlyStatementObject | FEE | Fee for sale of N SYM (executed at D), FX Rate: N | currency
 BrokerageMonthlyStatementObject | FEE | Fee paid on XQS-Examplecoin staking reward: -N | null
 BrokerageMonthlyStatementObject | FEE | Fee paid on XQT-Examplecoin staking reward: N | null
-BrokerageMonthlyStatementObject | FEE | Trading fee for purchase of N XQU (executed at D), FX Rate: N | currency
-BrokerageMonthlyStatementObject | FEE | Trading fee for sale of N XQV (executed at D), FX Rate: N | currency
+BrokerageMonthlyStatementObject | FEE | Trading fee for purchase of N SYM (executed at D), FX Rate: N | currency
+BrokerageMonthlyStatementObject | FEE | Trading fee for sale of N SYM (executed at D), FX Rate: N | currency
 BrokerageMonthlyStatementObject | FEE | Withdrawal network fee charge of N in XQW - Examplecoin | symbol
 BrokerageMonthlyStatementObject | FPLINT | Stock lending monthly interest payment | currency
 BrokerageMonthlyStatementObject | FPLINT | Stock lending monthly interest payment | null
@@ -63,12 +65,12 @@ BrokerageMonthlyStatementObject | NRT | Non-resident tax (executed at D) | curre
 BrokerageMonthlyStatementObject | RECALL | SYM - NAME: Loan of N shares terminated (executed at D) | null
 BrokerageMonthlyStatementObject | RECALL | SYM - NAME: Loan of N shares terminated (executed at D) | symbol
 BrokerageMonthlyStatementObject | REFER | Referral bonus (D) | null
+BrokerageMonthlyStatementObject | SELL | SYM - NAME: Sold 0 shares at $N per share (executed at D), FX Rate: N | currency
 BrokerageMonthlyStatementObject | SELL | SYM - NAME: Sold N shares (executed at D) | currency
 BrokerageMonthlyStatementObject | SELL | SYM - NAME: Sold N shares (executed at D) | null
 BrokerageMonthlyStatementObject | SELL | SYM - NAME: Sold N shares (executed at D), FX Rate: N | null
 BrokerageMonthlyStatementObject | SELL | SYM - NAME: Sold N shares at $N per share (executed at D) | currency
 BrokerageMonthlyStatementObject | SELL | SYM - NAME: Sold N shares at $N per share (executed at D) | symbol
-BrokerageMonthlyStatementObject | SELL | SYM - NAME: Sold N shares at $N per share (executed at D), FX Rate: N | currency
 BrokerageMonthlyStatementObject | SELL | Sale of N SYM (executed at D) | symbol
 BrokerageMonthlyStatementObject | SELL | Sale of N SYM (executed at D), FX Rate: N | currency
 BrokerageMonthlyStatementObject | SELL | Sale of N SYM (executed at D), FX Rate: N | null

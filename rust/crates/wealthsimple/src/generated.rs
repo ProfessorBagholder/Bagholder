@@ -90,17 +90,17 @@ pub enum Shape {
     /// it was open and that has ended: each currency's movements with their
     /// running balance, as `FetchMonthlyStatementWithTransactions` states them.
     Statements,
-    /// Every third fill of a month a statement covers pays a fee the activity
-    /// feed's amount leaves out: the statement's cash, and the account's, carry
-    /// it (a fill the walk met as a row "only the statement states", by its cash).
+    /// Typed, never recorded (`READ_BY_2_10_9`): every third fill of a month a
+    /// statement covers pays a fee the activity feed's amount leaves out, the
+    /// statement's cash and the account's carrying it.
     FeeFolded,
-    /// Every seventh purchase of a month a statement covers is listed by the
-    /// statement and the positions alone, never by the activity feed; one sold the
-    /// day it was bought is listed after all, as its positions would not state it.
+    /// Typed, never recorded (`READ_BY_2_10_9`): every seventh purchase of a month
+    /// a statement covers is listed by the statement and the positions alone; one
+    /// sold the day it was bought is listed after all.
     FeedOmits,
-    /// Every fourth purchase of a US share in a month a statement covers is paid
-    /// out of CAD at the made-up broker's rate, with no conversion of its own: the
-    /// feed states it in USD, the statement in CAD with the rate it was paid at.
+    /// Typed, never recorded (`READ_BY_2_10_9`): every fourth purchase of a US
+    /// share in a month a statement covers is paid out of CAD at the made-up
+    /// broker's rate, the feed stating it in USD, the statement in CAD.
     FxFunded,
     /// Calls written on a US share held for them, assigned at expiry: the feed
     /// states the contracts sold and their assignment, the statement the
@@ -108,16 +108,46 @@ pub enum Shape {
     /// strike a few days after (`ASSIGN`, then `SELL`), as the recorded forms
     /// state them (`tests/replies/wealthsimple-statements`).
     Assigned,
+    /// A company listed in the US and in Canada, the same units of each bought the
+    /// same day in the first investment account and sold together: the feed and the
+    /// securities reply name the Canadian listing `SYM.TO`, in CAD at its exchange,
+    /// and the US one `SYM`, in USD, while the statement writes the bare `SYM` in
+    /// its CAD list for the Canadian listing's fills
+    /// (`tests/replies/wealthsimple-statements/feed-fill-dot-to.json`, and the `.TO`
+    /// securities of `edited-securities.json`).
+    Interlisted,
+    /// The coin account's statements from the book's middle month on, as the
+    /// recorded later ones: lists per currency, and each coin fill two rows, the
+    /// fill at its cash before the fee and the fee on a row of its own (`Fee for
+    /// purchase of N SYM …`, `Trading fee for sale of N SYM …`). A sale's two rows
+    /// come to the feed's amount; a purchase's to a cent under it in the form's
+    /// first month and to the amount after, as recorded. The account's cash is
+    /// the feed's.
+    Coin2025,
+    /// Every third coin sale in a month a statement covers is a limit order the
+    /// feed dates the day it was placed, 9 to 12 days before the execution the
+    /// statement states: the recorded limit sells' feed rows state no other date.
+    LimitOrder,
+    /// A US share of its own in the first investment account, bought and sold
+    /// whole, then bought again and held, in the newest month a statement covers:
+    /// the statement states each fill in its
+    /// USD list as two rows, the cash at `Bought 0.0000 shares at $P per share
+    /// (executed at D), FX Rate: R` and the units at no cash, its `unit` the
+    /// symbol (`forms-brokerage.json`, recorded again with its zero).
+    SplitFill,
 }
 
 /// Every shape.
 pub const SHAPES: [Shape; 6] = [Shape::ArrivalOnly, Shape::LinkedIds, Shape::Closed, Shape::LateRow, Shape::FundingIntent, Shape::Statements];
 
-/// The fills a statement states otherwise than the feed, or alone, as 2.10.9 read
-/// them (`docs/decisions.md`, 2026-10-26): a book of them, read by 2.10.8 and then
-/// by 2.10.9, is the one its take-back is proven on. No reading of statements
-/// since 2.10.9 is proven to close their months.
-pub const STATED_OTHERWISE: [Shape; 3] = [Shape::FeeFolded, Shape::FeedOmits, Shape::FxFunded];
+/// The fills as the feed and the statements state them on recorded books, the
+/// statements' forms and the feed's dates as recorded.
+pub const FILL_FORMS: [Shape; 4] = [Shape::Interlisted, Shape::Coin2025, Shape::LimitOrder, Shape::SplitFill];
+
+/// The typed shapes the two books of `tests/take_back.rs` were written from by
+/// 2.10.8 and 2.10.9, kept only to read those books again: nothing recorded
+/// shows any of them. They go with `take_back_2_10_9`.
+pub const READ_BY_2_10_9: [Shape; 3] = [Shape::FeeFolded, Shape::FeedOmits, Shape::FxFunded];
 
 /// An assignment as the feed and the statement each state it. No reading of
 /// statements is proven to close its months.
@@ -453,6 +483,12 @@ pub struct Generated {
     omitted: Vec<(usize, usize, jiff::civil::Date, Value)>,
     /// The share held for the calls written on it (`Assigned`), never moved.
     written_on: Option<usize>,
+    /// The listing whose fills the statement states in two rows (`SplitFill`).
+    split_on: Option<usize>,
+    /// The first month the coin account's statements take their later form (`Coin2025`).
+    coin_lists_from: Option<jiff::civil::Date>,
+    /// Coin sales in months a statement covers, counted for `LimitOrder`.
+    coin_sales: usize,
 }
 
 struct Templates {
@@ -612,7 +648,7 @@ impl Generated {
         }
         let shapes: BTreeSet<Shape> = shapes.iter().copied().collect();
         assert!(!shapes.contains(&Shape::LateRow) || shapes.contains(&Shape::Closed), "a late row is in the closed account");
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None, split_on: None, coin_lists_from: None, coin_sales: 0 };
         let mut plans = g.plan(&mut r, size, start);
         let span = (today - start).get_days().max(2) as i64;
         let on = |n: i64| start.checked_add(jiff::Span::new().days(n)).expect("a day");
@@ -661,6 +697,44 @@ impl Generated {
             plans.entry(bought).or_default().push(Plan::Buy { account, listing: under, units: contracts * SHARES_A_CONTRACT });
             plans.entry(on(span / 4 + 1)).or_default().push(Plan::WriteCalls { account, listing: contract, units: contracts });
             plans.entry(expiry).or_default().push(Plan::Assign { account, listing: contract });
+        }
+        if g.shapes.contains(&Shape::Interlisted) {
+            // drawn apart, so the listings and plans the book has without it stay as they are
+            let mut own = Rng(size.seed ^ 0x2E54_4F2E_544F);
+            let account = *invest.first().unwrap_or_else(|| panic!("Interlisted needs an investment account"));
+            let symbol = name(g.listings.len());
+            let company = format!("{symbol} Interlisted Inc");
+            let price = own.range(500, 9_000);
+            let mut listed = |g: &mut Generated, symbol: String, cur: Cur, price: i64, venue: (&str, &str)| {
+                g.listings.push(Listing { id: format!("sec-s-{}", own.hex()), symbol, sort: Sort::Share, cur, price, contract: None, put: false, name: Some(company.clone()), venue: Some((venue.0.to_string(), venue.1.to_string())), status: "TRADING" });
+                g.listings.len() - 1
+            };
+            let us = listed(&mut g, symbol.clone(), Cur::Usd, price, ("NASDAQ", "XNAS"));
+            let canada = listed(&mut g, format!("{symbol}.TO"), Cur::Cad, price * 135 / 100, ("TSX", "XTSE"));
+            // the same units of each, the same day: only the listing tells one fill from the other
+            let units = 10 + size.seed as i64 % 90;
+            for listing in [us, canada] {
+                plans.entry(on(span / 3)).or_default().push(Plan::Buy { account, listing, units });
+                plans.entry(on(span / 3 + 10)).or_default().push(Plan::Sell { account, listing, all: true });
+            }
+        }
+        if g.shapes.contains(&Shape::Coin2025) {
+            g.coin_lists_from = Some(on(span / 2).first_of_month());
+        }
+        if g.shapes.contains(&Shape::SplitFill) {
+            // a US share of its own, which nothing else trades or moves: a round trip, then a holding
+            let mut own = Rng(size.seed ^ 0x5350_4C49_54);
+            let account = *invest.first().unwrap_or_else(|| panic!("SplitFill needs an investment account"));
+            g.listings.push(Listing { id: format!("sec-s-{}", own.hex()), symbol: name(g.listings.len()), sort: Sort::Share, cur: Cur::Usd, price: own.range(200, 6_000), contract: None, put: false, name: None, venue: None, status: "TRADING" });
+            let listing = g.listings.len() - 1;
+            g.split_on = Some(listing);
+            // in the newest month a statement covers
+            let newest = today.first_of_month().checked_sub(jiff::Span::new().months(1)).expect("a month");
+            let day = |n: i64| newest.checked_add(jiff::Span::new().days(n)).expect("a day");
+            let units = 100 * own.range(1, 20);
+            plans.entry(day(2)).or_default().push(Plan::Buy { account, listing, units });
+            plans.entry(day(6)).or_default().push(Plan::Sell { account, listing, all: true });
+            plans.entry(day(10)).or_default().push(Plan::Buy { account, listing, units: units / 2 });
         }
         g.run(&mut r, plans);
         g
@@ -737,7 +811,7 @@ impl Generated {
             };
             plans.entry(*day).or_default().push(p);
         }
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None, split_on: None, coin_lists_from: None, coin_sales: 0 };
         // nothing stated whole is drawn
         g.run(&mut Rng(0), plans);
         g
@@ -952,6 +1026,36 @@ impl Generated {
             _ => 0,
         };
         Said { lists, fee, paid_at }
+    }
+
+    /// A fill's cash moved, `moved` in its currency, and the lines a statement
+    /// states it by: two for `SplitFill`'s listing (the cash at no units, the
+    /// units at no cash), two for a coin in `Coin2025`'s months (the fill at its
+    /// cash before the fee, `amount` being the feed's, and the fee), else one.
+    #[allow(clippy::too_many_arguments)]
+    fn stated_fill(&mut self, a: usize, listing: usize, buy: bool, units: i64, price: i64, amount: i64, moved: (Cur, i64), said: Said, day: jiff::civil::Date) {
+        let l = self.listings[listing].clone();
+        let (cur, cents) = moved;
+        let code = if buy { "BUY" } else { "SELL" };
+        if self.split_on == Some(listing) {
+            let verb = if buy { "Bought" } else { "Sold" };
+            let head = format!("{} - {}: {verb}", l.symbol, listing_name(&l));
+            self.move_cash(a, cur, cents, day, code, format!("{head} 0.0000 shares at ${} per share (executed at {day}), FX Rate: {}", fixed(price, 2), fixed(13_500, 4)));
+            self.accounts[a].ledger.push(Line { day, cur, cents: 0, code, description: format!("{head} {} shares at ${} per share (executed at {day})", fixed(units * 10_000, 4), fixed(price, 2)), unit: Some(l.symbol.clone()) });
+            return;
+        }
+        if l.sort == Sort::Coin && self.coin_lists_from.is_some_and(|f| day >= f) {
+            let fee = amount * COIN_FEE_PER_THOUSAND / 1000;
+            let under = i64::from(buy && self.coin_lists_from == Some(day.first_of_month()));
+            let what = format!("{} {} (executed at {day}), FX Rate: {}", fixed(units * 10_000, 10), l.symbol, fixed(10_000, 4));
+            self.cash_moved(a, cur, cents, day);
+            let (fill, said, charged) = if buy { (-(amount - fee - under), format!("Purchase of {what}"), format!("Fee for purchase of {what}")) } else { (amount + fee, format!("Sale of {what}"), format!("Trading fee for sale of {what}")) };
+            self.accounts[a].ledger.push(Line { day, cur, cents: fill, code, description: said, unit: None });
+            self.accounts[a].ledger.push(Line { day, cur, cents: -fee, code: "FEE", description: charged, unit: None });
+            return;
+        }
+        let (code, said) = fill_line(&l, buy, units, day, said);
+        self.move_cash(a, cur, cents, day, code, said);
     }
 
     /// A deposit's line: a contribution in a brokerage account.
@@ -1178,8 +1282,7 @@ impl Generated {
                     self.push(row);
                 }
                 let said = self.said(account, &l, cost, fee, fx_funded.then_some(price));
-                let (code, said) = fill_line(&l, true, units, day, said);
-                self.move_cash(account, paid_in, -paid, day, code, said);
+                self.stated_fill(account, listing, true, units, price, cost, (paid_in, -paid), said, day);
                 self.move_units(account, listing, units, day);
             }
             Plan::Sell { account, listing, all } => {
@@ -1199,17 +1302,37 @@ impl Generated {
                 }
                 *n += 1;
                 let id = self.next_id("sell");
+                // a coin's limit sell the feed dates the day it was placed, days before it executed
+                let placed = if self.shapes.contains(&Shape::LimitOrder) && l.sort == Sort::Coin && day < self.today.first_of_month() {
+                    self.coin_sales += 1;
+                    let placed = day.checked_sub(jiff::Span::new().days(9 + (self.coin_sales as i64 / 3) % 4)).expect("a day");
+                    // only a holding that never fell from before the order to its execution: the
+                    // feed's early date then sells nothing the account did not hold at that moment
+                    let before = placed.yesterday().expect("a day");
+                    let mut held = self.held_on(account, before).get(&l.id).copied().unwrap_or(0);
+                    let enough = held >= units;
+                    let never_fell = self.accounts[account].timeline.get(&l.id).is_none_or(|c| {
+                        c.iter().filter(|(d, _)| *d >= placed && *d <= day).all(|(_, q)| {
+                            let up = *q >= held;
+                            held = *q;
+                            up
+                        })
+                    });
+                    (self.coin_sales % 3 == 0 && enough && never_fell).then_some(placed)
+                } else {
+                    None
+                };
                 let (ty, sub) = match l.sort {
                     Sort::Share => ("DIY_SELL", "LIMIT_ORDER"),
+                    Sort::Coin if placed.is_some() => ("CRYPTO_SELL", "LIMIT_ORDER"),
                     Sort::Coin => ("CRYPTO_SELL", "MARKET_ORDER"),
                     Sort::Contract => ("OPTIONS_SELL", "LIMIT_ORDER"),
                 };
-                let row = self.row(ty, sub, account, at(day, *n), &id);
+                let row = self.row(ty, sub, account, at(placed.unwrap_or(day), *n), &id);
                 let row = set(self.with_security(row, listing), &[(&["amount"], text(money(proceeds))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
                 self.push(row);
                 let said = self.said(account, &l, proceeds, fee, None);
-                let (code, said) = fill_line(&l, false, units, day, said);
-                self.move_cash(account, l.cur, proceeds - fee, day, code, said);
+                self.stated_fill(account, listing, false, units, price, proceeds, (l.cur, proceeds - fee), said, day);
                 self.move_units(account, listing, -units, day);
             }
             Plan::Expire { account, listing } => {
@@ -1265,8 +1388,8 @@ impl Generated {
                     return;
                 }
                 // one share holding moved whole, on a day no other move touches these accounts
-                let written_on = self.written_on.map(|w| self.listings[w].id.clone());
-                let Some((lid, units)) = self.accounts[from].held.iter().find(|(id, _)| id.starts_with("sec-s-") && Some(*id) != written_on.as_ref()).map(|(i, u)| (i.clone(), *u)) else { return };
+                let kept: Vec<String> = [self.written_on, self.split_on].into_iter().flatten().map(|w| self.listings[w].id.clone()).collect();
+                let Some((lid, units)) = self.accounts[from].held.iter().find(|(id, _)| id.starts_with("sec-s-") && !kept.contains(id)).map(|(i, u)| (i.clone(), *u)) else { return };
                 let listing = self.listings.iter().position(|l| l.id == lid).expect("a listing held");
                 let near = |d: jiff::civil::Date| self.rows.iter().any(|x| {
                     let r = Node::root(x);
@@ -1669,7 +1792,9 @@ fn fill_line(l: &Listing, buy: bool, units: i64, day: jiff::civil::Date, said: S
             let at = said.paid_at.map(|p| format!(" at ${} per share", fixed(p, 2))).unwrap_or_default();
             // the rate as the statement writes it, the made-up broker's 135 cents a dollar
             let rate = if said.paid_at.is_some() { format!(", FX Rate: {}", fixed(13_500, 4)) } else { String::new() };
-            (if buy { "BUY" } else { "SELL" }, format!("{} - {}: {verb} {} shares{at} (executed at {day}){rate}", l.symbol, listing_name(l), fixed(units * 10_000, 4)))
+            // a Canadian listing the feed calls `SYM.TO` the statement calls `SYM` (`Shape::Interlisted`)
+            let symbol = l.symbol.strip_suffix(".TO").unwrap_or(&l.symbol);
+            (if buy { "BUY" } else { "SELL" }, format!("{symbol} - {}: {verb} {} shares{at} (executed at {day}){rate}", listing_name(l), fixed(units * 10_000, 4)))
         }
         // a coin's units to ten places; its rate is to CAD, which every made-up coin is priced in
         Sort::Coin => {
@@ -1864,8 +1989,9 @@ impl Source for Generated {
             return Ok(None);
         }
         let end = month.last_of_month();
-        // a coin account's statement states its rows in its own currency, with no lists per currency
-        let lists = acct.role != Role::Crypto;
+        // a coin account's statement states its rows in its own currency, with no lists per
+        // currency, until its later form (`Coin2025`)
+        let lists = acct.role != Role::Crypto || self.coin_lists_from.is_some_and(|f| month >= f);
         let row = |l: &Line, balance: i64| -> Value {
             Value::Object(
                 [
