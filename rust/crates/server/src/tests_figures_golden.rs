@@ -74,7 +74,7 @@ fn figures_through(seed: u64, carried: bool) -> (Value, usize) {
                 (name, json!({"cash": text(cash), "units": text(units), "bought": text(bought), "sold": text(sold)}))
             })
             .collect();
-        let mut header = crate::status::journal_failures(e);
+        let mut header = crate::status::broker_failures(e);
         // the lines, not their order, which differs from one opening to the next
         header.sort();
         json!({"accounts": accounts, "header": header})

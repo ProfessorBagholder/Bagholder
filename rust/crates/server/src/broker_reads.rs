@@ -273,6 +273,13 @@ pub(crate) fn fill_pull_due(app: &Arc<App>, book: &Book, conn: ConnectionId, las
     Ok(waits.values().filter_map(|since| last.checked_add(fill_pull_step(now.duration_since(*since))).ok()).min())
 }
 
+/// Whether this run's restating pull is done: once it has completed, whatever it
+/// read. A history that failed is read again by the day's pull, as any failure is,
+/// never by a whole pull on every pass after.
+fn restate_done(restating: bool, _report: &bagholder_broker::pull::Report) -> bool {
+    restating
+}
+
 /// One pass: the pull when it is due or asked for, else the balances when a page
 /// is open and they are due. The next instant either can be due.
 fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &mut u64) -> Result<Option<Timestamp>, String> {
@@ -422,8 +429,7 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
             return Err(e.to_string());
         }
     };
-    // restated once every history answered; one that did not is restated at the next
-    if restate && !report.failures.iter().any(|(part, _)| part.starts_with("history:")) {
+    if restate_done(restate, &report) {
         app.history_restated.store(true, Ordering::SeqCst);
     }
     // what was stored is applied whatever else failed
@@ -611,6 +617,19 @@ mod tests {
         assert!(r.resting(now));
         r.cleared();
         assert!(!r.resting(now));
+    }
+
+    /// The run's restating pull is done once it completes, a history failing among
+    /// what it read: the next pass does not pull whole again for it (brief 80's
+    /// review of 2.11.5: one account whose history fails would pull whole on every
+    /// pass, all day).
+    #[test]
+    fn a_restating_pull_is_done_once_it_completes_whatever_failed() {
+        let mut report = bagholder_broker::pull::Report::default();
+        report.failures.push(("history:gen-account-1".into(), bagholder_broker::Failure::Refused("not this one".into())));
+        assert!(restate_done(true, &report));
+        assert!(restate_done(true, &bagholder_broker::pull::Report::default()));
+        assert!(!restate_done(false, &report), "a plain pull restates nothing");
     }
 
     /// A page opening reads the balances whatever the last read's age; with no
