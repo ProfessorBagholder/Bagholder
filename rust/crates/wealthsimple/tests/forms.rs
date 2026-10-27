@@ -382,14 +382,16 @@ fn the_made_up_broker_names_a_canadian_listing_s_fill_as_the_feed_does() {
 }
 
 /// A coin's fills as the recorded books state them (`Shape::Coin2025`,
-/// `Shape::LimitOrder`): a limit sell the feed dates the day it was placed, 9 to
-/// 12 days before the execution its statement row states; and in the later form,
-/// a fill's row and its fee's row, a sale's coming to the feed's amount, a
-/// purchase's to a cent under it in the form's first month and to the amount after.
+/// `Shape::LimitOrder`): the units executed to 10 places on the statement and
+/// rounded to 6 in the feed, a purchase's past them, a later-form sale's alike on
+/// both; a limit sell the feed dates the day it was placed, 9 to 12 days before
+/// the execution its statement row states; and in the later form, a fill's row and
+/// its fee's row, a sale's coming to the feed's amount, a purchase's to a cent
+/// under it in the form's first month and to the amount after.
 #[test]
 fn the_made_up_broker_states_a_coin_s_fills_their_dates_and_fees_as_recorded() {
     let today: jiff::civil::Date = "2026-10-25".parse().unwrap();
-    let (mut limits, mut sales, mut under, mut exact) = (0, 0, 0, 0);
+    let (mut limits, mut sales, mut under, mut exact, mut past) = (0, 0, 0, 0, 0);
     for seed in [13, 1, 5, 9] {
         let mut g = Generated::shaped(Size { accounts: 8, instruments: 16, trades: 60, months: 12, seed, deep: 0 }, today, &[Shape::Statements, Shape::Coin2025, Shape::LimitOrder]);
         // the coin account: the fourth of the made-up broker's types
@@ -408,14 +410,21 @@ fn the_made_up_broker_states_a_coin_s_fills_their_dates_and_fees_as_recorded() {
         let fills: Vec<Value> = g.rows().iter().filter(|r| opt(r, "accountId") == Some(Value::String(account.clone())) && matches!(text(r, "type").as_str(), "CRYPTO_BUY" | "CRYPTO_SELL")).cloned().collect();
         for f in fills {
             let buy = text(&f, "type") == "CRYPTO_BUY";
-            // a coin's units to 6 places in the feed, to 10 on the statement
-            let what = format!("{}0000 {} (executed at ", text(&f, "assetQuantity"), text(&f, "assetSymbol"));
+            let feed_units = Dec::parse(&text(&f, "assetQuantity")).unwrap();
+            assert!(places(&text(&f, "assetQuantity")) <= 6, "the feed's units to 6 places: {f:?}");
+            let symbol = text(&f, "assetSymbol");
             let placed: jiff::civil::Date = text(&f, "occurredAt")[..10].parse().unwrap();
             let limit = text(&f, "subType") == "LIMIT_ORDER";
-            // the row of the same units executed the feed's day, or 9 to 12 days after it for a limit sell
+            // the statement's units of a row, to 10 places
+            let units_of = |d: &str| d.strip_prefix(if buy { "Purchase of " } else { "Sale of " }).and_then(|rest| {
+                let mut w = rest.split(' ');
+                let (n, sym) = (w.next()?, w.next()?);
+                (sym == symbol && places(n) == 10).then(|| Dec::parse(n).unwrap())
+            });
+            // the row of the units the feed rounds, executed the feed's day, or 9 to 12 days after it for a limit sell
             let Some(row) = rows.iter().find(|r| {
                 let d = text(r, "description");
-                d.starts_with(&format!("{} of {what}", if buy { "Purchase" } else { "Sale" })) && executed(&d).is_some_and(|e| if limit { (9..=12).contains(&(e - placed).get_days()) } else { e == placed })
+                units_of(&d).is_some_and(|u| u.round(6, bagholder_core::Rounding::HalfEven) == feed_units) && executed(&d).is_some_and(|e| if limit { (9..=12).contains(&(e - placed).get_days()) } else { e == placed })
             }) else {
                 assert!(!limit, "a limit sell with no row 9 to 12 days after it: {f:?}");
                 continue;
@@ -424,7 +433,15 @@ fn the_made_up_broker_states_a_coin_s_fills_their_dates_and_fees_as_recorded() {
                 assert!(!buy);
                 limits += 1;
             }
-            if opt(row, "unit") != Some(Value::String("$CAD".into())) {
+            let stated = units_of(&text(row, "description")).unwrap();
+            let later = opt(row, "unit") == Some(Value::String("$CAD".into()));
+            if buy {
+                assert_ne!(stated, feed_units, "a purchase's units executed past the feed's places: {row:?}");
+                past += 1;
+            } else if later {
+                assert_eq!(stated, feed_units, "a later-form sale's units alike on both: {row:?}");
+            }
+            if !later {
                 continue;
             }
             let fee = rows.iter().find(|r| text(r, "transactionType") == "FEE" && text(r, "description") == text(row, "description").replacen(if buy { "Purchase" } else { "Sale" }, if buy { "Fee for purchase" } else { "Trading fee for sale" }, 1)).expect("the fill's fee on a row of its own");
@@ -442,6 +459,6 @@ fn the_made_up_broker_states_a_coin_s_fills_their_dates_and_fees_as_recorded() {
             }
         }
     }
-    assert!(limits > 0 && sales > 0 && under > 0 && exact > 0, "{limits} limit sells, {sales} sales, {under} purchases a cent under, {exact} at the amount");
+    assert!(limits > 0 && sales > 0 && under > 0 && exact > 0 && past > 0, "{limits} limit sells, {sales} sales, {under} purchases a cent under, {exact} at the amount, {past} purchases past the feed's places");
 }
 

@@ -264,10 +264,12 @@ struct Listing {
 }
 
 impl Listing {
-    /// Units are whole for shares and contracts, millionths for a coin.
+    /// Units are whole for shares and contracts, ten-billionths for a coin: the
+    /// units a coin's fill executed, as its statement row writes them to 10 places;
+    /// the feed states them rounded to 6 (`feed_units`).
     fn scale(&self) -> u32 {
         if self.sort == Sort::Coin {
-            6
+            10
         } else {
             0
         }
@@ -277,7 +279,7 @@ impl Listing {
         match self.sort {
             Sort::Share => units * price,
             Sort::Contract => units * price * 100,
-            Sort::Coin => ((units as i128 * price as i128) / 1_000_000) as i64,
+            Sort::Coin => ((units as i128 * price as i128) / 10_000_000_000) as i64,
         }
     }
 }
@@ -489,6 +491,9 @@ pub struct Generated {
     coin_lists_from: Option<jiff::civil::Date>,
     /// Coin sales in months a statement covers, counted for `LimitOrder`.
     coin_sales: usize,
+    /// Coin purchases made, each one's units past the feed's six places drawn from
+    /// this count, apart from the book's draws.
+    coin_buys: usize,
 }
 
 struct Templates {
@@ -600,6 +605,16 @@ fn units_text(units: i64, scale: u32) -> String {
     Dec::new(units, scale).expect("units fit").to_text()
 }
 
+/// Units as the feed states them: a coin's rounded to six places, as every
+/// recorded coin row is; a share's or a contract's whole.
+fn feed_units(units: i64, l: &Listing) -> String {
+    if l.sort == Sort::Coin {
+        Dec::new(units, 10).expect("units fit").round(6, bagholder_core::Rounding::HalfEven).to_text()
+    } else {
+        units_text(units, l.scale())
+    }
+}
+
 fn at(day: jiff::civil::Date, n: u32) -> String {
     // a second a row from 15:00 UTC, so `n` keeps a day's rows in order; never
     // past 23:59:59 UTC, which is the same day in Toronto all year
@@ -648,7 +663,7 @@ impl Generated {
         }
         let shapes: BTreeSet<Shape> = shapes.iter().copied().collect();
         assert!(!shapes.contains(&Shape::LateRow) || shapes.contains(&Shape::Closed), "a late row is in the closed account");
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None, split_on: None, coin_lists_from: None, coin_sales: 0 };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None, split_on: None, coin_lists_from: None, coin_sales: 0, coin_buys: 0 };
         let mut plans = g.plan(&mut r, size, start);
         let span = (today - start).get_days().max(2) as i64;
         let on = |n: i64| start.checked_add(jiff::Span::new().days(n)).expect("a day");
@@ -799,19 +814,21 @@ impl Generated {
             .collect();
         let account = |id: &str| accounts.iter().position(|a| a.id == id).unwrap_or_else(|| panic!("no account {id} among the records"));
         let listing = |id: &str| listings.iter().position(|l| l.id == id).unwrap_or_else(|| panic!("no listing {id} among the records"));
+        // a record's coin units are millionths; the made-up broker holds ten-billionths
+        let units_of = |l: &str, units: i64| if listings[listing(l)].sort == Sort::Coin { units * 10_000 } else { units };
         let mut plans: BTreeMap<jiff::civil::Date, Vec<Plan>> = BTreeMap::new();
         for (day, r) in records {
             let p = match r {
-                Record::Buy { account: a, listing: l, units, cents } => Plan::BuyAt { account: account(a), listing: listing(l), units: *units, cents: *cents },
-                Record::Sell { account: a, listing: l, units, cents } => Plan::SellAt { account: account(a), listing: listing(l), units: *units, cents: *cents },
-                Record::Dividend { account: a, listing: l, units, cents } => Plan::DividendOf { account: account(a), listing: listing(l), units: *units, cents: *cents },
-                Record::Staking { account: a, listing: l, units } => Plan::StakingOf { account: account(a), listing: listing(l), units: *units },
+                Record::Buy { account: a, listing: l, units, cents } => Plan::BuyAt { account: account(a), listing: listing(l), units: units_of(l, *units), cents: *cents },
+                Record::Sell { account: a, listing: l, units, cents } => Plan::SellAt { account: account(a), listing: listing(l), units: units_of(l, *units), cents: *cents },
+                Record::Dividend { account: a, listing: l, units, cents } => Plan::DividendOf { account: account(a), listing: listing(l), units: units_of(l, *units), cents: *cents },
+                Record::Staking { account: a, listing: l, units } => Plan::StakingOf { account: account(a), listing: listing(l), units: units_of(l, *units) },
                 Record::Deposit { account: a, cents } => Plan::Deposit { account: account(a), cents: *cents },
                 Record::InterestCharge { account: a, currency, cents } => Plan::Charge { account: account(a), cur: cur_of(currency), cents: *cents },
             };
             plans.entry(*day).or_default().push(p);
         }
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None, split_on: None, coin_lists_from: None, coin_sales: 0 };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), fills: 0, buys: 0, us_buys: 0, omitted: Vec::new(), written_on: None, split_on: None, coin_lists_from: None, coin_sales: 0, coin_buys: 0 };
         // nothing stated whole is drawn
         g.run(&mut Rng(0), plans);
         g
@@ -864,7 +881,7 @@ impl Generated {
             };
             let l = &self.listings[listing];
             let units = match l.sort {
-                Sort::Coin => r.range(1_000, 5_000_000),
+                Sort::Coin => r.range(1_000, 5_000_000) * 10_000,
                 _ => r.range(1, 200),
             };
             out.entry(day(opened)).or_default().push(Plan::Buy { account, listing, units });
@@ -1047,7 +1064,7 @@ impl Generated {
         if l.sort == Sort::Coin && self.coin_lists_from.is_some_and(|f| day >= f) {
             let fee = amount * COIN_FEE_PER_THOUSAND / 1000;
             let under = i64::from(buy && self.coin_lists_from == Some(day.first_of_month()));
-            let what = format!("{} {} (executed at {day}), FX Rate: {}", fixed(units * 10_000, 10), l.symbol, fixed(10_000, 4));
+            let what = format!("{} {} (executed at {day}), FX Rate: {}", fixed(units, 10), l.symbol, fixed(10_000, 4));
             self.cash_moved(a, cur, cents, day);
             let (fill, said, charged) = if buy { (-(amount - fee - under), format!("Purchase of {what}"), format!("Fee for purchase of {what}")) } else { (amount + fee, format!("Sale of {what}"), format!("Trading fee for sale of {what}")) };
             self.accounts[a].ledger.push(Line { day, cur, cents: fill, code, description: said, unit: None });
@@ -1056,6 +1073,16 @@ impl Generated {
         }
         let (code, said) = fill_line(&l, buy, units, day, said);
         self.move_cash(a, cur, cents, day, code, said);
+    }
+
+    /// A coin purchase's units past the six places the feed states, in ten-billionths:
+    /// nonzero, under half a millionth either way, drawn from a count of their own.
+    fn past_the_feed_s_places(&mut self) -> i64 {
+        self.coin_buys += 1;
+        match (self.coin_buys as i64 * 6_151) % 9_999 - 4_999 {
+            0 => 1,
+            tail => tail,
+        }
     }
 
     /// A deposit's line: a contribution in a brokerage account.
@@ -1261,6 +1288,8 @@ impl Generated {
         match p {
             Plan::Buy { account, listing, units } => {
                 let l = self.listings[listing].clone();
+                // a coin's units executed, past the six places the feed states them to
+                let units = if l.sort == Sort::Coin { units + self.past_the_feed_s_places() } else { units };
                 // `SplitFill`'s listing at its own price, drawing nothing: the book without it stays as it is
                 let own = self.split_on == Some(listing);
                 let price = if own { l.price } else { (l.price + r.range(-l.price / 20, l.price / 20)).max(1) };
@@ -1282,7 +1311,7 @@ impl Generated {
                     Sort::Contract => ("OPTIONS_BUY", "LIMIT_ORDER"),
                 };
                 let row = self.row(ty, sub, account, at(day, *n), &id);
-                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cost))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
+                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cost))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(feed_units(units, &l))), (&["status"], text("FILLED"))]);
                 self.buys += 1;
                 if self.shapes.contains(&Shape::FeedOmits) && self.buys % 7 == 0 && day < self.today.first_of_month() {
                     self.omitted.push((account, listing, day, row));
@@ -1300,6 +1329,12 @@ impl Generated {
                     return;
                 }
                 let units = if all { held } else { (held / 2).max(1) };
+                // in the coin account's later form a sale is of units to the feed's six places,
+                // which both state alike, what is past them left held
+                let units = if l.sort == Sort::Coin && self.coin_lists_from.is_some_and(|f| day >= f) { units - units % 10_000 } else { units };
+                if units <= 0 {
+                    return;
+                }
                 let price = if self.split_on == Some(listing) { l.price + l.price / 10 } else { (l.price + r.range(-l.price / 5, l.price / 5)).max(1) };
                 let proceeds = l.cost(units, price);
                 let fee = if proceeds > 1 { self.folded_fee(proceeds, day) } else { 0 };
@@ -1337,7 +1372,7 @@ impl Generated {
                     Sort::Contract => ("OPTIONS_SELL", "LIMIT_ORDER"),
                 };
                 let row = self.row(ty, sub, account, at(placed.unwrap_or(day), *n), &id);
-                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(proceeds))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
+                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(proceeds))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(feed_units(units, &l))), (&["status"], text("FILLED"))]);
                 self.push(row);
                 let said = self.said(account, &l, proceeds, fee, None);
                 self.stated_fill(account, listing, false, units, price, proceeds, (l.cur, proceeds - fee), said, day);
@@ -1379,7 +1414,7 @@ impl Generated {
                 *n += 1;
                 let id = self.next_id("staking");
                 let row = self.row("CRYPTO_STAKING_REWARD", "", account, at(day, *n), &id);
-                let row = set(self.with_security(row, listing), &[(&["assetQuantity"], text(units_text(units, 6)))]);
+                let row = set(self.with_security(row, listing), &[(&["assetQuantity"], text(feed_units(units, &self.listings[listing])))]);
                 self.push(row);
                 self.move_units(account, listing, units, day);
             }
@@ -1476,7 +1511,7 @@ impl Generated {
                     (Sort::Contract, false) => ("OPTIONS_SELL", "LIMIT_ORDER"),
                 };
                 let row = self.row(ty, sub, account, at(day, *n), &id);
-                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
+                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(feed_units(units, &l))), (&["status"], text("FILLED"))]);
                 self.push(row);
                 let said = self.said(account, &l, cents, 0, None);
                 let (code, said) = fill_line(&l, buy, units, day, said);
@@ -1489,7 +1524,7 @@ impl Generated {
                 *n += 1;
                 let id = self.next_id("dividend");
                 let row = self.row("DIVIDEND", "DIY_DIVIDEND", account, at(day, *n), &id);
-                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale())))]);
+                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cents))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(feed_units(units, &l)))]);
                 self.push(row);
                 self.move_cash(account, l.cur, cents, day, "DIV", dividend_line(&l, day));
             }
@@ -1498,7 +1533,7 @@ impl Generated {
                 *n += 1;
                 let id = self.next_id("staking");
                 let row = self.row("CRYPTO_STAKING_REWARD", "", account, at(day, *n), &id);
-                let row = set(self.with_security(row, listing), &[(&["assetQuantity"], text(units_text(units, 6)))]);
+                let row = set(self.with_security(row, listing), &[(&["assetQuantity"], text(feed_units(units, &self.listings[listing])))]);
                 self.push(row);
                 self.move_units(account, listing, units, day);
             }
@@ -1538,7 +1573,7 @@ impl Generated {
                 *n += 1;
                 let id = self.next_id("sell");
                 let row = self.row("OPTIONS_SELL", "LIMIT_ORDER", account, at(day, *n), &id);
-                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(net))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
+                let row = set(self.with_security(row, listing), &[(&["amount"], text(money(net))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(feed_units(units, &l))), (&["status"], text("FILLED"))]);
                 self.push(row);
                 let (_, said) = fill_line(&l, false, units, day, Said { lists: true, fee, paid_at: None });
                 self.move_cash(account, l.cur, net, day, "SELLTOOPEN", said);
@@ -1807,7 +1842,7 @@ fn fill_line(l: &Listing, buy: bool, units: i64, day: jiff::civil::Date, said: S
         // a coin's units to ten places; its rate is to CAD, which every made-up coin is priced in
         Sort::Coin => {
             let fee = if said.lists { String::new() } else { format!(", Fee charged ${}", fixed(said.fee, 2)) };
-            (if buy { "BUY" } else { "SELL" }, format!("{} of {} {} (executed at {day}), FX Rate: {}{fee}", if buy { "Purchase" } else { "Sale" }, fixed(units * 10_000, 10), l.symbol, fixed(10_000, 4)))
+            (if buy { "BUY" } else { "SELL" }, format!("{} of {} {} (executed at {day}), FX Rate: {}{fee}", if buy { "Purchase" } else { "Sale" }, fixed(units, 10), l.symbol, fixed(10_000, 4)))
         }
         Sort::Contract => {
             let (expiry, strike) = l.contract.as_ref().map(|(_, e, s)| (*e, *s)).expect("a contract's terms");

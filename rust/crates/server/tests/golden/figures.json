@@ -64,19 +64,19 @@
       },
       "Generated 3": {
         "cash": {
-          "CAD": "74185.81"
+          "CAD": "74186.27"
         },
         "units": {
-          "GH": "2.940522",
-          "GP": "1.495881"
+          "GH": "2.940528",
+          "GP": "1.495884"
         },
         "bought": {
           "GH": "5.986105",
           "GP": "4.121472"
         },
         "sold": {
-          "GH": "3.118615",
-          "GP": "2.667817"
+          "GH": "3.118622",
+          "GP": "2.667823"
         }
       },
       "Generated 4": {
@@ -179,7 +179,9 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GP in Generated 3: Wealthsimple states 1.4958853988 units, the book holds 1.495884."
+    ],
     "withdrawn at opening, the book read a version before": 9
   },
   "seed 02": {
@@ -249,14 +251,14 @@
           "CAD": "500"
         },
         "units": {
-          "GP": "4.194639"
+          "GP": "4.194643"
         },
         "bought": {
           "GH": "0.816544",
           "GP": "4.152927"
         },
         "sold": {
-          "GH": "0.81736"
+          "GH": "0.817361"
         }
       },
       "Generated 4": {
@@ -362,7 +364,9 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GP in Generated 3: Wealthsimple states 4.1946433781 units, the book holds 4.194643."
+    ],
     "withdrawn at opening, the book read a version before": 10
   },
   "seed 03": {
@@ -430,7 +434,7 @@
       },
       "Generated 3": {
         "cash": {
-          "CAD": "178864.96"
+          "CAD": "178865.08"
         },
         "units": {},
         "bought": {
@@ -438,8 +442,8 @@
           "GP": "4.724803"
         },
         "sold": {
-          "GH": "4.360111",
-          "GP": "4.777027"
+          "GH": "4.360118",
+          "GP": "4.777036"
         }
       },
       "Generated 4": {
@@ -616,18 +620,19 @@
       },
       "Generated 3": {
         "cash": {
-          "CAD": "521132.83"
+          "CAD": "521134.76"
         },
         "units": {
-          "GP": "1.614578"
+          "GH": "0.000002",
+          "GP": "1.614586"
         },
         "bought": {
           "GH": "12.155509",
           "GP": "11.13974"
         },
         "sold": {
-          "GH": "12.795763",
-          "GP": "9.825991"
+          "GH": "12.795802",
+          "GP": "9.826019"
         }
       },
       "Generated 4": {
@@ -723,7 +728,10 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GH in Generated 3: Wealthsimple states 0.0000006746 units, the book holds 0.000002.",
+      "GP in Generated 3: Wealthsimple states 1.6145849464 units, the book holds 1.614586."
+    ],
     "withdrawn at opening, the book read a version before": 10
   },
   "seed 05": {
@@ -789,18 +797,19 @@
       },
       "Generated 3": {
         "cash": {
-          "CAD": "331091.95"
+          "CAD": "331092.66"
         },
         "units": {
-          "GP": "7.651263"
+          "GH": "0.000001",
+          "GP": "7.651278"
         },
         "bought": {
-          "GH": "16.511184",
+          "GH": "16.511185",
           "GP": "10.813764"
         },
         "sold": {
-          "GH": "17.196159",
-          "GP": "3.340708"
+          "GH": "17.196195",
+          "GP": "3.340712"
         }
       },
       "Generated 4": {
@@ -908,7 +917,9 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GP in Generated 3: Wealthsimple states 7.6512765889 units, the book holds 7.651279."
+    ],
     "withdrawn at opening, the book read a version before": 8
   },
   "seed 06": {
@@ -977,16 +988,16 @@
       },
       "Generated 3": {
         "cash": {
-          "CAD": "182618.38"
+          "CAD": "182618.81"
         },
         "units": {
-          "GP": "0.71538"
+          "GP": "0.715389"
         },
         "bought": {
           "GP": "7.644901"
         },
         "sold": {
-          "GP": "7.000603"
+          "GP": "7.000613"
         }
       },
       "Generated 4": {
@@ -1086,7 +1097,9 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GP in Generated 3: Wealthsimple states 0.7153867616 units, the book holds 0.715389."
+    ],
     "withdrawn at opening, the book read a version before": 14
   },
   "seed 07": {
@@ -1158,14 +1171,14 @@
         },
         "units": {
           "GH": "3.449909",
-          "GP": "11.271901"
+          "GP": "11.271905"
         },
         "bought": {
           "GH": "3.449909",
           "GP": "29.984011"
         },
         "sold": {
-          "GP": "18.938554"
+          "GP": "18.938566"
         }
       },
       "Generated 4": {
@@ -1268,7 +1281,9 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GH in Generated 3: Wealthsimple states 3.4499092668 units, the book holds 3.449909."
+    ],
     "withdrawn at opening, the book read a version before": 10
   },
   "seed 08": {
@@ -1334,19 +1349,19 @@
       },
       "Generated 3": {
         "cash": {
-          "CAD": "67077.29"
+          "CAD": "67077.65"
         },
         "units": {
-          "GH": "2.500067",
-          "GP": "4.084903"
+          "GH": "2.500069",
+          "GP": "4.08491"
         },
         "bought": {
           "GH": "11.061868",
-          "GP": "23.111342"
+          "GP": "23.111343"
         },
         "sold": {
-          "GH": "8.614511",
-          "GP": "19.577703"
+          "GH": "8.614517",
+          "GP": "19.577722"
         }
       },
       "Generated 4": {
@@ -1447,7 +1462,9 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GP in Generated 3: Wealthsimple states 4.0849072476 units, the book holds 4.08491."
+    ],
     "withdrawn at opening, the book read a version before": 7
   },
   "seed 09": {
@@ -1516,14 +1533,15 @@
           "CAD": "500"
         },
         "units": {
-          "GH": "5.303993"
+          "GH": "5.304033",
+          "GP": "-0.000002"
         },
         "bought": {
           "GH": "5.189713",
           "GP": "9.136862"
         },
         "sold": {
-          "GP": "9.222387"
+          "GP": "9.222393"
         }
       },
       "Generated 4": {
@@ -1689,16 +1707,18 @@
       },
       "Generated 3": {
         "cash": {
-          "CAD": "493080.59"
+          "CAD": "493080.97"
         },
-        "units": {},
+        "units": {
+          "GP": "0.000001"
+        },
         "bought": {
           "GH": "6.425754",
-          "GP": "15.219423"
+          "GP": "15.219424"
         },
         "sold": {
           "GH": "6.425754",
-          "GP": "15.298183"
+          "GP": "15.29819"
         }
       },
       "Generated 4": {
@@ -1795,7 +1815,9 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GP in Generated 3: Wealthsimple states 0.0000004152 units, the book holds 0.000001."
+    ],
     "withdrawn at opening, the book read a version before": 11
   },
   "seed 11": {
@@ -1861,18 +1883,19 @@
       },
       "Generated 3": {
         "cash": {
-          "CAD": "261697.03"
+          "CAD": "261697.52"
         },
         "units": {
-          "GH": "1.496788"
+          "GH": "1.496791",
+          "GP": "0.000001"
         },
         "bought": {
-          "GH": "14.295555",
+          "GH": "14.295556",
           "GP": "7.4573"
         },
         "sold": {
-          "GH": "13.038676",
-          "GP": "7.471141"
+          "GH": "13.038691",
+          "GP": "7.47115"
         }
       },
       "Generated 4": {
@@ -1978,7 +2001,9 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GH in Generated 3: Wealthsimple states 1.4967922948 units, the book holds 1.496791."
+    ],
     "withdrawn at opening, the book read a version before": 10
   },
   "seed 12": {
@@ -2040,18 +2065,19 @@
       },
       "Generated 3": {
         "cash": {
-          "CAD": "147700"
+          "CAD": "147700.13"
         },
         "units": {
-          "GP": "6.695571"
+          "GH": "0.000002",
+          "GP": "6.695573"
         },
         "bought": {
           "GH": "13.983819",
-          "GP": "8.620093"
+          "GP": "8.620094"
         },
         "sold": {
-          "GH": "14.130592",
-          "GP": "1.957493"
+          "GH": "14.130601",
+          "GP": "1.957502"
         }
       },
       "Generated 4": {
@@ -2158,7 +2184,9 @@
         }
       }
     },
-    "header": [],
+    "header": [
+      "GP in Generated 3: Wealthsimple states 6.695571965 units, the book holds 6.695571."
+    ],
     "withdrawn at opening, the book read a version before": 8
   }
 }
