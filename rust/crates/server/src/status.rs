@@ -513,7 +513,6 @@ mod tests {
     }
 
     #[test]
-    #[test]
     fn test_where_the_book_and_the_broker_disagree_on_units_it_is_said_until_they_agree() {
         use bagholder_book::statements::UnitsLine;
         let (_home, app) = pulled();
