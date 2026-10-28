@@ -121,13 +121,14 @@ mod tests {
     }
 
     #[test]
-    fn a_session_without_its_rate_has_no_level_and_the_next_is_over_the_last_that_has() {
+    fn a_session_whose_rate_is_not_read_takes_the_last_published_one() {
+        // the owner, 2026-10-28, on an old rate: "Show nothing"
         let mut s = series(&[("2026-01-05", "100"), ("2026-01-06", "110"), ("2026-01-07", "121")]);
         s.currency = Currency::USD;
         let mut rates = Rates::default();
         rates.by_currency.insert(Currency::USD, BTreeMap::from([(d("2026-01-05"), n("1.40")), (d("2026-01-07"), n("1.40"))]));
         let l = total_return_cad(&s, &rates, &clock());
-        assert!(!l.contains_key(&d("2026-01-06")));
+        assert!((l[&d("2026-01-06")] - 1.10).abs() < 1e-12);
         assert!((l[&d("2026-01-07")] - 1.21).abs() < 1e-12);
     }
 }

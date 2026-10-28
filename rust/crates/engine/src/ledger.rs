@@ -1269,6 +1269,38 @@ impl<'a, 'm> Matcher<'a, 'm> {
         self.out.beyond.push(Beyond { transaction: t.id.clone(), account, instrument, qty, read: StatedRead::Unstated });
     }
 
+    /// What `qty` units arriving on `day` cost, as Wealthsimple's positions read
+    /// states the holding (brief 79, amended 2026-10-28, point 5): its book value
+    /// less the cost of the lots held, never below nothing, from the read of the day
+    /// they arrived, or the day after where that day's does not state them yet (a
+    /// row dated at a transfer's start). A day not read yet leaves the cost waiting
+    /// on its read; an account no holdings are read of is none.
+    fn cost_stated(&self, account: AccountId, instrument: InstrumentId, qty: Dec, day: Date) -> Option<(Fig<Money>, StatedRead)> {
+        let stated = self.inputs.market.brokers.get(&account).filter(|b| !b.days_held.is_empty())?;
+        let currency = self.currency(instrument);
+        let lots: Vec<&Lot> = self.out.books.get(&(account, instrument)).map(|b| b.lots.iter().filter(|l| l.direction == Direction::Long).collect()).unwrap_or_default();
+        let held = lots.iter().try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty)).ok()?;
+        let cost = lots.iter().try_fold(Money::zero(currency), |a, l| l.value.clone().and_then(|v| Ok(a.checked_add(v)?)));
+        let read_on = |d: Date| stated.days_held.get(&d).map(|r| (d, r));
+        let holds = |r: &&crate::input::HeldDay| r.held.get(&instrument).is_some_and(|u| held.checked_add(qty).is_ok_and(|w| *u >= w));
+        let after = day.tomorrow().ok();
+        // the arrival's own day where its read states them; else the day after, read;
+        // else the first of the two not read yet (never a day read already)
+        let Some((day, read)) = read_on(day).filter(|(_, r)| holds(r)).or_else(|| after.and_then(read_on)) else {
+            let wait = if stated.days_held.contains_key(&day) { after.unwrap_or(day) } else { day };
+            return Some((Err(Gaps::of(Gap::HoldingsUnread(wait))), StatedRead::Unread(wait)));
+        };
+        let value: Fig<Money> = match (read.book.get(&instrument), cost) {
+            (Some(book), Ok(cost)) => crate::fx::convert(&self.inputs.facts.rates, &self.inputs.clock, Money::new(book.amount.abs(), book.currency), currency, day).and_then(|b| {
+                let left = b.checked_sub(cost.amount)?;
+                Ok(Money::new(if left.is_negative() { Dec::ZERO } else { left }, currency))
+            }),
+            (None, _) => Err(Gaps::of(Gap::BookUnstated(instrument))),
+            (_, Err(g)) => Err(g),
+        };
+        Some((value, StatedRead::Opened(day)))
+    }
+
     /// Units `tx` takes out of a holding beyond the journal's own lots of it, where
     /// Wealthsimple's positions read of the day before states them held (brief 79,
     /// amended 2026-10-28, point 5): every unit the read states that the lots do not
@@ -1756,20 +1788,32 @@ impl<'a, 'm> Matcher<'a, 'm> {
             // what the asset cost: the person's stated cost, else what the source
             // states it was worth as it arrived, else not on the record
             let stated = self.inputs.facts.adjustments.get(&t.id).and_then(|a| a.legs.iter().find(|l| l.from.is_none() && l.to == Some(instrument) && l.cost.is_some()).cloned());
+            let mut flags = BTreeSet::from([Flag::Deposited]);
             let (value, day) = match stated {
                 Some(leg) => (Ok(leg.cost.expect("filtered")), leg.acquired.unwrap_or(t.trade_date)),
                 None if self.inputs.facts.adjustments.in_conflict(&t.id) => (Err(Gaps::of(Gap::AdjustmentConflict(t.id.clone()))), t.trade_date),
                 None if t.value.is_some() => (Ok(t.value.expect("tested")), t.trade_date),
-                None => {
-                    self.out.waiting.insert(t.id.clone(), Waiting { what: Wanted::CostOfArrival, account, instrument, day: t.trade_date, units: Some(qty) });
-                    (Err(Gaps::of(Gap::BasisUnknown(t.id.clone()))), t.trade_date)
-                }
+                // units Wealthsimple's positions read states held: their cost is the
+                // read's book value for the holding less the lots' cost, never below
+                // nothing, and nothing is asked of the person (brief 79, amended
+                // 2026-10-28, point 5); the form only for an account no holdings are
+                // read of
+                None => match self.cost_stated(account, instrument, qty, t.trade_date) {
+                    Some((value, read)) => {
+                        self.out.beyond.push(Beyond { transaction: t.id.clone(), account, instrument, qty, read });
+                        flags.insert(Flag::Stated);
+                        (value, t.trade_date)
+                    }
+                    None => {
+                        self.out.waiting.insert(t.id.clone(), Waiting { what: Wanted::CostOfArrival, account, instrument, day: t.trade_date, units: Some(qty) });
+                        (Err(Gaps::of(Gap::BasisUnknown(t.id.clone()))), t.trade_date)
+                    }
+                },
             };
             let value = match value {
                 Ok(v) if v.currency != currency => Err(Gaps::of(Gap::CurrencyUnstated(t.id.clone()))),
                 v => v,
             };
-            let flags = BTreeSet::from([Flag::Deposited]);
             self.open_lot(account, instrument, &t.id, day, t.occurred_at, Direction::Long, qty, value, Money::zero(currency), flags, None);
             return;
         }

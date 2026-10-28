@@ -87,9 +87,10 @@ fn deposits_restated_in_another_currency_form_no_flow() {
 }
 
 /// A cash-only account stated in US dollars holds nothing the figures compare
-/// but its statement: when its live rate arrives, moves, or is found missing as
-/// the clock passes the Bank's publication, the account is reported moved, so
-/// the views that add it in CAD read it again.
+/// but its statement: when its live rate arrives or moves, the account is
+/// reported moved, so the views that add it in CAD read it again; the clock
+/// passing the Bank's publication with no rate read moves nothing, the last
+/// published rate standing (the owner, 2026-10-28: "Show nothing").
 #[test]
 fn a_live_rate_that_moves_reports_the_accounts_stated_in_that_currency() {
     use bagholder_engine::engine::{Change, Entity};
@@ -104,12 +105,12 @@ fn a_live_rate_that_moves_reports_the_accounts_stated_in_that_currency() {
     let a = b.ids.account("A");
     let mut e = Engine::build(b.inputs.clone());
     assert_eq!(e.holdings(&Filters::default()).net_value, Some(Ok(cad("10400"))));
-    // 17:00: the day's rate is due and not read, so the total waits on it
+    // 17:00: the day's rate is due and not read, and the day before's stands
     let mut clock = b.inputs.clock.clone();
     clock.now = "2026-03-04T22:00:00Z".parse().unwrap();
     let moved = e.apply(Change::Clock(clock));
-    assert!(moved.0.contains_key(&Entity::Broker(u)), "the rate became due: {moved:?}");
-    assert!(matches!(e.holdings(&Filters::default()).net_value, Some(Err(_))));
+    assert!(!moved.0.contains_key(&Entity::Broker(u)), "the rate became due: nothing moves: {moved:?}");
+    assert_eq!(e.holdings(&Filters::default()).net_value, Some(Ok(cad("10400"))));
     let mut rates = b.inputs.facts.rates.clone();
     rates.by_currency.get_mut(&Currency::USD).unwrap().insert("2026-03-04".parse().unwrap(), Dec::parse("1.5000").unwrap());
     let moved = e.apply(Change::Rates(rates));

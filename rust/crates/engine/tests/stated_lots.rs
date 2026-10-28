@@ -125,3 +125,22 @@ fn a_day_not_read_yet_holds_the_sale_waiting_until_it_is_read() {
     assert_eq!(realized(&e), [Some(d("300"))]);
     assert!(!e.needs().before_sales.contains(&day));
 }
+
+/// A transfer in that states no value, where Wealthsimple's positions read of its
+/// day states the units: they cost the read's book value, and nothing is asked
+/// of the person (the opening-balance form only for an account no holdings are
+/// read of).
+#[test]
+fn a_transfer_in_stating_no_value_costs_what_the_read_states_and_asks_nothing() {
+    let mut b = build(&book(
+        json!([
+            {"id": "t1", "account": "T", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "transfer-in", "instrument": "S", "qty": "100"},
+            {"id": "t2", "account": "T", "day": "2026-02-10", "at": "2026-02-10T15:00:00Z", "kind": "sell", "instrument": "S", "qty": "-100", "cash": "1500"}
+        ]),
+        json!({"2026-02-02": {"held": {"S": "100"}, "book": {"S": "1200.00 CAD"}}, "2026-02-09": {"held": {"S": "100"}, "book": {"S": "1200.00 CAD"}}}),
+    ));
+    let e = engine(&mut b);
+    assert!(e.figures().matched.waiting.is_empty(), "nothing asked of the person: {:?}", e.figures().matched.waiting);
+    assert_eq!(stated(&e), [(d("100"), Some(d("1200")))]);
+    assert_eq!(realized(&e), [Some(d("300"))]);
+}

@@ -85,8 +85,14 @@ pub fn rate(rates: &Rates, clock: &Clock, currency: Currency, day: Date) -> Fig<
             return Ok(*r);
         }
         if !not_published(rates, clock, currency, d) {
-            // the business day that governs `day`, without its rate
-            return Err(waiting(clock, currency, d));
+            // the business day that governs `day`, without its rate: one not due yet,
+            // or of a currency none of whose rates is read, waits on it; one due and
+            // not read yet takes the Bank's last published rate before it, with no
+            // sign (the owner, 2026-10-28: "Show nothing")
+            let due = published_by(clock, d).is_none_or(|at| clock.now >= at);
+            if !due || series.and_then(|s| s.range(..d).next_back()).is_none() {
+                return Err(waiting(clock, currency, d));
+            }
         }
         d = match d.yesterday() {
             Ok(y) => y,
@@ -123,28 +129,15 @@ pub fn to_cad(rates: &Rates, clock: &Clock, amount: Money, day: Date) -> Fig<Mon
 }
 
 /// The rate a live mark uses, and the day it is the Bank's rate for: the latest
-/// published, unless a business day's 16:30 has passed since without its rate.
+/// published, a business day's rate due and not read yet leaving it standing,
+/// with no sign (the owner, 2026-10-28: "Show nothing"). A currency none of
+/// whose rates is read waits on one.
 pub fn live_rate(rates: &Rates, clock: &Clock, currency: Currency) -> Fig<(Dec, Option<Date>)> {
     if currency == Currency::CAD {
         return Ok((Dec::ONE, None));
     }
     check_published(rates, currency, clock.today)?;
     let latest = rates.by_currency.get(&currency).and_then(|s| s.iter().next_back()).map(|(d, r)| (*d, *r));
-    // the latest business day whose rate should be out by now
-    let mut d = clock.today;
-    loop {
-        if latest.is_some_and(|(l, _)| d <= l) {
-            break;
-        }
-        let due = published_by(clock, d).is_some_and(|at| clock.now >= at);
-        if due && !not_published(rates, clock, currency, d) {
-            return Err(Gaps::of(Gap::RateMissing { currency, day: d }));
-        }
-        d = match d.yesterday() {
-            Ok(y) => y,
-            Err(_) => break,
-        };
-    }
     match latest {
         Some((day, r)) => Ok((r, Some(day))),
         None => Err(Gaps::of(Gap::RateMissing { currency, day: clock.today })),

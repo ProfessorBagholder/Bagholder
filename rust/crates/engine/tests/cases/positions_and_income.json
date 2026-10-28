@@ -243,7 +243,7 @@
     "working": [
       "written by an agent that had not read the engine, from SPEC.md and the design (2026-09-24)",
       "BTC: no quote; its last close is 2026-03-05's USD market close, 70000 USD, at that day's rate 1.40: 98000 CAD; market 0.5 × 98000 = 49000.00; book 50000; unrealized -1000.00",
-      "ETH: its last close is 2026-03-06's, 2000 USD; no read covered 2026-03-06 and its 16:30 has passed: rate-missing, and the fill price is never a market price"
+      "ETH: its last close is 2026-03-06's, 2000 USD; no read covered 2026-03-06 and its 16:30 has passed: the Bank's last published rate before it, 1.40 (amended 2026-10-28), 2 × 2000 × 1.40 = 5600; the fill price is never a market price"
     ],
     "today": "2026-03-09",
     "now": "2026-03-09T15:00:00Z",
@@ -260,7 +260,7 @@
     "expect": {
       "positions": [
         {"account": "A", "instrument": "BTC", "market": "49000.00", "unrealized": "-1000.00"},
-        {"account": "A", "instrument": "ETH", "market": {"gaps": ["rate-missing"]}}
+        {"account": "A", "instrument": "ETH", "market": "5600"}
       ]
     }
   },

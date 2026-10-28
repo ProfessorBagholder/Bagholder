@@ -10,7 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::{Currency, Dec, Money};
-use bagholder_engine::gap::Gap;
 use bagholder_engine::input::{Debt, Debts};
 use bagholder_engine::scope::{Filters, NetWorthDay};
 use bagholder_engine::Change;
@@ -137,21 +136,15 @@ fn todays_point_is_the_tiles() {
 /// account was stated for not stored) keeps its point, waiting on that rate, and
 /// so does every day that statement is held; the days around it are stated.
 #[test]
-fn a_day_waiting_on_a_rate_keeps_its_point_and_says_why() {
+fn a_day_whose_rate_is_not_read_keeps_its_point_at_the_last_published_rate() {
+    // the owner, 2026-10-28, on an old rate: "Show nothing" (brief 79 amended)
     let mut c = case();
     c["rates"]["USD"].as_object_mut().unwrap().remove("2026-10-13");
     let (_, e) = engine_of(&c);
     let days = e.scope(&Filters::default()).portfolio.net_worth_history;
     assert_eq!(days.len(), 16, "no day vanishes");
-    let gap = Gap::RateMissing { currency: Currency::USD, day: day("2026-10-13") };
     for n in &days {
-        let waiting = (day("2026-10-13")..=day("2026-10-19")).contains(&n.day);
-        assert_eq!(n.assets.is_err(), waiting, "{}", n.day);
-        if waiting {
-            assert!(n.assets.clone().unwrap_err().contains(&gap), "{}: {:?}", n.day, n.assets);
-            assert!(n.net().unwrap_err().contains(&gap));
-            assert_eq!(n.debts.clone().unwrap(), cad("5000"), "what is owed is still stated");
-        }
+        assert!(n.assets.is_ok() && n.net().is_ok(), "{}: nothing waits on a rate the Bank published before: {:?}", n.day, n.assets);
     }
 }
 

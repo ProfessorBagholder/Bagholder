@@ -17,7 +17,7 @@
   <a id="principles-4"></a>A figure that needs a schedule no source states waits on it, named.
 - <a id="principles-5"></a>**Currency.** Every figure that belongs to one trade, position, fill or distribution is in that instrument's own currency, with no prefix and no conversion.
   <a id="principles-6"></a>Every figure that adds trades or distributions together is in CAD, converted on the date of each fill or payment with the Bank of Canada's rate for that currency (every currency the Bank publishes; the previous business day's on a weekend or holiday); a value held today uses the Bank's latest published rate.
-  <a id="principles-7"></a>The rate's date is shown nowhere; a Bank not read past 16:30 on a business day is a failed source, asked again at its next turn and written to the log, never said on the page, as no market source's failure is (§4, pages-43), and a figure that needs that day's rate waits on it (`— rate`).
+  <a id="principles-7"></a>The rate's date is shown nowhere; a Bank not read past 16:30 on a business day is a failed source, asked again at its next turn and written to the log, never said on the page, as no market source's failure is (§4, pages-43), and a figure that needs that day's rate takes the Bank's last published rate before it, with no sign (the owner, 2026-10-28, on an old rate: "Show nothing"); a currency none of whose rates is read waits on one (`— rate`), and before 16:30 a day's own rate is not due and waits (`— rate`) too.
 - <a id="principles-8"></a>**Time.** Times of day are in the viewer's local time; days, months, years and "today" are in the zone of the browser in use.
   <a id="principles-9"></a>Each page states its zone when it opens; the server uses the latest zone stated and keeps it for when no page is open.
   <a id="principles-10"></a>A date a source states as a date (ex, record and pay dates, a daily value's day, a close's session) is never converted through a zone; only moments are.
@@ -109,7 +109,7 @@
 
 <a id="what-you-enter-1"></a>Two facts no feed carries are yours to state, each from its own record, as trackers such as Sharesight take them:
 
-- <a id="what-you-enter-2"></a>**The cost of units that arrived.** Units moved in from another broker or a wallet cost what the source states they were worth as they arrived, where it states it; that is not always what they cost you.
+- <a id="what-you-enter-2"></a>**The cost of units that arrived.** Units moved in from another broker or a wallet cost what the source states they were worth as they arrived, where it states it; that is not always what they cost you. Where it states none, they cost what Wealthsimple's positions read of the day they arrived (or the day after, where that day's does not state them yet) states the holding's book value to be, less the cost of the lots held, never below zero, and nothing is asked (§2, trade-67); a day not read yet waits on its read. The form below is asked only for an account no holdings are read of.
   <a id="what-you-enter-3"></a>You can state what they cost you, in total in the instrument's currency, and the day you acquired them; they become the holding's lot at that cost and day.
   <a id="what-you-enter-4"></a>Entered in Add trade as an opening balance, against the arrival it prices.
 

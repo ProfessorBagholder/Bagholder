@@ -140,12 +140,13 @@ mod tests {
         b.net_value.insert(day(2), usd("110"));
         b.net_deposits.insert(day(1), usd("100"));
         b.net_deposits.insert(day(2), usd("110"));
-        // a day whose rate is not published forms no point and says so
+        // a day whose rate is due and not read takes the Bank's last published
+        // rate, with no sign (the owner, 2026-10-28: "Show nothing")
         b.net_value.insert(day(3), usd("120"));
         let e = account_equity(AccountId::parse("00000000-0000-4000-8000-000000000001").unwrap(), &b, &rates, &clock());
-        assert_eq!(e.points.iter().map(|p| (p.value, p.flow)).collect::<Vec<_>>(), vec![(d("130.00"), None), (d("154.00"), Some(d("14.00")))]);
+        assert_eq!(e.points.iter().map(|p| (p.value, p.flow)).collect::<Vec<_>>(), vec![(d("130.00"), None), (d("154.00"), Some(d("14.00"))), (d("168.00"), None)]);
         // 130 CAD, 14 CAD put in, 154 CAD: a tenth, the rate's rise in it
-        assert_eq!(e.returns.len(), 1);
-        assert!(!e.gaps.is_empty(), "the day without its rate is said");
+        assert_eq!(e.returns.len(), 1, "a day stating no deposits forms no return");
+        assert!(e.gaps.is_empty(), "nothing waits on a rate the Bank published before");
     }
 }

@@ -166,6 +166,11 @@ mod tests {
         assert_eq!(crate::status::synced(&st), "2026-10-28T08:15:00Z", "the balances' last answer");
         after_balances(&mut st, &[], at("2026-10-28T09:10:00Z"));
         assert_eq!(crate::status::synced(&st), "2026-10-28T09:00:00Z", "answering again: the pull's time");
+        // a pull of the activity alone, hours after the day's pull: every read
+        // answering, "Synced" is that pull's, never the day's pull's older answer
+        after_pull(&mut st, &[], false, at("2026-10-28T15:00:00Z"));
+        after_balances(&mut st, &[], at("2026-10-28T15:05:00Z"));
+        assert_eq!(crate::status::synced(&st), "2026-10-28T15:00:00Z", "the reads made once a day do not age it while they answer");
     }
 
     /// Every sentence the page is given about Wealthsimple is one of the two plain
