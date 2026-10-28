@@ -30,7 +30,7 @@ pub struct FactNeeds {
     pub held: BTreeSet<InstrumentId>,
     /// Each past day whose positions read a figure reads and the book does not
     /// hold for every account (brief 79 §2.4): a day a screen shows, and each day
-    /// the net worth history needs a margin account's cash of.
+    /// the net worth history needs an account's cash of.
     pub holdings_on: BTreeSet<Date>,
     /// Each security held now: its distributions and schedule are read.
     pub payers: BTreeSet<InstrumentId>,

@@ -117,17 +117,21 @@ fn with_no_debt_nothing_is_owed() {
 
 /// Each day's debts are counted as today's are: what is owed outside as last
 /// stated on or before that day, and what a margin account had borrowed at that
-/// day's close, worked back from the cash the broker states now through its
-/// transactions; the margin is held too, so a
-/// day's net worth is the accounts' stated value less what is owed outside.
+/// day's close, as the positions read as of that day states its cash (brief 79
+/// §2.4); the margin is held too, so a day's net worth is the accounts' stated
+/// value less what is owed outside.
 #[test]
 fn each_days_debts_are_the_outside_debts_and_the_margin_borrowed_at_its_close() {
     let text = std::fs::read_to_string(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/book.json")).unwrap();
     let mut case: Value = serde_json::from_str(&text).unwrap();
     // a withdrawal that takes the margin account below zero
     case["transactions"].as_array_mut().unwrap().push(serde_json::json!({"id": "w9", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "withdrawal", "cash": "-6000"}));
-    // and the broker states the cash it leaves, which each day's is worked back from
+    // and the broker states the cash it leaves, now and in the positions read as of
+    // each day from its first stated value
     case["brokers"]["A"]["cash"] = serde_json::json!({"CAD": "-2100", "USD": "-745"});
+    for d in ["2026-04-17", "2026-04-18", "2026-04-19"] {
+        case["brokers"]["A"]["days_held"][d] = serde_json::json!({"cash": {"CAD": "-2100", "USD": "-745"}});
+    }
     let mut b = build(&case);
     let mut e = engine(&mut b);
     let day = |s: &str| s.parse::<bagholder_core::jiff::civil::Date>().unwrap();

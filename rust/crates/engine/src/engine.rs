@@ -631,15 +631,27 @@ impl Engine {
                 n.holdings_on.insert(p.day);
             }
         }
-        // each day the net worth history needs a margin account's cash of: from
-        // its first stated value to yesterday
+        // each day the net worth history needs an account's cash of, a card's aside
+        // (its balance is worked back): from its first stated value to yesterday, or
+        // to its last where it closed
         let today = self.inputs.clock.today;
+        // the history's first day, from which an account no value of is stated counts
+        let first = brokers.values().filter_map(|b| b.net_value.keys().next().copied()).min();
         for (a, b) in brokers {
-            if !self.inputs.ledger.accounts.get(a).is_some_and(crate::scope::is_margin) {
+            let Some(info) = self.inputs.ledger.accounts.get(a) else { continue };
+            if matches!(info.account.account_type, bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::CreditCard | bagholder_core::account::AccountKind::LineOfCredit, .. }) {
                 continue;
             }
-            let Some(mut day) = b.net_value.keys().next().copied() else { continue };
-            while day < today {
+            let open = info.account.status == bagholder_core::account::AccountStatus::Open;
+            let (mut day, end) = match (b.net_value.keys().next().copied(), b.net_value.keys().next_back().copied()) {
+                (Some(f), Some(last)) => (f, if open { today } else { last.tomorrow().unwrap_or(today).min(today) }),
+                // no value of it stated: counted while open where its cash is stated
+                _ => match first {
+                    Some(f) if open && b.as_of.is_some() => (f, today),
+                    _ => continue,
+                },
+            };
+            while day < end {
                 if !b.days_held.contains_key(&day) {
                     n.holdings_on.insert(day);
                 }

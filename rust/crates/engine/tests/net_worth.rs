@@ -26,9 +26,9 @@ fn cad(s: &str) -> Money {
 }
 
 /// Two open accounts stated on different days, one in US dollars; a closed
-/// account; a home stated twice and a line of credit stated once. The margin
-/// account's positions read states its cash on each day from its first stated
-/// value (brief 79 §2.4): what it owes on each is that read's.
+/// account; a home stated twice and a line of credit stated once. Each account's
+/// positions read states its cash on each day from its first stated value (brief
+/// 79 §2.4): what it owes on each is that read's.
 fn case() -> Value {
     let mut c = json!({
         "name": "net worth by day",
@@ -45,10 +45,12 @@ fn case() -> Value {
         },
         "transactions": []
     });
-    let mut d = day("2026-10-05");
-    while d < day("2026-10-20") {
-        c["brokers"]["A"]["days_held"][d.to_string()] = json!({"cash": {"CAD": "1350"}});
-        d = d.tomorrow().unwrap();
+    for (a, cash, from, to) in [("A", json!({"CAD": "1350"}), "2026-10-05", "2026-10-20"), ("B", json!({"USD": "120"}), "2026-10-06", "2026-10-20"), ("Z", json!({}), "2026-10-05", "2026-10-09")] {
+        let mut d = day(from);
+        while d < day(to) {
+            c["brokers"][a]["days_held"][d.to_string()] = json!({ "cash": cash });
+            d = d.tomorrow().unwrap();
+        }
     }
     c
 }
@@ -303,7 +305,9 @@ fn yesterday_meets_today_when_nothing_moves() {
 
 /// A card's balance owed by day is its statements', from a balance carried in
 /// from before the first transaction read: worked back from what the broker
-/// states now, never summed up from nothing. Each generated card opens owing a
+/// states now, never summed up from nothing. It is the one past figure still
+/// worked back: no read of Wealthsimple's states a card's past balance (brief 79
+/// §2.4; the Architect, 2026-10-27); every other account's is its positions read. Each generated card opens owing a
 /// balance no transaction holds, then is charged and paid on some days; another
 /// account, stated from the first day, makes every day a point.
 #[test]
@@ -326,6 +330,13 @@ fn a_cards_balance_owed_by_day_is_its_statements() {
             statements.insert(d, balance);
             d = d.tomorrow().unwrap();
         }
+        // the other account's positions read of each day
+        let mut held_days = json!({});
+        let mut h = day("2026-10-01");
+        while h < day("2026-10-20") {
+            held_days[h.to_string()] = json!({"cash": {"CAD": "100"}});
+            h = h.tomorrow().unwrap();
+        }
         let c = json!({
             "name": "a card's balance by day",
             "today": "2026-10-20",
@@ -333,7 +344,7 @@ fn a_cards_balance_owed_by_day_is_its_statements() {
             "accounts": [{"id": "A"}, {"id": "K", "kind": "credit-card"}],
             "instruments": [],
             "brokers": {
-                "A": {"cash": {"CAD": "100"}, "net_value": {"2026-10-01": "100"}, "now": "100", "as_of": "2026-10-20T15:00:00Z"},
+                "A": {"cash": {"CAD": "100"}, "net_value": {"2026-10-01": "100"}, "now": "100", "as_of": "2026-10-20T15:00:00Z", "days_held": held_days.clone()},
                 "K": {"cash": {"CAD": balance.to_text()}, "as_of": "2026-10-20T15:00:00Z"}
             },
             "transactions": transactions,

@@ -1047,10 +1047,13 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
         .values()
         .filter(|a| whole || in_scope.contains(&a.account.id))
         .filter_map(|a| {
-            let v = &inputs.market.brokers.get(&a.account.id)?.net_value;
+            let b = inputs.market.brokers.get(&a.account.id)?;
+            let v = &b.net_value;
             let values = match v.keys().next_back() {
                 Some(last) => Some(Stated { first: v.keys().next().copied(), days: v.iter().peekable(), held: None, until: (a.account.status != AccountStatus::Open).then_some(*last) }),
-                None if a.account.status == AccountStatus::Open => None,
+                // one whose value is never stated counts while it is open, where its
+                // broker states its cash
+                None if a.account.status == AccountStatus::Open && b.as_of.is_some() => None,
                 None => return None,
             };
             Some(Account { id: a.account.id, kind: kind_of(a), values })
@@ -1120,12 +1123,12 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
                 balance(a.kind, a.values.is_none(), *c, v, day, &mut parts[at]);
             }
             // every other account's cash as the positions read as of that day states
-            // it, where it is needed: an account that can borrow, from its first stated
-            // value, and one whose value is never stated; one that cannot borrow owes
-            // nothing, and its stated value is what it holds
+            // it, from its first stated value to its last where it closed: what it
+            // owes below zero (as today's counts it, whatever its kind), and what it
+            // holds where no value of it is stated
             for (at, a) in accounts.iter().enumerate() {
-                let margin = a.kind == Some(AccountKind::Margin);
-                if is_card(a.kind) || (!margin && a.values.is_some()) || a.values.as_ref().is_some_and(|s| s.first.is_some_and(|f| day < f)) {
+                let outside_its_days = a.values.as_ref().is_some_and(|s| s.first.is_some_and(|f| day < f) || s.until.is_some_and(|u| day > u));
+                if is_card(a.kind) || outside_its_days {
                     continue;
                 }
                 match inputs.market.brokers.get(&a.id).and_then(|b| b.days_held.get(&day)) {
