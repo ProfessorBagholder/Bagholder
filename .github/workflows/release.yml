@@ -35,23 +35,14 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
+      # a version changed with no draft release written for it, or one that cannot
+      # be read, fails the run (bin/release-which.sh, held by its test in tests.yml)
       - id: which
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           BEFORE: ${{ github.event.before }}
           ASKED: ${{ github.event.inputs.tag }}
-        run: |
-          if [ -n "$ASKED" ]; then echo "tag=$ASKED" >> "$GITHUB_OUTPUT"; exit 0; fi
-          version() { git show "$1:rust/crates/server/src/app.rs" 2>/dev/null | sed -n 's/^pub const APP_VERSION: &str = "\(.*\)";$/\1/p'; }
-          now="$(version "$GITHUB_SHA")"
-          was="$(version "$BEFORE")"
-          if [ -z "$now" ] || [ "$now" = "$was" ]; then echo "the version stays $now: no release"; exit 0; fi
-          if [ "$(gh release view "v$now" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null)" = "true" ]; then
-            echo "v$now: this merge publishes its draft release"
-            echo "tag=v$now" >> "$GITHUB_OUTPUT"
-          else
-            echo "the version is now $now and no draft release v$now is written: no release"
-          fi
+        run: sh bin/release-which.sh
 
   rust:
     needs: release

@@ -55,6 +55,10 @@ jobs:
       # cache (`server/tests/start_failures.rs`)
       - name: strace
         run: sudo apt-get update && sudo apt-get install -y strace
+      # which release a merge makes (release.yml's first step), over every case, with
+      # `gh` stood in: it cannot be proven before a release
+      - name: The release decision
+        run: sh bin/release-which.test.sh
       # cargo-nextest runs each test in a process of its own, as many at once as the
       # runner has cores: the suite's tests no longer wait in line on one shared lock
       - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
