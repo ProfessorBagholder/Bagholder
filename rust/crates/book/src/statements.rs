@@ -52,6 +52,8 @@ pub struct HeldOn {
 pub struct Stated {
     /// Each day's value and net deposits, from the newest read of the day.
     pub days: BTreeMap<jiff::civil::Date, (Money, Money)>,
+    /// Each day a positions read was asked as of, what it states (`units_days`).
+    pub days_held: BTreeMap<jiff::civil::Date, HeldOn>,
     /// The newest statement of cash, and when it was stated.
     pub cash: Option<(jiff::Timestamp, BTreeMap<Currency, Dec>)>,
     /// The newest statement of cash made at or before the last full read of the
@@ -558,22 +560,22 @@ impl Book {
         Ok(Some((out, self.statement_cash(&id)?)))
     }
 
-    /// Every day before `before` an account's units were stated as of, each from
-    /// the newest statement of that day: its units and book value of each
-    /// instrument (under the instrument the book reads it as, the units of
+    /// Every day from `from` and before `before` an account's units were stated
+    /// as of, each from the newest statement of that day: its units and book value
+    /// of each instrument (under the instrument the book reads it as, the units of
     /// instruments read as one added up) and its cash (brief 79 §2.4).
-    pub fn units_days(&self, account: AccountId, before: jiff::civil::Date) -> Result<BTreeMap<jiff::civil::Date, HeldOn>> {
+    pub fn units_days(&self, account: AccountId, from: jiff::civil::Date, before: jiff::civil::Date) -> Result<BTreeMap<jiff::civil::Date, HeldOn>> {
         let a = account.to_string();
-        let newest = "s.account_id = ?1 AND s.kind = 'units' AND s.as_of_day < ?2 AND s.rowid = (SELECT max(n.rowid) FROM statements n WHERE n.account_id = s.account_id AND n.kind = 'units' AND n.as_of_day = s.as_of_day)";
+        let newest = "s.account_id = ?1 AND s.kind = 'units' AND s.as_of_day >= ?3 AND s.as_of_day < ?2 AND s.rowid = (SELECT max(n.rowid) FROM statements n WHERE n.account_id = s.account_id AND n.kind = 'units' AND n.as_of_day = s.as_of_day)";
         let mut out: BTreeMap<jiff::civil::Date, HeldOn> = BTreeMap::new();
         let mut st = self.conn().prepare(&format!("SELECT s.as_of_day FROM statements s WHERE {newest}"))?;
-        for d in st.query_map(params![a, day(before)], |r| r.get::<_, String>(0))? {
+        for d in st.query_map(params![a, day(before), day(from)], |r| r.get::<_, String>(0))? {
             out.insert(text::date("statements", "as_of_day", &d?)?, HeldOn::default());
         }
         let mut heads: BTreeMap<InstrumentId, InstrumentId> = BTreeMap::new();
         let mut st = self.conn().prepare(&format!("SELECT s.as_of_day, u.instrument_id, u.quantity, u.book_value, u.book_value_currency FROM statements s JOIN statement_units u ON u.statement_id = s.id WHERE {newest}"))?;
         type Line = (String, String, String, Option<String>, Option<String>);
-        let rows: Vec<Line> = st.query_map(params![a, day(before)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
+        let rows: Vec<Line> = st.query_map(params![a, day(before), day(from)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
         for (d, i, q, b, bc) in rows {
             let held = out.entry(text::date("statements", "as_of_day", &d)?).or_default();
             let i = text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?;
@@ -595,7 +597,7 @@ impl Book {
             };
         }
         let mut st = self.conn().prepare(&format!("SELECT s.as_of_day, c.currency, c.amount FROM statements s JOIN statement_cash c ON c.statement_id = s.id WHERE {newest}"))?;
-        let rows: Vec<(String, String, String)> = st.query_map(params![a, day(before)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        let rows: Vec<(String, String, String)> = st.query_map(params![a, day(before), day(from)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
         for (d, c, v) in rows {
             out.entry(text::date("statements", "as_of_day", &d)?).or_default().cash.insert(text::currency("statement_cash", "currency", &c)?, text::dec("statement_cash", "amount", &v)?);
         }
@@ -691,7 +693,7 @@ impl Book {
 
     /// What the broker last stated about `account`, with every day of its history.
     pub fn stated(&self, account: AccountId) -> Result<Stated> {
-        Ok(Stated { days: self.stated_days(account)?, ..self.stated_latest(account)? })
+        Ok(Stated { days: self.stated_days(account)?, days_held: self.units_days(account, jiff::civil::Date::MIN, jiff::civil::Date::MAX)?, ..self.stated_latest(account)? })
     }
 
     /// Each day's value and net deposits of `account`, from the newest read of the day.

@@ -58,6 +58,9 @@ pub enum Gap {
     PriceUnknown(InstrumentId),
     /// A holding whose book value its broker's positions read does not state.
     BookUnstated(InstrumentId),
+    /// A past day whose positions read is not read yet: its holdings and cash
+    /// are what that read states (brief 79 §2.4), read while a page shows the day.
+    HoldingsUnread(Date),
     /// A holding with no close on a day the equity series needs one.
     /// A payer whose own record of its distributions and schedule has not been
     /// read: its payer's page or announcement is what the figure waits on.
@@ -110,6 +113,7 @@ impl Gap {
             Gap::ValueUnstated(_) => "value-unstated",
             Gap::PriceUnknown(_) => "price-unknown",
             Gap::BookUnstated(_) => "book-unstated",
+            Gap::HoldingsUnread(_) => "holdings-unread",
             Gap::PayerNotRead(_) => "payer-not-read",
             Gap::NoDistributionYet(_) => "no-distribution-yet",
             Gap::ScheduleUnstated(_) => "schedule-unstated",
@@ -143,6 +147,7 @@ impl fmt::Display for Gap {
             Gap::ValueUnstated(t) => write!(f, "{t} states neither its cash nor its price"),
             Gap::PriceUnknown(i) => write!(f, "{i} has no price"),
             Gap::BookUnstated(i) => write!(f, "the broker states no book value for {i}"),
+            Gap::HoldingsUnread(d) => write!(f, "the holdings as of {d} are not read yet"),
             Gap::PayerNotRead(i) => write!(f, "the record {i}'s payer publishes of its distributions has not been read"),
             Gap::NoDistributionYet(i) => write!(f, "{i}'s payer states no cash distribution gone ex yet"),
             Gap::ScheduleUnstated(i) => write!(f, "no source that can be read states how often {i} pays"),

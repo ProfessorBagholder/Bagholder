@@ -947,6 +947,24 @@ fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Conn
     Ok(cash_of)
 }
 
+/// Every account's holdings as of a past day, read in one request, for a past day
+/// a page shows or the net worth history needs (brief 79 §2.4): the broker's ids
+/// behind each of the connection's accounts, closed ones too, as the book knows
+/// them, with nothing else asked. The accounts stored, and what failed.
+pub fn holdings_as_of(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, day: jiff::civil::Date, now: jiff::Timestamp) -> Result<(Vec<AccountId>, Vec<(String, Failure)>)> {
+    let broker = adapter.broker();
+    let mut accounts = Vec::new();
+    for a in book.accounts()?.into_iter().filter(|a| a.connection == connection) {
+        let keys: Vec<String> = book.account_refs(a.id)?.into_iter().filter(|r| r.broker == broker).map(|r| r.value).collect();
+        if !keys.is_empty() {
+            accounts.push((a.id, keys));
+        }
+    }
+    let mut failures = Vec::new();
+    let stored = store_holdings(book, adapter, connection, &accounts, day, now, &mut failures)?;
+    Ok((stored.into_keys().collect(), failures))
+}
+
 /// Whether two statements of an account's holdings state the same units and
 /// book value of each instrument: what a holding shows (a worth moves with every
 /// price, and is not what a holding shows).

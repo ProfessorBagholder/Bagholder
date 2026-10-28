@@ -11,11 +11,10 @@ use bagholder_core::jiff::civil::Date;
 use bagholder_core::journal::{JournalEntry, JournalSubject};
 use bagholder_core::{AccountId, Currency, Dec, InstrumentId, Money, Rounding, TradeId, TransactionId};
 
-use crate::fx::live_to_cad;
 use crate::gap::{Fig, Gap, Gaps};
 use crate::identity::Identity;
 use crate::input::{Clock, Inputs, Market, QuoteSource, Rates};
-use crate::ledger::{multiplier, Direction, Lot, Matched, TripKey};
+use crate::ledger::{Direction, Lot, Matched, TripKey};
 use crate::trades::PRICE_PLACES;
 
 /// Where a position's price comes from.
@@ -156,16 +155,16 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
     if let Some(i) = only {
         held.retain(|h| h.instrument == i);
     }
-    held.into_iter().map(|h| linked(inputs, matched, identity, h)).collect()
+    held.into_iter().map(|h| linked(inputs, Some(matched), Some(identity), h)).collect()
 }
 
 /// A holding with the journal's round trips open in it the same way: the trade
 /// of its first lot, that trade's journal entry, the lots' fills and flags, when
-/// they were opened and the fees they paid. A holding the journal holds no lot of
-/// has none of them.
-fn linked(inputs: &Inputs, matched: &Matched, identity: &Identity, h: crate::stated::Holding) -> PositionFig {
+/// they were opened and the fees they paid. A holding the journal holds no lot of,
+/// or one of a past day (no journal given), has none of them.
+pub(crate) fn linked(inputs: &Inputs, matched: Option<&Matched>, identity: Option<&Identity>, h: crate::stated::Holding) -> PositionFig {
     let today = inputs.clock.today;
-    let lots: Vec<Lot> = matched.books.get(&(h.account, h.instrument)).map(|b| b.lots.iter().filter(|l| l.direction == h.direction).cloned().collect()).unwrap_or_default();
+    let lots: Vec<Lot> = matched.and_then(|m| m.books.get(&(h.account, h.instrument))).map(|b| b.lots.iter().filter(|l| l.direction == h.direction).cloned().collect()).unwrap_or_default();
     let key = lots.first().map(|l| l.trip.clone());
     let mut trips: Vec<TripKey> = Vec::new();
     for l in &lots {
@@ -173,12 +172,12 @@ fn linked(inputs: &Inputs, matched: &Matched, identity: &Identity, h: crate::sta
             trips.push(l.trip.clone());
         }
     }
-    let trade = key.as_ref().and_then(|k| identity.trade_of.get(k).copied());
+    let trade = key.as_ref().and_then(|k| identity?.trade_of.get(k).copied());
     let journal = trade.and_then(|t| inputs.ledger.journal.get(&JournalSubject::Trade(t)).cloned()).unwrap_or_default();
     let mut fills = BTreeSet::new();
     let mut flags = BTreeSet::new();
     for l in &lots {
-        if let Some(t) = matched.trips.get(&l.trip) {
+        if let Some(t) = matched.and_then(|m| m.trips.get(&l.trip)) {
             fills.extend(t.fills.iter().cloned());
         }
         flags.extend(l.flags.iter().map(|f| f.word()));
@@ -221,161 +220,4 @@ fn linked(inputs: &Inputs, matched: &Matched, identity: &Identity, h: crate::sta
         flags,
         journal,
     }
-}
-
-/// The positions as of a past day, from a match of the ledger to that day
-/// (`crate::engine::Past`), marked at that day's close and rate.
-pub fn build_past_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, day: Date) -> Vec<PositionFig> {
-    let only: Option<InstrumentId> = None;
-    let as_of = Some(day);
-    let today = inputs.clock.today;
-    let rates = &inputs.facts.rates;
-    let clock = &inputs.clock;
-    let mut out = Vec::new();
-    // one instrument's books found by the accounts holding it, not by a pass over every book
-    let books: Vec<(&(bagholder_core::AccountId, InstrumentId), &crate::ledger::Book)> = match only {
-        Some(i) => matched.held_by.get(&i).into_iter().flatten().filter_map(|a| matched.books.get_key_value(&(*a, i))).collect(),
-        None => matched.books.iter().collect(),
-    };
-    for ((account, instrument), book) in books {
-        for direction in [Direction::Long, Direction::Short] {
-            let lots: Vec<Lot> = book.lots.iter().filter(|l| l.direction == direction).cloned().collect();
-            let Some(first) = lots.first() else { continue };
-            let info = inputs.ledger.instruments.get(instrument);
-            let kind = info.map(|i| i.instrument.kind).unwrap_or(InstrumentKind::Security);
-            let currency = info.map(|i| i.instrument.currency).unwrap_or(Currency::CAD);
-            let mult = multiplier(info, *instrument);
-            let qty: Fig<Dec> = lots.iter().try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty)).map_err(Gaps::from);
-            let fees: Fig<Money> = lots.iter().try_fold(Money::zero(currency), |a, l| a.add_to_fit(l.fee)).map_err(Gaps::from);
-            let taint = book.taint.clone();
-            let with_taint = |f: Fig<Money>| -> Fig<Money> {
-                if taint.is_empty() {
-                    f
-                } else {
-                    let mut g = taint.clone();
-                    if let Err(e) = &f {
-                        g.merge(e);
-                    }
-                    Err(g)
-                }
-            };
-            let cost = book.basis.get(&direction).map(|b| b.cost.clone()).unwrap_or(Ok(Money::zero(currency)));
-            let book_value = with_taint(cost);
-            let units: Fig<Dec> = crate::gap::both(qty.clone(), mult.clone(), |q, m| Ok(q.checked_mul(m)?));
-            let avg = match (&book_value, &units) {
-                (Ok(b), Ok(u)) if !u.is_zero() => b.amount.div_rounded(*u, PRICE_PLACES, Rounding::HalfEven).map_err(Gaps::from),
-                (Ok(_), Ok(_)) => Ok(Dec::ZERO),
-                (Err(g), _) | (_, Err(g)) => Err(g.clone()),
-            };
-            let mark = match as_of {
-                Some(day) => close_mark(inputs, *instrument, currency, day),
-                None => mark_of(inputs, *instrument, kind, currency),
-            };
-            let market = match (&mark, &units) {
-                (Ok(m), Ok(u)) => with_taint(m.price.mul_to_fit(*u).map(|v| Money::new(v, currency)).map_err(Gaps::from)),
-                (Err(g), _) | (_, Err(g)) => Err(g.clone()),
-            };
-            let unrealized = match (&market, &book_value) {
-                (Ok(mk), Ok(bk)) => match direction {
-                    Direction::Long => mk.checked_sub(*bk).map_err(Gaps::from),
-                    Direction::Short => bk.checked_sub(*mk).map_err(Gaps::from),
-                },
-                (Err(g), Ok(_)) | (Ok(_), Err(g)) => Err(g.clone()),
-                (Err(a), Err(b)) => {
-                    let mut g = a.clone();
-                    g.merge(b);
-                    Err(g)
-                }
-            };
-            let day_change: Fig<Option<Money>> = match (&mark, &units) {
-                (Ok(m), Ok(u)) => match m.change.map(|c| c.mul_to_fit(*u)) {
-                    Some(Ok(v)) => {
-                        let v = if direction == Direction::Short { v.neg() } else { v };
-                        if taint.is_empty() {
-                            Ok(Some(Money::new(v, currency)))
-                        } else {
-                            Err(taint.clone())
-                        }
-                    }
-                    Some(Err(e)) => Err(Gaps::from(e)),
-                    None => Ok(None),
-                },
-                (Err(g), _) | (_, Err(g)) => Err(g.clone()),
-            };
-            let to_cad = |m: Money| match as_of {
-                Some(day) => crate::fx::to_cad(rates, clock, m, day),
-                None => live_to_cad(rates, clock, m),
-            };
-            let cad = |f: &Fig<Money>| f.clone().and_then(to_cad);
-            let day_change_cad = match &day_change {
-                Ok(Some(m)) => to_cad(*m).map(Some),
-                Ok(None) => Ok(None),
-                Err(g) => Err(g.clone()),
-            };
-            // quantity-weighted days held
-            let held_days: Fig<i64> = qty.clone().and_then(|q| {
-                let weighted = lots.iter().try_fold(Dec::ZERO, |a, l| a.add_to_fit(l.qty.checked_mul(Dec::from_int((today - l.day).get_days() as i64))?))?;
-                Ok(weighted.div_rounded(q, 0, Rounding::HalfEven)?.to_int()?)
-            });
-            let key = first.trip.clone();
-            let mut trips: Vec<TripKey> = Vec::new();
-            for l in &lots {
-                if !trips.contains(&l.trip) {
-                    trips.push(l.trip.clone());
-                }
-            }
-            let trade = identity.trade_of.get(&key).copied();
-            let journal = trade.and_then(|t| inputs.ledger.journal.get(&JournalSubject::Trade(t)).cloned()).unwrap_or_default();
-            let mut fills = BTreeSet::new();
-            let mut flags = BTreeSet::new();
-            for l in &lots {
-                if let Some(t) = matched.trips.get(&l.trip) {
-                    fills.extend(t.fills.iter().cloned());
-                }
-                flags.extend(l.flags.iter().map(|f| f.word()));
-            }
-            let mut gaps = taint.clone();
-            if let Err(g) = &qty {
-                gaps.merge(g);
-            }
-            for f in [&book_value, &market] {
-                if let Err(g) = f {
-                    gaps.merge(g);
-                }
-            }
-            out.push(PositionFig {
-                key: Some(key),
-                trade,
-                trips,
-                account: *account,
-                instrument: *instrument,
-                kind,
-                currency,
-                direction,
-                qty,
-                multiplier: mult,
-                book_cad: cad(&book_value),
-                market_cad: cad(&market),
-                unrealized_cad: cad(&unrealized),
-                book: book_value,
-                book_currency: currency,
-                fees,
-                avg,
-                mark,
-                market,
-                unrealized,
-                day_change,
-                day_change_cad,
-                held_days: Some(held_days),
-                opened_on: lots.iter().map(|l| l.day).min(),
-                fills,
-                gaps,
-                flags,
-                journal,
-                // what the broker holds now says nothing of a past day
-                lots,
-            });
-        }
-    }
-    out
 }

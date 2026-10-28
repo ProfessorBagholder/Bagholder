@@ -788,11 +788,26 @@ pub struct BrokerAccount {
     /// The day the broker states `held` as of: today, read with the balances
     /// (`docs/plans/every-amount-as-wealthsimple-states-it.md` §2.1).
     pub held_as_of: Option<Date>,
+    /// Each past day a positions read was asked as of, what it states: a past
+    /// day's holdings and cash are these, never worked back from the history
+    /// (§2.4).
+    pub days_held: BTreeMap<Date, HeldDay>,
     /// What it can borrow, as the broker states it, or why it cannot say.
     pub buying_power: Option<Result<Money, String>>,
     /// A margin account's yearly interest rate on what it borrows, per
     /// currency, as a fraction: the currencies the broker states one in.
     pub margin_rates: BTreeMap<Currency, Dec>,
+}
+
+/// What one positions read states an account held as of a past day.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeldDay {
+    /// Units per instrument, a short's negative.
+    pub held: BTreeMap<InstrumentId, Dec>,
+    /// What those units cost, where the read states it.
+    pub book: BTreeMap<InstrumentId, Money>,
+    /// Cash per currency.
+    pub cash: BTreeMap<Currency, Dec>,
 }
 
 /// The ETF that tracks a benchmark, as its source states it: each session's

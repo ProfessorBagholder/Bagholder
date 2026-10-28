@@ -26,9 +26,11 @@ fn cad(s: &str) -> Money {
 }
 
 /// Two open accounts stated on different days, one in US dollars; a closed
-/// account; a home stated twice and a line of credit stated once.
+/// account; a home stated twice and a line of credit stated once. The margin
+/// account's positions read states its cash on each day from its first stated
+/// value (brief 79 §2.4): what it owes on each is that read's.
 fn case() -> Value {
-    json!({
+    let mut c = json!({
         "name": "net worth by day",
         "today": "2026-10-20",
         "now": "2026-10-20T22:00:00Z",
@@ -42,7 +44,13 @@ fn case() -> Value {
             "Z": {"net_value": {"2026-10-05": "500", "2026-10-08": "400"}}
         },
         "transactions": []
-    })
+    });
+    let mut d = day("2026-10-05");
+    while d < day("2026-10-20") {
+        c["brokers"]["A"]["days_held"][d.to_string()] = json!({"cash": {"CAD": "1350"}});
+        d = d.tomorrow().unwrap();
+    }
+    c
 }
 
 fn outside() -> Debts {
@@ -249,6 +257,11 @@ fn yesterday_meets_today_when_nothing_moves() {
             }
             if a == "M" {
                 b["buying_power"] = json!("0");
+            }
+            // yesterday's positions read of every account but the card and the line
+            // of credit, whose balances are worked back: nothing moves since
+            if !matches!(a, "L" | "K") {
+                b["days_held"] = json!({"2026-10-19": {"cash": cash[a].iter().map(|(c, v)| (c.to_string(), json!(v))).collect::<serde_json::Map<_, _>>()}});
             }
             brokers.insert(a.to_string(), b);
         }

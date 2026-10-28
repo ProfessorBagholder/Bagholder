@@ -211,7 +211,7 @@ pub fn brokers(book: &Book) -> Result<BTreeMap<bagholder_core::AccountId, baghol
 /// the book holds of it (`Book::stated`, or `Book::stated_latest` without its days).
 /// An account the broker has stated nothing about has none.
 pub fn broker_account(s: &bagholder_book::statements::Stated) -> Option<bagholder_engine::input::BrokerAccount> {
-    if s.days.is_empty() && s.cash.is_none() && s.units.is_none() && s.buying_power.is_none() && s.net_value_now.is_none() && s.margin_rates.is_none() {
+    if s.days.is_empty() && s.days_held.is_empty() && s.cash.is_none() && s.units.is_none() && s.buying_power.is_none() && s.net_value_now.is_none() && s.margin_rates.is_none() {
         return None;
     }
     let mut b = bagholder_engine::input::BrokerAccount::default();
@@ -237,6 +237,12 @@ pub fn broker_account(s: &bagholder_book::statements::Stated) -> Option<bagholde
         b.held_value = s.unit_values.clone();
         b.held_book = s.unit_books.clone();
     }
+    // each past day's holdings and cash, as the positions read as of it states them
+    b.days_held = s
+        .days_held
+        .iter()
+        .map(|(d, h)| (*d, bagholder_engine::input::HeldDay { held: h.units.clone(), book: h.books.iter().filter_map(|(i, m)| m.map(|m| (*i, m))).collect(), cash: h.cash.clone() }))
+        .collect();
     b.buying_power = s.buying_power.as_ref().map(|(_, p)| p.clone());
     b.margin_rates = s.margin_rates.as_ref().map(|(_, r)| r.clone()).unwrap_or_default();
     Some(b)

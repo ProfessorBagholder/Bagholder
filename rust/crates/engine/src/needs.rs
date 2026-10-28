@@ -28,6 +28,10 @@ pub struct FactNeeds {
     pub spans: BTreeMap<InstrumentId, BTreeSet<(Date, Date)>>,
     /// Each instrument held today in some account: its price is quoted.
     pub held: BTreeSet<InstrumentId>,
+    /// Each past day whose positions read a figure reads and the book does not
+    /// hold for every account (brief 79 §2.4): a day a screen shows, and each day
+    /// the net worth history needs a margin account's cash of.
+    pub holdings_on: BTreeSet<Date>,
     /// Each security held now: its distributions and schedule are read.
     pub payers: BTreeSet<InstrumentId>,
     /// The person's oldest day: the span the benchmarks must cover.

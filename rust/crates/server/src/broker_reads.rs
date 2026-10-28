@@ -348,10 +348,48 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
         let balances = cash.and_then(|t| t.checked_add(BALANCES_EVERY).ok()).unwrap_or(now);
         next = Some(next.map_or(balances, |n| n.min(balances)));
     }
+    // a past day a page shows, or the net worth history needs, whose positions read
+    // is not read yet (brief 79 §2.4): the newest first, one a second, only while a
+    // page shows the holdings (the positions document carries the net worth
+    // history), and never while resting from a failure
+    if open && app.events.watched("positions") && !rest.resting(now) {
+        if let Some(day) = f.read(|e| e.needs().holdings_on.last().copied()).flatten() {
+            match past_holdings_now(app, f, &book, conn, session_file(app), day, now)? {
+                Read::Lapsed => {
+                    crate::session::note_session_expired(app);
+                    return Ok(None);
+                }
+                Read::Failed => rest.failed(now),
+                Read::Done => {
+                    let soon = now.checked_add(SignedDuration::from_secs(1)).map_err(|e| e.to_string())?;
+                    next = Some(next.map_or(soon, |n| n.min(soon)));
+                }
+            }
+        }
+    }
     if let Some(u) = rest.until.filter(|u| *u > now) {
         next = Some(next.map_or(u, |n| n.max(u)));
     }
     Ok(next)
+}
+
+/// One past day's holdings read for every account in one request, and each
+/// account's past days read again into the figures.
+fn past_holdings_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: SessionFile, day: bagholder_core::jiff::civil::Date, now: Timestamp) -> Result<Read, String> {
+    let mut adapter = Wealthsimple::new(Client::new(&app.net, file));
+    let (stored, read_failures) = bagholder_broker::pull::holdings_as_of(book, &mut adapter, conn, day, now).map_err(|e| e.to_string())?;
+    for a in &stored {
+        f.holdings_read(*a)?;
+    }
+    let (failed, lapsed) = failures(&read_failures);
+    if lapsed {
+        return Ok(Read::Lapsed);
+    }
+    if !failed.is_empty() {
+        log(&format!("bagholder: the holdings as of {day} could not be read: {failed}"));
+        return Ok(Read::Failed);
+    }
+    Ok(Read::Done)
 }
 
 /// What the header says a pull is doing now (`SPEC.md` §4: the header shows the sync step).

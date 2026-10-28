@@ -352,6 +352,22 @@ pub fn build(case: &Value) -> Built {
             let (amount, currency) = v.as_str().unwrap().split_once(' ').unwrap();
             acct.held_book.insert(ids.instrument(&i), Money::new(dec(amount), ccy(currency)));
         }
+        // each past day's positions read: {day: {"held": {instrument: units}, "book":
+        // {instrument: "12.50 CAD"}, "cash": {currency: amount}}}, each part optional
+        for (d, h) in obj(&b, "days_held") {
+            let mut held = bagholder_engine::input::HeldDay::default();
+            for (i, q) in obj(&h, "held") {
+                held.held.insert(ids.instrument(&i), dec(q.as_str().unwrap()));
+            }
+            for (i, v) in obj(&h, "book") {
+                let (amount, currency) = v.as_str().unwrap().split_once(' ').unwrap();
+                held.book.insert(ids.instrument(&i), Money::new(dec(amount), ccy(currency)));
+            }
+            for (c, v) in obj(&h, "cash") {
+                held.cash.insert(ccy(&c), dec(v.as_str().unwrap()));
+            }
+            acct.days_held.insert(day(&d), held);
+        }
         acct.held_as_of = s(&b, "held_as_of").map(day);
         acct.buying_power = s(&b, "buying_power").map(|v| Ok(Money::new(dec(v), vc)));
         if let Some(r) = b.get("margin_rates").and_then(Value::as_object) {

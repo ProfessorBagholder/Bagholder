@@ -15,8 +15,8 @@ use crate::identity::{identify, Identity};
 use crate::input::{BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, LedgerDelta, Quote, Rates, Sourced};
 use crate::families::{node_of, Families, Node};
 use crate::gap::Fig;
-use crate::ledger::{match_family, match_lots, Direction, MatchState, Matched, TripKey};
-use crate::positions::{build_past_positions, build_positions, PositionFig};
+use crate::ledger::{match_family, Direction, MatchState, Matched, TripKey};
+use crate::positions::{build_positions, PositionFig};
 use crate::scope::{scope, Filters, Scoped};
 use crate::trades::{build_trades, TradeFig, TradeKey};
 
@@ -72,12 +72,11 @@ pub enum Entity {
 }
 
 /// The holdings as they stood at the close of a past day (`SPEC.md` §5, a range
-/// ending before today): the ledger matched to that day, as though it were
-/// today, and its positions marked at that day's close and that day's rate.
+/// ending before today): what the positions read as of that day states each
+/// account held (brief 79 §2.4), marked at that day's close and that day's rate.
 #[derive(Debug, PartialEq)]
 pub struct Past {
     pub day: Date,
-    pub matched: Matched,
     pub positions: Vec<PositionFig>,
 }
 
@@ -529,25 +528,9 @@ impl Engine {
         }
         cache.retain(|_, w| w.strong_count() > 0);
         let i = &self.inputs;
-        let kept: crate::input::Transactions = i.ledger.transactions.iter().filter(|t| t.trade_date <= day).cloned().collect();
-        let ids: BTreeSet<&TransactionId> = kept.iter().map(|t| &t.id).collect();
-        let ledger = Ledger {
-            accounts: i.ledger.accounts.clone(),
-            instruments: i.ledger.instruments.clone(),
-            transfer_links: i.ledger.transfer_links.iter().filter(|(o, n)| ids.contains(o) && ids.contains(n)).map(|(o, n)| (o.clone(), n.clone())).collect(),
-            records: i.ledger.records.clone(),
-            trades: i.ledger.trades.clone(),
-            groups: i.ledger.groups.clone(),
-            journal: i.ledger.journal.clone(),
-            transactions: kept,
-        };
-        // that day as today: nothing after it is known, and no quote is of it
-        let mut market = i.market.clone();
-        market.quotes.clear();
-        let inputs = Inputs { ledger, facts: i.facts.clone(), market, clock: Clock { today: day, ..i.clock.clone() } };
-        let matched = match_lots(&inputs);
-        let positions = build_past_positions(&inputs, &matched, &self.identity, day);
-        let p = std::sync::Arc::new(Past { day, matched, positions });
+        let stated = i.market.brokers.iter().filter_map(|(a, b)| b.days_held.get(&day).map(|d| crate::stated::Stated { account: *a, held: &d.held, book: &d.book }));
+        let positions = crate::stated::holdings(&crate::stated::Sources::of(i), stated, Some(day)).into_iter().map(|h| crate::positions::linked(i, None, None, h)).collect();
+        let p = std::sync::Arc::new(Past { day, positions });
         cache.insert(day, std::sync::Arc::downgrade(&p));
         self.past.built.store(true, std::sync::atomic::Ordering::SeqCst);
         p
@@ -637,10 +620,33 @@ impl Engine {
     /// The facts the figures use: what the readers read.
     pub fn needs(&self) -> crate::needs::FactNeeds {
         let mut n = crate::needs::fact_needs(&self.inputs, &self.matched);
-        // each past day a screen holds: the closes its holdings are priced by
+        // each past day a screen holds: the closes its holdings are priced by, and
+        // its positions read where an account stated a value by then lacks it
+        let brokers = &self.inputs.market.brokers;
         for p in self.past.held() {
             for h in &p.positions {
-                n.spans.entry(h.instrument).or_default().insert((h.opened_on.unwrap_or(p.day), p.day));
+                n.spans.entry(h.instrument).or_default().insert((p.day, p.day));
+            }
+            if brokers.values().any(|b| b.net_value.range(..=p.day).next().is_some() && !b.days_held.contains_key(&p.day)) {
+                n.holdings_on.insert(p.day);
+            }
+        }
+        // each day the net worth history needs a margin account's cash of: from
+        // its first stated value to yesterday
+        let today = self.inputs.clock.today;
+        for (a, b) in brokers {
+            if !self.inputs.ledger.accounts.get(a).is_some_and(crate::scope::is_margin) {
+                continue;
+            }
+            let Some(mut day) = b.net_value.keys().next().copied() else { continue };
+            while day < today {
+                if !b.days_held.contains_key(&day) {
+                    n.holdings_on.insert(day);
+                }
+                day = match day.tomorrow() {
+                    Ok(d) => d,
+                    Err(_) => break,
+                };
             }
         }
         n
@@ -711,6 +717,11 @@ impl Engine {
                 }
             }
             Change::Closes(i, c) => first_difference(c, self.inputs.market.closes.get(i).unwrap_or(&BTreeMap::new())),
+            // a past day's holdings are what its positions read states
+            Change::Broker(a, b) => {
+                let empty = BTreeMap::new();
+                first_difference(b.as_ref().map_or(&empty, |b| &b.days_held), self.inputs.market.brokers.get(a).map_or(&empty, |b| &b.days_held))
+            }
             _ => None,
         };
         if moves_net_worth_past(&change) {

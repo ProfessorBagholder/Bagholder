@@ -174,6 +174,8 @@ fn new_in(now: &FactNeeds, before: &FactNeeds) -> FactNeeds {
             .filter(|(_, days)| !days.is_empty())
             .collect(),
         held: Default::default(),
+        // the broker's reads, not the market sources', read past days (`broker_reads`)
+        holdings_on: Default::default(),
         spans: now
             .spans
             .iter()
@@ -393,6 +395,7 @@ mod tests {
             closes: [(i(1), [date(2026, 6, 19)].into())].into(),
             spans: [(i(4), [(date(2025, 1, 2), date(2025, 6, 30))].into())].into(),
             held: [i(1)].into(),
+            holdings_on: Default::default(),
             payers: [i(1)].into(),
             first_day: Some(date(2024, 1, 2)),
         };
@@ -401,6 +404,7 @@ mod tests {
             closes: [(i(1), [date(2026, 6, 19), date(2026, 7, 17)].into()), (i(2), [date(2026, 6, 19)].into())].into(),
             spans: [(i(4), [(date(2025, 1, 2), date(2025, 6, 30)), (date(2025, 1, 2), date(2025, 9, 30))].into())].into(),
             held: [i(1), i(3)].into(),
+            holdings_on: Default::default(),
             payers: [i(1), i(3)].into(),
             first_day: Some(date(2024, 1, 2)),
         };

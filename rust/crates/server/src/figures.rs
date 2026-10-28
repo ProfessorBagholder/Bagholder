@@ -813,7 +813,32 @@ impl Figures {
             b.net_value = h.net_value.clone();
             b.net_deposits = h.net_deposits.clone();
         }
+        // the past days' holdings kept, those from the newest kept on read again: a
+        // read as of today or yesterday is stored with the balances and the day's pull
+        let kept = held.map(|h| h.days_held.clone()).unwrap_or_default();
+        let from = kept.keys().next_back().copied().unwrap_or(bagholder_core::jiff::civil::Date::MIN);
+        let fresh = self.book()?.units_days(account, from, bagholder_core::jiff::civil::Date::MAX).map_err(|e| e.to_string())?;
+        if !kept.is_empty() || !fresh.is_empty() {
+            let b = stated.get_or_insert_with(Default::default);
+            b.days_held = kept.into_iter().filter(|(d, _)| *d < from).collect();
+            b.days_held.extend(engine_inputs::broker_account(&bagholder_book::statements::Stated { days_held: fresh, ..Default::default() }).map(|x| x.days_held).unwrap_or_default());
+        }
         let m = if held != stated.as_ref() { e.apply(Change::Broker(account, stated)) } else { Moved::default() };
+        drop(guard);
+        Ok(self.moved(m))
+    }
+
+    /// A past day's holdings were read for `account`: its stored days read again
+    /// whole into the figures (brief 79 §2.4).
+    pub fn holdings_read(&self, account: bagholder_core::AccountId) -> Result<Moved, String> {
+        let days = self.book()?.units_days(account, bagholder_core::jiff::civil::Date::MIN, bagholder_core::jiff::civil::Date::MAX).map_err(|e| e.to_string())?;
+        let days_held = engine_inputs::broker_account(&bagholder_book::statements::Stated { days_held: days, ..Default::default() }).map(|x| x.days_held).unwrap_or_default();
+        let mut guard = self.engine.write().unwrap_or_else(|e| e.into_inner());
+        let Some(e) = guard.as_mut() else { return Ok(Moved::default()) };
+        let held = e.inputs().market.brokers.get(&account).cloned();
+        let mut stated = held.clone().unwrap_or_default();
+        stated.days_held = days_held;
+        let m = if held.as_ref() != Some(&stated) { e.apply(Change::Broker(account, Some(stated))) } else { Moved::default() };
         drop(guard);
         Ok(self.moved(m))
     }
