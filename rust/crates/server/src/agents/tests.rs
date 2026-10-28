@@ -836,6 +836,20 @@ fn a_json_api_read_logs_its_arguments_cut() {
     assert!(kept.chars().count() <= listener::LOGGED_TEXT, "{} characters kept", kept.chars().count());
 }
 
+/// An agent holds at most `MCP_SESSIONS_KEPT` MCP sessions open at once on a
+/// path: one more is refused until one ends, and another agent's are its own
+/// (brief 80's re-review, 12).
+#[test]
+fn an_agent_s_open_mcp_sessions_are_bounded() {
+    let h = harness();
+    let (one, two) = (h.key("mcp"), h.key("mcp"));
+    for _ in 0..MCP_SESSIONS_KEPT {
+        h.mcp_session("/mcp/key", &one);
+    }
+    assert_eq!(h.mcp("/mcp/key", Some(&one)).status, StatusCode::TOO_MANY_REQUESTS, "one more than the bound");
+    h.mcp_session("/mcp/key", &two);
+}
+
 /// What an agent's log keeps of a caller's own text is cut to `LOGGED_TEXT`.
 #[test]
 fn a_caller_s_text_is_kept_cut_to_its_named_length() {

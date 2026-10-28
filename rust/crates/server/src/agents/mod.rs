@@ -36,6 +36,9 @@ pub const PENDING_KEPT: usize = 5;
 pub const UNAPPROVED_KEPT: usize = 20;
 /// Calls before sign-in, every caller together, in a minute.
 pub const BEFORE_SIGN_IN_PER_MINUTE: u32 = 60;
+/// MCP sessions one agent may hold open at once on a path: another is refused
+/// until one ends, closed or idle five minutes (rmcp's keep-alive).
+pub const MCP_SESSIONS_KEPT: usize = 4;
 /// The largest body `/oauth/register` and `/oauth/token` take.
 pub const BODY_LIMIT: usize = 16 * 1024;
 /// Reads one agent may make in a minute, and at once.
