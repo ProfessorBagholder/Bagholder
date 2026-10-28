@@ -141,7 +141,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         // the waiting page's polls take from the allowance only when they name no
         // request waiting (`oauth::status`): a page left open never uses it up
         .route("/oauth/authorize/status", get(oauth::status).layer(DefaultBodyLimit::max(super::BODY_LIMIT)));
-    let mcp_service = |sessions: &Arc<Sessions>| {
+    let mcp_service = || {
         let reader: Arc<dyn super::tools::Reader> = Arc::new(Served(ctx.clone()));
         let config = rmcp::transport::streamable_http_server::StreamableHttpServerConfig::default()
             // `Host` is held by this listener's own gate, to the public name exactly
@@ -149,7 +149,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
             .with_json_response(true);
         rmcp::transport::streamable_http_server::StreamableHttpService::new(
             move || Ok(super::tools::Tools::new(reader.clone())),
-            sessions.manager.clone(),
+            Arc::new(rmcp::transport::streamable_http_server::session::local::LocalSessionManager::default()),
             config,
         )
     };
@@ -158,11 +158,11 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
     use axum::routing::post_service;
     // one service per path, GET and POST alike: a session the POST opened is the
     // GET's to stream (brief 80 §6.1)
-    let (signed_in_sessions, key_sessions) = (Arc::new(Sessions::default()), Arc::new(Sessions::default()));
-    let (signed_in_mcp, key_mcp) = (mcp_service(&signed_in_sessions), mcp_service(&key_sessions));
-    // the agent taken first, then its sessions held to their bound
-    let signed_in = Router::new().route("/mcp", post_service(signed_in_mcp.clone()).get_service(signed_in_mcp).route_layer(check_with(signed_in_sessions, sessions_bounded)).route_layer(check_with(ctx.clone(), oauth_bearer)));
-    let with_key = Router::new().route("/mcp/key", post_service(key_mcp.clone()).get_service(key_mcp).route_layer(check_with(key_sessions, sessions_bounded)).route_layer(check_with(ctx.clone(), mcp_key)));
+    // an approved agent's sessions end by rmcp's own idle expiry: none is bounded
+    // here, as none can be closed (brief 80, round 3, 3)
+    let (signed_in_mcp, key_mcp) = (mcp_service(), mcp_service());
+    let signed_in = Router::new().route("/mcp", post_service(signed_in_mcp.clone()).get_service(signed_in_mcp).route_layer(check_with(ctx.clone(), oauth_bearer)));
+    let with_key = Router::new().route("/mcp/key", post_service(key_mcp.clone()).get_service(key_mcp).route_layer(check_with(ctx.clone(), mcp_key)));
     let api = Router::new()
         .route("/api/agents/trades", get(api::trades).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/trade", get(api::trade).route_layer(check_with(ctx.clone(), api_key)))
@@ -179,39 +179,6 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(header::X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff")))
         .layer(CatchPanicLayer::custom(|_: Box<dyn std::any::Any + Send>| said(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Bagholder failed to answer.")))
         .with_state(ctx)
-}
-
-/// The sessions an MCP path holds, and those each agent opened on it.
-#[derive(Default)]
-struct Sessions {
-    manager: Arc<rmcp::transport::streamable_http_server::session::local::LocalSessionManager>,
-    opened: std::sync::Mutex<BTreeMap<String, Vec<String>>>,
-}
-
-/// An agent's MCP sessions open at once held to `MCP_SESSIONS_KEPT`: a new one is
-/// refused until one ends (closed, or idle past rmcp's keep-alive), and the one it
-/// opens is noted as its (brief 80's re-review, 12).
-async fn sessions_bounded(State(s): State<Arc<Sessions>>, req: Request, next: Next) -> Response {
-    let agent = req.extensions().get::<Caller>().map(|c| c.agent.clone()).unwrap_or_default();
-    let opening = req.method() == Method::POST && !req.headers().contains_key("mcp-session-id");
-    if opening {
-        let live: std::collections::BTreeSet<String> = s.manager.sessions.read().await.keys().map(|k| k.to_string()).collect();
-        let mut opened = s.opened.lock().unwrap_or_else(|e| e.into_inner());
-        opened.retain(|_, ids| {
-            ids.retain(|i| live.contains(i));
-            !ids.is_empty()
-        });
-        if opened.get(&agent).is_some_and(|ids| ids.len() >= super::MCP_SESSIONS_KEPT) {
-            return too_many(60);
-        }
-    }
-    let r = next.run(req).await;
-    if opening {
-        if let Some(id) = r.headers().get("mcp-session-id").and_then(|v| v.to_str().ok()) {
-            s.opened.lock().unwrap_or_else(|e| e.into_inner()).entry(agent).or_default().push(id.to_string());
-        }
-    }
-    r
 }
 
 /// Serve until told to stop; then let what is in hand finish, for at most `DRAIN`.

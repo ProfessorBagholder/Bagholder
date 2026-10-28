@@ -200,6 +200,25 @@ fn a_tunnel_the_person_stopped_stays_stopped_across_a_restart() {
     stop(&mut started);
 }
 
+/// Switching Agents off clears what the tunnel's last Start set: switched on again
+/// and restarted, Bagholder starts no tunnel the person did not start since
+/// (brief 80, round 3, 5).
+#[test]
+fn switching_agents_off_forgets_the_running_tunnel() {
+    let h = Homes::new();
+    let mut started = Started::default();
+    let port = serve(&h, false, &mut started);
+    let first = started_by_the_person(port, &mut started);
+    assert_eq!(ask(port, "POST", "/api/agents/switch", Some(r#"{"on":false}"#)).0, 200);
+    assert!(ended(first), "switched off, the tunnel stopped");
+    assert_eq!(ask(port, "POST", "/api/agents/switch", Some(r#"{"on":true}"#)).0, 200);
+    stop(&mut started);
+
+    let port = serve(&h, false, &mut started);
+    assert_eq!(tunnel_of(port, Duration::from_secs(3)), None, "a tunnel started again that the person's switch-off ended");
+    stop(&mut started);
+}
+
 /// Clearing the agents with a tunnel running stops it: nothing is left to answer
 /// an agent (brief 80's re-review, 8).
 #[test]
@@ -223,8 +242,12 @@ fn a_copy_of_the_book_never_starts_the_person_s_tunnel() {
     stop(&mut started);
     assert!(ended(first), "the tunnel outlived the app");
 
-    // the same book, as a copy started for some work
+    // the same book, as a copy started for some work: no agents address at all,
+    // so neither the person's proxy nor a tunnel run as a service reaches it
     let port = serve(&h, true, &mut started);
     assert_eq!(tunnel_of(port, Duration::from_secs(3)), None, "a copy started the person's tunnel");
+    let (_, status) = ask(port, "GET", "/api/status", None);
+    let v: serde_json::Value = serde_json::from_str(&status).unwrap();
+    assert_eq!((&v["agents"]["on"], &v["agents"]["port"]), (&serde_json::json!(false), &serde_json::Value::Null), "a copy opened the agents' address: {}", v["agents"]);
     stop(&mut started);
 }

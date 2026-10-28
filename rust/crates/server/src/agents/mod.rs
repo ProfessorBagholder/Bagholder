@@ -36,9 +36,6 @@ pub const PENDING_KEPT: usize = 5;
 pub const UNAPPROVED_KEPT: usize = 20;
 /// Calls before sign-in, every caller together, in a minute.
 pub const BEFORE_SIGN_IN_PER_MINUTE: u32 = 60;
-/// MCP sessions one agent may hold open at once on a path: another is refused
-/// until one ends, closed or idle five minutes (rmcp's keep-alive).
-pub const MCP_SESSIONS_KEPT: usize = 4;
 /// The largest body `/oauth/register` and `/oauth/token` take.
 pub const BODY_LIMIT: usize = 16 * 1024;
 /// Reads one agent may make in a minute, and at once.
@@ -66,9 +63,10 @@ pub const ON: &str = "agents.on";
 pub const PORT: &str = "agents.port";
 pub const TUNNEL: &str = "agents.tunnel";
 pub const HOST: &str = "agents.host";
-/// Whether the tunnel was running when Bagholder last stopped: set when the person
-/// starts it, cleared when they stop it or switch Agents off. It starts again with
-/// Bagholder only then, so a tunnel the person stopped stays stopped.
+/// Whether the person's last Start or Stop of the tunnel was a Start: set when they
+/// start it, cleared when they stop it or switch Agents off. The tunnel starts again
+/// with Bagholder only while it is set, so a tunnel the person stopped stays stopped,
+/// and one that ended on its own starts again.
 pub const RUNNING: &str = "agents.running";
 
 /// What the listener is given: the public name it answers for, the agent tables,

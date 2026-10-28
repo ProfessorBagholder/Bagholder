@@ -28,7 +28,10 @@ thread_local! {
     pub(crate) static OWN: std::cell::RefCell<Option<Vec<IpAddr>>> = const { std::cell::RefCell::new(None) };
 }
 
-/// The same, with `own` saying which addresses are this machine's.
+/// The same, with `own` saying which addresses are this machine's: an IPv6
+/// address carrying one of them, IPv4-mapped (`::ffff:a.b.c.d`) or IPv4-compatible
+/// (`::a.b.c.d`), is that address, as the interfaces list it in IPv4 alone
+/// (brief 80, round 3, 2).
 fn public_beside(ip: IpAddr, own: impl Fn(IpAddr) -> bool) -> bool {
     let range = match ip {
         IpAddr::V4(v4) => public_v4(v4),
@@ -37,7 +40,11 @@ fn public_beside(ip: IpAddr, own: impl Fn(IpAddr) -> bool) -> bool {
             None => public_v6(v6),
         },
     };
-    range && !own(ip)
+    let carried = match ip {
+        IpAddr::V6(v6) => v6.to_ipv4().map(IpAddr::V4),
+        IpAddr::V4(_) => None,
+    };
+    range && !own(ip) && !carried.is_some_and(&own)
 }
 
 /// Whether `ip` is one of this machine's own addresses.
@@ -321,7 +328,11 @@ impl Resolve for PublicDns {
             for ty in ["A", "AAAA"] {
                 let url = format!("https://{server}/{}?name={host}&type={ty}", if server == "dns.google" { "resolve" } else { "dns-query" });
                 match (self.ask)(to, &url) {
-                    Ok(r) if r.status == 200 => got.extend(dns_json(&r.body).map_err(|e| format!("{server} {e}"))?),
+                    // a reply that does not read is that server failing: the other's answers stand
+                    Ok(r) if r.status == 200 => match dns_json(&r.body) {
+                        Ok(a) => got.extend(a),
+                        Err(e) => said.push(format!("{server} {e}")),
+                    },
                     Ok(r) => said.push(format!("{server} answered {}", r.status)),
                     Err(e) => said.push(format!("{server}: {e}")),
                 }
@@ -441,6 +452,11 @@ mod tests {
         OWN.with(|o| *o.borrow_mut() = Some(vec![own]));
         assert!(!public(own));
         assert!(public("93.184.215.15".parse().unwrap()));
+        // the same address written as IPv6, IPv4-mapped or IPv4-compatible: still
+        // this machine's, which the interfaces list in IPv4 alone (brief 80, round 3, 2)
+        assert!(!public("::ffff:93.184.215.14".parse().unwrap()), "IPv4-mapped");
+        assert!(!public("::93.184.215.14".parse().unwrap()), "IPv4-compatible");
+        assert!(public("::ffff:93.184.215.15".parse().unwrap()), "another's, IPv4-mapped");
         OWN.with(|o| *o.borrow_mut() = None);
     }
 
@@ -538,5 +554,40 @@ mod tests {
         assert_eq!(recorded(true).resolve("www.github.com", 443).unwrap(), ips(&["20.29.134.23", "140.82.114.4"]));
         let said = recorded(false).resolve("one.one.one.one", 443).unwrap_err();
         assert!(said.starts_with("public DNS could not be asked"), "{said}");
+    }
+
+    /// One server failing, unreachable, answering with an error or with a reply
+    /// that does not read, the other's answers are taken; both answering with no
+    /// address is an error (brief 80, round 3, 5).
+    #[test]
+    fn public_dns_takes_the_answers_of_the_server_that_answers() {
+        let replies = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/replies/public-dns");
+        let failing = |fails: &'static str, how: &'static str| -> PublicDns {
+            let replies = replies.clone();
+            PublicDns {
+                ask: Arc::new(move |_, url| {
+                    let server = if url.starts_with("https://dns.google/") { "google" } else { "cloudflare" };
+                    if server == fails {
+                        return match how {
+                            "unreachable" => Err("unreachable".into()),
+                            "an error" => Ok(bagholder_net::client::Response { status: 503, body: vec![], headers: vec![] }),
+                            _ => Ok(bagholder_net::client::Response { status: 200, body: b"not a reply".to_vec(), headers: vec![] }),
+                        };
+                    }
+                    let (name, ty) = url.split_once("?name=").and_then(|(_, q)| q.split_once("&type=")).unwrap();
+                    let body = std::fs::read(replies.join(format!("{server}-{name}-{ty}.json"))).map_err(|e| e.to_string())?;
+                    Ok(bagholder_net::client::Response { status: 200, body, headers: vec![] })
+                }),
+            }
+        };
+        let ip = |a: &str| vec![a.parse::<IpAddr>().unwrap()];
+        for how in ["unreachable", "an error", "a reply that does not read"] {
+            // each server's own answer for this name differs: whose was taken is plain
+            assert_eq!(failing("cloudflare", how).resolve("www.github.com", 443), Ok(ip("140.82.114.4")), "cloudflare {how}");
+            assert_eq!(failing("google", how).resolve("www.github.com", 443), Ok(ip("20.29.134.23")), "google {how}");
+        }
+        let empty = PublicDns { ask: Arc::new(|_, _| Ok(bagholder_net::client::Response { status: 200, body: br#"{"Status":0}"#.to_vec(), headers: vec![] })) };
+        let said = empty.resolve("nothing.example", 443).unwrap_err();
+        assert!(said.contains("has no address"), "{said}");
     }
 }

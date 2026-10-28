@@ -854,21 +854,20 @@ fn a_json_api_read_logs_its_arguments_cut() {
     assert_ne!(a.status, StatusCode::UNAUTHORIZED);
     let reads = h.store().reads(&agent, 10).unwrap();
     let kept = reads.iter().find_map(|r| r.arguments.clone()).expect("the read is logged");
-    assert!(kept.chars().count() <= listener::LOGGED_TEXT, "{} characters kept", kept.chars().count());
+    // the arguments' own first `LOGGED_TEXT` characters (brief 80, round 3, 6)
+    let whole = serde_json::json!({"sort": sort}).to_string();
+    assert_eq!(kept, whole.chars().take(listener::LOGGED_TEXT).collect::<String>());
 }
 
-/// An agent holds at most `MCP_SESSIONS_KEPT` MCP sessions open at once on a
-/// path: one more is refused until one ends, and another agent's are its own
-/// (brief 80's re-review, 12).
+/// An agent opens as many MCP sessions as it asks for: none is bounded, as none can
+/// be closed, and each ends by rmcp's own idle expiry (brief 80, round 3, 3).
 #[test]
-fn an_agent_s_open_mcp_sessions_are_bounded() {
+fn an_agent_opens_as_many_mcp_sessions_as_it_asks_for() {
     let h = harness();
-    let (one, two) = (h.key("mcp"), h.key("mcp"));
-    for _ in 0..MCP_SESSIONS_KEPT {
-        h.mcp_session("/mcp/key", &one);
+    let key = h.key("mcp");
+    for _ in 0..6 {
+        h.mcp_session("/mcp/key", &key);
     }
-    assert_eq!(h.mcp("/mcp/key", Some(&one)).status, StatusCode::TOO_MANY_REQUESTS, "one more than the bound");
-    h.mcp_session("/mcp/key", &two);
 }
 
 /// What an agent's log keeps of a caller's own text is cut to `LOGGED_TEXT`.
@@ -1129,7 +1128,7 @@ fn over_mcp_each_tool_call_is_a_read_and_nothing_else_is() {
     }
 }
 
-/// The agents' handle reads and writes their four settings alone (brief 80 §6.4).
+/// The agents' handle reads and writes their five settings alone (brief 80 §6.4).
 #[test]
 fn the_agents_handle_reads_and_writes_their_own_settings_alone() {
     let h = harness();
@@ -1413,7 +1412,8 @@ fn the_openapi_description_matches_its_routes() {
 }
 
 /// Each described route, called with its described arguments on a real book,
-/// answers what the page answers.
+/// answers what the page answers, and reads every parameter the served
+/// description lists.
 #[test]
 fn each_described_route_answers_with_its_described_arguments() {
     let d = tempfile::tempdir().unwrap();
@@ -1434,36 +1434,61 @@ fn each_described_route_answers_with_its_described_arguments() {
     assert_eq!(one.json()["trade"]["id"], first);
     let pos = h.ask("GET", "/api/agents/positions", &[("authorization", &auth)], vec![]);
     assert_eq!(pos.status, StatusCode::OK, "{}", pos.text());
-    // every route the description lists, described with every argument it takes and
-    // called with every parameter it lists, each a value of its own schema (brief
-    // 80's re-review, 9)
-    let described = api::description(&format!("https://{HOST}"));
-    for (path, _, _, schema) in api::routes() {
-        let params = described["paths"][path]["get"]["parameters"].as_array().unwrap().clone();
-        let named: Vec<&str> = params.iter().map(|p| p["name"].as_str().unwrap()).collect();
-        let takes: Vec<&str> = schema["properties"].as_object().map(|o| o.keys().map(String::as_str).collect()).unwrap_or_default();
-        assert_eq!(named, takes, "{path} describes every argument it takes");
-        let value = |p: &Value| -> String {
+    // every route as the served description lists it, called with each parameter it
+    // lists, and each parameter shown to be read: a wrong value refused, or another
+    // value changing the answer (brief 80, round 3, 4). Built from what is served,
+    // never from the types it is made from, so a route described with another's
+    // arguments fails here
+    let served_doc = h.ask("GET", "/api/agents/openapi.json", &[("authorization", &auth)], vec![]);
+    assert_eq!(served_doc.status, StatusCode::OK, "{}", served_doc.text());
+    let described = served_doc.json();
+    let paths = described["paths"].as_object().unwrap().clone();
+    assert_eq!(paths.len(), 4, "every route is described");
+    for (path, item) in &paths {
+        let params = item["get"]["parameters"].as_array().unwrap().clone();
+        // what a call must carry: its required parameters, each a value that answers
+        let required: Vec<String> = params.iter().filter(|p| p["required"] == true).map(|p| match p["name"].as_str().unwrap() {
+            "id" => format!("id={first}"),
+            other => panic!("{path}: no answering value made for the required {other}"),
+        }).collect();
+        // each check with a key of its own, so no check meets another's read limit
+        let call = |auth: &str, extra: Option<String>| {
+            let query: Vec<String> = required.iter().cloned().chain(extra).collect();
+            h.ask("GET", &format!("{path}?{}", query.join("&")), &[("authorization", auth)], vec![])
+        };
+        let base = call(&format!("Bearer {}", h.key("api")), None);
+        assert_eq!(base.status, StatusCode::OK, "{path}: {}", base.text());
+        for p in &params {
+            let auth = format!("Bearer {}", h.key("api"));
             let name = p["name"].as_str().unwrap();
             let types = &p["schema"]["type"];
             let is = |t: &str| types == t || types.as_array().is_some_and(|a| a.contains(&json!(t)));
-            if p["content"].is_object() {
-                "%7B%7D".into()
-            } else if name == "id" {
-                first.clone()
+            // a value the parameter's own description refuses: JSON that is not, a
+            // number that is not, a trade no book holds
+            let wrong = if p["content"].is_object() {
+                "%7B".to_string()
             } else if is("integer") {
-                "2".into()
+                "not-a-number".to_string()
+            } else if name == "id" {
+                "no-such-trade".to_string()
             } else {
-                match name {
-                    "sort" => "activity".into(),
-                    "dir" => "desc".into(),
-                    other => panic!("{path}: no value made for {other}"),
-                }
+                "not-a-value".to_string()
+            };
+            let refused = call(&auth, Some(format!("{name}={wrong}")));
+            if refused.status != StatusCode::OK {
+                continue;
             }
-        };
-        let query: Vec<String> = params.iter().map(|p| format!("{}={}", p["name"].as_str().unwrap(), value(p))).collect();
-        let called = h.ask("GET", &format!("{path}?{}", query.join("&")), &[("authorization", &auth)], vec![]);
-        assert_eq!(called.status, StatusCode::OK, "{path}?{}: {}", query.join("&"), called.text());
+            // two values it takes that answer differently: a direction orders a
+            // column, so it is asked beside one
+            let (one, two) = match name {
+                "sort" => ("sort=activity".to_string(), "sort=symbol".to_string()),
+                "dir" => ("sort=symbol&dir=asc".to_string(), "sort=symbol&dir=desc".to_string()),
+                other => panic!("{path}: {other} took {wrong:?} and no other value is made for it"),
+            };
+            let (a, b) = (call(&auth, Some(one.clone())), call(&auth, Some(two.clone())));
+            assert_eq!((a.status, b.status), (StatusCode::OK, StatusCode::OK), "{path}?{one} / ?{two}: {} {}", a.text(), b.text());
+            assert_ne!(a.json(), b.json(), "{path}: {name} is described and not read");
+        }
     }
     // as the stdio tools answer
     let page = crate::agents::tools::trades_page(&crate::mcp::ReadOnly::own(&format!("http://127.0.0.1:{}", served.port)), crate::agents::tools::TradesArgs { size: Some(3), ..Default::default() }).unwrap();

@@ -108,10 +108,12 @@ pub fn access(ctx: &Ctx, token: Option<&str>) -> Result<String, Response> {
 /// A redirect URI an agent may be sent back to: https, to a public name or address,
 /// never this machine (brief 73, 3: a cloud agent never redirects here, and a local
 /// one uses stdio). Its host is a DNS name of letters, digits and hyphens with a dot
-/// and a last label that is not all digits, or a public IP address written as it
-/// is canonically: every other spelling (a number, `127.1`, `0x7f.1`, a trailing
-/// dot, a percent escape, a backslash a browser ends the host at) is refused, as a
-/// browser may read it as this machine.
+/// and a last label a browser does not read as a number (the WHATWG URL standard's
+/// "ends in a number": all digits, or `0x` followed by hex digits or by nothing;
+/// `fetch::dns_name`), or a public IP address written as it is canonically: every
+/// other spelling (a number, `127.1`, `0x7f.1`, `127.0x`, a trailing dot, a percent
+/// escape, a backslash a browser ends the host at) is refused, as a browser may
+/// read it as this machine.
 pub fn redirect_ok(uri: &str) -> Result<(), String> {
     let (host, _) = fetch::https_host(uri)?;
     if uri.contains('#') {

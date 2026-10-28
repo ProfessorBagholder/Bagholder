@@ -796,8 +796,15 @@ pub fn get_at(clock: &std::sync::Arc<dyn crate::Clock>, to: std::net::SocketAddr
     let at = jiff::SignedDuration::try_from(timeout).ok().and_then(|d| clock.now().checked_add(d).ok()).ok_or_else(|| Error::Transport(format!("{timeout:?} is no deadline")))?;
     let tcp = TcpStream::connect_timeout(&to, timeout).map_err(transport)?;
     tcp.set_write_timeout(Some(timeout)).map_err(transport)?;
-    let tls = connector()?.connect(&u.host, Until { tcp, clock: clock.clone(), at }).map_err(|e| Error::Transport(e.to_string()))?;
-    let mut c = Conn::TlsUntil(Box::new(tls));
+    #[cfg(test)]
+    let plain = PLAIN.with(|p| p.get());
+    #[cfg(not(test))]
+    let plain = false;
+    let mut c = if plain {
+        Conn::Plain(tcp)
+    } else {
+        Conn::TlsUntil(Box::new(connector()?.connect(&u.host, Until { tcp, clock: clock.clone(), at }).map_err(|e| Error::Transport(e.to_string()))?))
+    };
     let host_header = if u.port == 443 { u.host.clone() } else { format!("{}:{}", u.host, u.port) };
     let mut req = format!("GET {} HTTP/1.1\r\nHost: {}\r\nAccept-Encoding: identity\r\nConnection: close\r\n", u.path, host_header);
     for (k, v) in headers {
@@ -806,6 +813,13 @@ pub fn get_at(clock: &std::sync::Arc<dyn crate::Clock>, to: std::net::SocketAddr
     req.push_str("\r\n");
     c.write_all(req.as_bytes()).and_then(|_| c.flush()).map_err(transport)?;
     answer_of(&mut c, ceiling)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// In a test, `get_at` speaks plain HTTP to its address, so the answer it reads
+    /// is the one under test and not a handshake no test peer can make.
+    static PLAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The answer on `c` once its request is sent (`get_at`): its head, and its body
@@ -1078,6 +1092,34 @@ mod coding_tests {
         assert!(said.to_string().contains("larger than the 8192 bytes"), "{said}");
         assert_eq!(decoded(gz(b"text"), &h("gzip"), 4).unwrap(), b"text", "at the ceiling exactly");
         assert!(decoded(gz(b"texts"), &h("gzip"), 4).is_err());
+    }
+
+    /// `get_at` holds what it reads to the ceiling it is given: a coded body that
+    /// inflates past it is refused, and one within it is read whole (brief 80,
+    /// round 3, 5).
+    #[test]
+    fn get_at_holds_its_answer_to_its_own_ceiling() {
+        let peer = |body: Vec<u8>| {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let to = l.local_addr().unwrap();
+            let t = std::thread::spawn(move || {
+                let (mut s, _) = l.accept().unwrap();
+                let _ = std::io::Write::write_all(&mut s, format!("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
+                let _ = std::io::Write::write_all(&mut s, &body);
+            });
+            (to, t)
+        };
+        let clock: std::sync::Arc<dyn crate::Clock> = std::sync::Arc::new(crate::SystemClock);
+        super::PLAIN.with(|p| p.set(true));
+        let (to, t) = peer(gz(&vec![0u8; 1 << 20]));
+        let said = super::get_at(&clock, to, "https://localhost/doc", &[], std::time::Duration::from_secs(5), 8 * 1024).err().expect("refused once decoded");
+        t.join().unwrap();
+        let (to, t) = peer(gz(b"a document"));
+        let read = super::get_at(&clock, to, "https://localhost/doc", &[], std::time::Duration::from_secs(5), 8 * 1024);
+        t.join().unwrap();
+        super::PLAIN.with(|p| p.set(false));
+        assert!(said.to_string().contains("larger than the 8192 bytes"), "{said}");
+        assert_eq!(read.unwrap().body, b"a document");
     }
 }
 

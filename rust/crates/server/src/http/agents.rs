@@ -175,8 +175,15 @@ pub fn switch_on(app: &Arc<App>, rt: &tokio::runtime::Handle) -> Result<u16, Str
     Ok(port)
 }
 
-/// At start: the address on again when the person left it on.
+/// At start: the address on again when the person left it on. A copy of the book
+/// started for some work (`BAGHOLDER_EXIT_WITH`, every scratch copy's rule) opens
+/// no agents address at all (brief 80, round 3, 1): on the person's kept port it
+/// would answer their own proxy, or a cloudflared or ngrok they run as a service,
+/// under their public name with their grants.
 pub fn open(app: &Arc<App>, rt: &tokio::runtime::Handle) {
+    if std::env::var_os(crate::exit_with::VAR).is_some() {
+        return;
+    }
     let on = store(app).and_then(|a| a.setting(agents::ON).map_err(|e| e.to_string()));
     if let Ok(Some(v)) = on {
         if v == "1" {
@@ -186,13 +193,7 @@ pub fn open(app: &Arc<App>, rt: &tokio::runtime::Handle) {
             }
             // and the tunnel the person chose, so every agent can reach it again after
             // an update or a restart (brief 80 §5.1), where it was running when
-            // Bagholder stopped; their own proxy is theirs to run. A copy of the book
-            // started for some work (`BAGHOLDER_EXIT_WITH`, every scratch copy's
-            // rule) starts none: it would answer on the person's grants under
-            // their public name, a second replica of their tunnel
-            if std::env::var_os(crate::exit_with::VAR).is_some() {
-                return;
-            }
+            // Bagholder stopped; their own proxy is theirs to run
             let tunnelled = store(app).and_then(|a| Ok(setup(&a)?.is_some_and(|s| s.provider != Provider::Own) && a.setting(agents::RUNNING).map_err(|e| e.to_string())?.as_deref() == Some("1")));
             match tunnelled {
                 Ok(true) => {
@@ -479,7 +480,7 @@ mod tests {
         crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], bagholder_core::jiff::Timestamp::now()).unwrap();
     }
 
-    /// Clear's Agents kind removes the four settings and stops the listener and the
+    /// Clear's Agents kind removes the five settings and stops the listener and the
     /// tunnel: nothing is left to answer an agent (the plan's test, brief 80 §6.5).
     #[test]
     fn clearing_the_agents_stops_the_listener_and_the_tunnel_and_removes_their_settings() {
@@ -492,6 +493,14 @@ mod tests {
         let s = Setup { provider: Provider::Own, name: "agents.example.com".into(), funnel_port: None, sends_host: None };
         a.set_setting(agents::TUNNEL, Some(&serde_json::to_string(&s).unwrap()), now).unwrap();
         a.set_setting(agents::HOST, Some("agents.example.com"), now).unwrap();
+        // every one of the agents' settings set, `agents.running` with them, so
+        // Clear is shown to remove each (brief 80, round 3, 5)
+        for key in bagholder_book::agents::SETTINGS {
+            if a.setting(key).unwrap().is_none() {
+                a.set_setting(key, Some("1"), now).unwrap();
+            }
+            assert!(a.setting(key).unwrap().is_some(), "{key} is set before Clear");
+        }
         assert!(app.agents.port().is_some());
         crate::clear::clear(&app, app.figures.get().unwrap(), &[crate::clear::Kind::Agents], now).unwrap();
         assert!(app.agents.port().is_none(), "the listener stopped");
