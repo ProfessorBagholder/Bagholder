@@ -1,6 +1,7 @@
 // Generated from the server's route table (`api_routes!`). Do not edit: change the
 // route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.
 
+import type { AgentId, AgentLog, KeyAsked, LogAsked, MadeKey, Setup, SwitchAsked } from './agents'
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, Details, TradesDoc } from './figures'
@@ -70,4 +71,15 @@ export interface Routes {
   'GET /api/watch': { answer: WatchStatus }
   'POST /api/watch': { body: WatchRequest; answer: WatchStatus }
   'POST /api/watch/scan': { answer: WatchStatus }
+  'POST /api/agents/switch': { body: SwitchAsked; answer: OkOr }
+  'POST /api/agents/tunnel': { body: Setup; answer: OkOr }
+  'POST /api/agents/tunnel/start': { answer: OkOr }
+  'POST /api/agents/tunnel/stop': { answer: OkOr }
+  'POST /api/agents/tunnel/look': { answer: OkOr }
+  'POST /api/agents/check': { answer: OkOr }
+  'POST /api/agents/requests/allow': { body: AgentId; answer: OkOr }
+  'POST /api/agents/requests/deny': { body: AgentId; answer: OkOr }
+  'POST /api/agents/keys': { body: KeyAsked; answer: MadeKey }
+  'POST /api/agents/cut-off': { body: AgentId; answer: OkOr }
+  'GET /api/agents/log': { query: LogAsked; answer: AgentLog }
 }

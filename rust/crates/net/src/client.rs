@@ -164,13 +164,51 @@ fn parse_url(url: &str) -> Result<Url, Error> {
 
 enum Conn {
     Tls(Box<SslStream<TcpStream>>),
+    /// TLS over a socket whose reads end at a deadline (`get_at`).
+    TlsUntil(Box<SslStream<Until>>),
     Plain(TcpStream),
+}
+
+/// A socket whose reads end at a deadline on the clock it is handed: each waits
+/// only what is left of it, so a peer sending a byte at a time cannot hold the
+/// read past it.
+struct Until {
+    tcp: TcpStream,
+    clock: std::sync::Arc<dyn crate::Clock>,
+    at: jiff::Timestamp,
+}
+
+impl std::fmt::Debug for Until {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "a socket read until {}", self.at)
+    }
+}
+
+impl Read for Until {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        let left = Duration::try_from(self.at.duration_since(self.clock.now())).ok().filter(|d| !d.is_zero());
+        let Some(left) = left else {
+            return Err(std::io::Error::new(std::io::ErrorKind::TimedOut, "the answer took longer than it is given"));
+        };
+        self.tcp.set_read_timeout(Some(left))?;
+        self.tcp.read(buf)
+    }
+}
+
+impl Write for Until {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.tcp.write(buf)
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.tcp.flush()
+    }
 }
 
 impl Read for Conn {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
         match self {
             Conn::Tls(s) => s.read(buf),
+            Conn::TlsUntil(s) => s.read(buf),
             Conn::Plain(s) => s.read(buf),
         }
     }
@@ -180,12 +218,14 @@ impl Write for Conn {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         match self {
             Conn::Tls(s) => s.write(buf),
+            Conn::TlsUntil(s) => s.write(buf),
             Conn::Plain(s) => s.write(buf),
         }
     }
     fn flush(&mut self) -> std::io::Result<()> {
         match self {
             Conn::Tls(s) => s.flush(),
+            Conn::TlsUntil(s) => s.flush(),
             Conn::Plain(s) => s.flush(),
         }
     }
@@ -556,26 +596,31 @@ fn read_body(conn: &mut Conn, head: &Head, out: &mut Capped<'_>) -> Result<bool,
 /// its own bytes: a file that is itself gzip (a `.tar.gz` release archive) is
 /// returned as it came. A coding that cannot be undone is the error, never the
 /// raw bytes passed off as the body.
-fn decoded(raw: Vec<u8>, headers: &[(String, String)]) -> Result<Vec<u8>, Error> {
+/// The body as sent, its content coding undone, at most `ceiling` bytes once
+/// undone: a small coded body can inflate far past what it may be, and is stopped
+/// as it is undone, never after.
+fn decoded(raw: Vec<u8>, headers: &[(String, String)], ceiling: u64) -> Result<Vec<u8>, Error> {
     let coding = headers.iter().find(|(k, _)| k == "content-encoding").map(|(_, v)| v.trim().to_ascii_lowercase()).unwrap_or_default();
-    let undo = |r: std::io::Result<usize>, out: Vec<u8>, name: &str| r.map(|_| out).map_err(|e| Error::Transport(format!("a {name} body that does not decode: {e}")));
+    // Ok(None): it does not decode as `name`
+    let undo = |reader: &mut dyn Read| -> Result<Option<Vec<u8>>, Error> {
+        let mut out = Vec::new();
+        if reader.take(ceiling.saturating_add(1)).read_to_end(&mut out).is_err() {
+            return Ok(None);
+        }
+        if out.len() as u64 > ceiling {
+            return Err(Error::Transport(format!("an answer larger than the {ceiling} bytes it may be once decoded")));
+        }
+        Ok(Some(out))
+    };
+    let not = |name: &str| Error::Transport(format!("a {name} body that does not decode"));
     match coding.as_str() {
         "" | "identity" => Ok(raw),
-        "gzip" | "x-gzip" => {
-            let mut out = Vec::new();
-            let r = flate2::read::GzDecoder::new(&raw[..]).read_to_end(&mut out);
-            undo(r, out, "gzip")
-        }
+        "gzip" | "x-gzip" => undo(&mut flate2::read::GzDecoder::new(&raw[..]))?.ok_or_else(|| not("gzip")),
         // HTTP's deflate is zlib-wrapped (RFC 9110 §8.4.1.2); some servers send the bare stream
-        "deflate" => {
-            let mut out = Vec::new();
-            if flate2::read::ZlibDecoder::new(&raw[..]).read_to_end(&mut out).is_ok() {
-                return Ok(out);
-            }
-            let mut out = Vec::new();
-            let r = flate2::read::DeflateDecoder::new(&raw[..]).read_to_end(&mut out);
-            undo(r, out, "deflate")
-        }
+        "deflate" => match undo(&mut flate2::read::ZlibDecoder::new(&raw[..]))? {
+            Some(out) => Ok(out),
+            None => undo(&mut flate2::read::DeflateDecoder::new(&raw[..]))?.ok_or_else(|| not("deflate")),
+        },
         other => Err(Error::Transport(format!("a body in a coding not asked for: {other}"))),
     }
 }
@@ -732,6 +777,58 @@ fn send(
     once: bool,
 ) -> Result<Response, Error> {
     send_into(method, url, headers, body, timeout, lenient, once, None).map(|(r, _)| r)
+}
+
+/// One `GET` of an https `url` from the address `to` alone: the name is never
+/// resolved again, so a second answer for it cannot move the request elsewhere; it
+/// is checked for TLS and sent as `Host`. Nothing is pooled, no proxy is used, and
+/// no redirect is followed (the redirect is the answer). The body is at most
+/// `ceiling` bytes, and the whole of it, from connecting to the last byte, takes at
+/// most `timeout` on `clock`. For a fetch whose address was checked before it was made: an
+/// agent's metadata document, and the agents' address asked from outside
+/// (`docs/plans/agents-from-anywhere.md`, §2.1 and §4.4).
+pub fn get_at(clock: &std::sync::Arc<dyn crate::Clock>, to: std::net::SocketAddr, url: &str, headers: &[(&str, &str)], timeout: Duration, ceiling: u64) -> Result<Response, Error> {
+    let u = parse_url(url)?;
+    if !u.tls {
+        return Err(Error::Transport(format!("{url} is not https")));
+    }
+    leaving("GET", &u)?;
+    let at = jiff::SignedDuration::try_from(timeout).ok().and_then(|d| clock.now().checked_add(d).ok()).ok_or_else(|| Error::Transport(format!("{timeout:?} is no deadline")))?;
+    let tcp = TcpStream::connect_timeout(&to, timeout).map_err(transport)?;
+    tcp.set_write_timeout(Some(timeout)).map_err(transport)?;
+    #[cfg(test)]
+    let plain = PLAIN.with(|p| p.get());
+    #[cfg(not(test))]
+    let plain = false;
+    let mut c = if plain {
+        Conn::Plain(tcp)
+    } else {
+        Conn::TlsUntil(Box::new(connector()?.connect(&u.host, Until { tcp, clock: clock.clone(), at }).map_err(|e| Error::Transport(e.to_string()))?))
+    };
+    let host_header = if u.port == 443 { u.host.clone() } else { format!("{}:{}", u.host, u.port) };
+    let mut req = format!("GET {} HTTP/1.1\r\nHost: {}\r\nAccept-Encoding: identity\r\nConnection: close\r\n", u.path, host_header);
+    for (k, v) in headers {
+        req.push_str(&format!("{k}: {v}\r\n"));
+    }
+    req.push_str("\r\n");
+    c.write_all(req.as_bytes()).and_then(|_| c.flush()).map_err(transport)?;
+    answer_of(&mut c, ceiling)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// In a test, `get_at` speaks plain HTTP to its address, so the answer it reads
+    /// is the one under test and not a handshake no test peer can make.
+    static PLAIN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The answer on `c` once its request is sent (`get_at`): its head, and its body
+/// held to `ceiling` as it arrives and again once decoded.
+fn answer_of(c: &mut Conn, ceiling: u64) -> Result<Response, Error> {
+    let head = read_head(c).and_then(|(raw, _)| parse_head(&raw))?;
+    let mut raw: Vec<u8> = Vec::new();
+    read_body(c, &head, &mut Capped::new(&mut raw, ceiling))?;
+    Ok(Response { status: head.status, body: decoded(raw, &head.headers, ceiling)?, headers: head.headers.clone() })
 }
 
 /// Where a download's body goes: the file, how large it may be, and the hosts it
@@ -901,7 +998,7 @@ fn send_into(
             return Err(Error::Status(head.status));
         }
         // a download's body is in its file: the answer carries the bytes written
-        let body = if written.is_some() { Vec::new() } else { decoded(raw, &head.headers)? };
+        let body = if written.is_some() { Vec::new() } else { decoded(raw, &head.headers, u64::MAX)? };
         return Ok((Response { status: head.status, body, headers: head.headers.clone() }, written));
     }
     Err(Error::Transport("too many redirects".into()))
@@ -940,7 +1037,7 @@ mod leaving_tests {
 
 #[cfg(test)]
 mod coding_tests {
-    use super::decoded;
+    use super::{answer_of, decoded, Conn};
     use std::io::Write;
 
     fn gz(data: &[u8]) -> Vec<u8> {
@@ -957,18 +1054,72 @@ mod coding_tests {
     #[test]
     fn a_body_is_decoded_by_its_content_encoding_alone() {
         let file = gz(b"an archive's own bytes");
-        assert_eq!(decoded(file.clone(), &[]).unwrap(), file, "a .tar.gz sent with no coding is the file itself");
-        assert_eq!(decoded(file.clone(), &h("identity")).unwrap(), file);
-        assert_eq!(decoded(gz(b"text"), &h("gzip")).unwrap(), b"text");
+        assert_eq!(decoded(file.clone(), &[], u64::MAX).unwrap(), file, "a .tar.gz sent with no coding is the file itself");
+        assert_eq!(decoded(file.clone(), &h("identity"), u64::MAX).unwrap(), file);
+        assert_eq!(decoded(gz(b"text"), &h("gzip"), u64::MAX).unwrap(), b"text");
         let mut z = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
         z.write_all(b"text").unwrap();
-        assert_eq!(decoded(z.finish().unwrap(), &h("deflate")).unwrap(), b"text");
+        assert_eq!(decoded(z.finish().unwrap(), &h("deflate"), u64::MAX).unwrap(), b"text");
         let mut d = flate2::write::DeflateEncoder::new(Vec::new(), flate2::Compression::default());
         d.write_all(b"text").unwrap();
-        assert_eq!(decoded(d.finish().unwrap(), &h("deflate")).unwrap(), b"text", "the bare stream some servers send");
+        assert_eq!(decoded(d.finish().unwrap(), &h("deflate"), u64::MAX).unwrap(), b"text", "the bare stream some servers send");
         // what cannot be undone is the error, never the raw bytes
-        assert!(decoded(b"not gzip".to_vec(), &h("gzip")).is_err());
-        assert!(decoded(b"x".to_vec(), &h("br")).is_err());
+        assert!(decoded(b"not gzip".to_vec(), &h("gzip"), u64::MAX).is_err());
+        assert!(decoded(b"x".to_vec(), &h("br"), u64::MAX).is_err());
+    }
+
+    /// A small coded body that inflates past its ceiling is refused as it is
+    /// undone: a megabyte of zeros sent as about a kilobyte of gzip, held to 8 KiB.
+    #[test]
+    fn a_coded_body_is_held_to_its_ceiling_once_decoded() {
+        // and in the answer `get_at` reads, over a socket (brief 80's re-review, 5)
+        let bomb = gz(&vec![0u8; 1 << 20]);
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let to = l.local_addr().unwrap();
+        let sent = bomb.clone();
+        let peer = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = std::io::Write::write_all(&mut s, format!("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n", sent.len()).as_bytes());
+            let _ = std::io::Write::write_all(&mut s, &sent);
+        });
+        let mut c = Conn::Plain(std::net::TcpStream::connect(to).unwrap());
+        let said = answer_of(&mut c, 8 * 1024).err().expect("refused once decoded");
+        assert!(said.to_string().contains("larger than the 8192 bytes"), "{said}");
+        peer.join().unwrap();
+        let bomb = gz(&vec![0u8; 1 << 20]);
+        assert!(bomb.len() < 8 * 1024, "{}", bomb.len());
+        let said = decoded(bomb.clone(), &h("gzip"), 8 * 1024).err().expect("refused");
+        assert!(said.to_string().contains("larger than the 8192 bytes"), "{said}");
+        assert_eq!(decoded(gz(b"text"), &h("gzip"), 4).unwrap(), b"text", "at the ceiling exactly");
+        assert!(decoded(gz(b"texts"), &h("gzip"), 4).is_err());
+    }
+
+    /// `get_at` holds what it reads to the ceiling it is given: a coded body that
+    /// inflates past it is refused, and one within it is read whole (brief 80,
+    /// round 3, 5).
+    #[test]
+    fn get_at_holds_its_answer_to_its_own_ceiling() {
+        let peer = |body: Vec<u8>| {
+            let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let to = l.local_addr().unwrap();
+            let t = std::thread::spawn(move || {
+                let (mut s, _) = l.accept().unwrap();
+                let _ = std::io::Write::write_all(&mut s, format!("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
+                let _ = std::io::Write::write_all(&mut s, &body);
+            });
+            (to, t)
+        };
+        let clock: std::sync::Arc<dyn crate::Clock> = std::sync::Arc::new(crate::SystemClock);
+        super::PLAIN.with(|p| p.set(true));
+        let (to, t) = peer(gz(&vec![0u8; 1 << 20]));
+        let said = super::get_at(&clock, to, "https://localhost/doc", &[], std::time::Duration::from_secs(5), 8 * 1024).err().expect("refused once decoded");
+        t.join().unwrap();
+        let (to, t) = peer(gz(b"a document"));
+        let read = super::get_at(&clock, to, "https://localhost/doc", &[], std::time::Duration::from_secs(5), 8 * 1024);
+        t.join().unwrap();
+        super::PLAIN.with(|p| p.set(false));
+        assert!(said.to_string().contains("larger than the 8192 bytes"), "{said}");
+        assert_eq!(read.unwrap().body, b"a document");
     }
 }
 
@@ -1029,6 +1180,31 @@ mod ceiling_tests {
         let (port, _) = host("HTTP/1.1 200 OK\r\nContent-Length: 50000\r\nConnection: close\r\n\r\n", 50_000, false);
         let mut f = std::fs::File::create(&path).unwrap();
         assert_eq!(download(&format!("http://127.0.0.1:{port}/f"), &[], Duration::from_secs(10), &mut f, 100 * 1024, &|_| true, &mut |_| true).unwrap(), 50_000);
+    }
+
+    /// A peer that answers a byte at a time, each well within a socket's wait, is
+    /// still cut off once the whole fetch has taken its time.
+    #[test]
+    fn a_fetch_from_a_checked_address_ends_at_its_deadline_however_slowly_the_peer_answers() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let to = listener.local_addr().unwrap();
+        std::thread::spawn(move || {
+            if let Ok((mut s, _)) = listener.accept() {
+                // a TLS handshake record announcing 1 KiB, then its bytes one by one
+                let _ = s.write_all(&[0x16, 0x03, 0x03, 0x04, 0x00]);
+                for _ in 0..1024 {
+                    std::thread::sleep(Duration::from_millis(50));
+                    if s.write_all(&[0]).is_err() {
+                        break;
+                    }
+                }
+            }
+        });
+        let clock: std::sync::Arc<dyn crate::Clock> = std::sync::Arc::new(crate::SystemClock);
+        let started = clock.now();
+        assert!(super::get_at(&clock, to, "https://localhost/doc", &[], Duration::from_millis(500), 1024).is_err());
+        let took = clock.now().duration_since(started);
+        assert!(took < jiff::SignedDuration::from_secs(3), "{took:?}");
     }
 
     #[test]

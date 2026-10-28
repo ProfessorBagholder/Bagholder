@@ -5,6 +5,7 @@
 //! takes, what runs in the background, and how it stops. The HTTP server is
 //! `http`.
 
+mod agents;
 mod app;
 mod capacity;
 mod logfile;
@@ -268,6 +269,9 @@ fn serve() -> i32 {
     };
     *a.port.lock().unwrap() = port;
     app::note_home_port(port);
+    // the agents' address, on again when the person left it on: its reads go to
+    // this server's own port, known from here (docs/plans/agents-from-anywhere.md)
+    http::agents::open(&a, runtime.handle());
     // started and answering: the copies a migration kept of the stores are only for
     // putting a failed update back, which the updater does inside its window, so with
     // no update waiting on this start they go (brief 19, change 11)
@@ -337,6 +341,8 @@ fn serve() -> i32 {
     if let Err(e) = runtime.block_on(http::serve(listener, http::AppState { app: a.clone() })) {
         log(&format!("bagholder: the server stopped: {}", e));
     }
+    // the agents' address closes and its tunnel stops with the server
+    a.agents.switch_off();
     // a producer thread still writing to a stream that has gone is not waited for
     runtime.shutdown_background();
     // the local model this copy started stops with it, however it was told to stop
@@ -359,6 +365,14 @@ fn main() {
     if args.iter().any(|a| a == "--version" || a == "-V") {
         println!("bagholder {}", app::APP_VERSION);
         return;
+    }
+    // an agents' tunnel, run as this guard's child and ended with the server that
+    // started it (docs/plans/agents-from-anywhere.md, §4.4). Before any thread
+    // starts: the guard takes the stop signals itself, and a thread started before
+    // it blocks them (the watch below) would take a stop by its default action and
+    // leave the tunnel running.
+    if args.first().map(String::as_str) == Some("tunnel-guard") {
+        std::process::exit(agents::tunnel::guard(&args[1..]));
     }
     // a command run for some work ends with what started it (brief 64): the server
     // ends through its own stop (`serve`), a command at once

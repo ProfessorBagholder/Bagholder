@@ -1,0 +1,1 @@
+{"Status":0,"TC":false,"RD":true,"RA":true,"AD":false,"CD":false,"Question":[{"name":"www.github.com.","type":28}],"Answer":[{"name":"www.github.com.","type":5,"TTL":3384,"data":"github.com."}],"Authority":[{"name":"github.com.","type":6,"TTL":1584,"data":"dns1.p08.nsone.net. hostmaster.nsone.net. 1656468023 43200 7200 1209600 3600"}]}

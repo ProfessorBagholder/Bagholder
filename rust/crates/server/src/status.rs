@@ -52,6 +52,9 @@ pub struct Status {
     pub imported: Option<crate::csv_import::Imported>,
     /// The language model's file while it downloads, and how far it has come.
     pub model_download: Option<ModelDownload>,
+    /// The agents' address: on or off, its tunnel, the sign-ins waiting on the
+    /// person, and every agent that may read (`http::agents`).
+    pub agents: crate::http::agents::AgentsStatus,
 }
 
 /// The language model's file downloading: the bytes written of its pinned size.
@@ -138,6 +141,9 @@ pub fn status(app: &Arc<App>) -> Status {
     let mut sources: Vec<String> = vec![];
     sources.extend(crate::feeds::feed_failures(app));
     sources.extend(orders::order_failures(app));
+    // the agents' part reads their tables: never while holding the app's state,
+    // which a CSV import takes inside its own write
+    let agents = crate::http::agents::status(app);
     let st = app.state.lock().unwrap();
     let connected = st.connected && sess.as_ref().map(|x| !x.access_token.is_empty()).unwrap_or(false);
     let error = failures(&st, &sources);
@@ -172,6 +178,7 @@ pub fn status(app: &Arc<App>) -> Status {
         imported: st.imported.clone(),
         model_download: bagholder_market::localmodel::downloading().map(|(received, size)| ModelDownload { received, size }),
         notify: notify_status,
+        agents,
     }
 }
 

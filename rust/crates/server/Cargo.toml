@@ -4,8 +4,9 @@ version.workspace = true
 edition.workspace = true
 
 [dependencies]
-# the official MCP SDK, which tracks the specification's revisions: `bagholder mcp`, server and stdio only (its archive cost measured in #535)
-rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io"] }
+# the official MCP SDK, which tracks the specification's revisions: `bagholder mcp` over stdio (its archive cost measured in #535),
+# and the agents' address over Streamable HTTP, served as a tower service inside axum (docs/plans/agents-from-anywhere.md)
+rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 # the diff `#[derive(Diff)]` implements
 bagholder-diff = { path = "../diff" }
 # the page's order types are generated from these (web/src/lib/generated/orders.ts), as the
@@ -91,5 +92,6 @@ workspace = true
 libc = "0.2"
 
 [target.'cfg(windows)'.dependencies]
-# a process handle's wait, for BAGHOLDER_EXIT_WITH on Windows; the registry, to remove the app id earlier versions registered for notifications
-windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Registry"] }
+# a process handle's wait, for BAGHOLDER_EXIT_WITH on Windows; the registry, to remove the app id earlier versions registered for notifications;
+# a job object that ends an agents' tunnel with its guard
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_System_Threading", "Win32_System_Registry", "Win32_System_JobObjects", "Win32_Security"] }

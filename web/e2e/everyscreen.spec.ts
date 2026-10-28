@@ -26,7 +26,7 @@ interface Screen {
 const click = (label: string) => async (page: Page) => {
   await page.getByRole('button', { name: label, exact: true }).click()
 }
-const fromMenu = (item: string) => async (page: Page) => {
+const fromMenu = (item: string | RegExp) => async (page: Page) => {
   await page.getByRole('button', { name: 'Menu', exact: true }).click()
   await page.getByRole('button', { name: item }).click()
 }
@@ -39,6 +39,7 @@ const OPENERS: Record<string, (page: Page) => Promise<void>> = {
   import: fromMenu('Import CSV'),
   folder: fromMenu('Load folder'),
   clear: fromMenu('Clear data'),
+  agents: fromMenu(/^Agents/),
   filter: click('Filters'),
 }
 

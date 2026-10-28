@@ -129,6 +129,44 @@ fn test_a_name_listed_for_a_proxy_is_answered_from_this_machine_alone() {
     });
 }
 
+/// The agents' public name is never answered by the page, even listed for a proxy:
+/// the page's Allow and Deny cannot be reached through the agents' tunnel.
+#[test]
+fn test_the_agents_name_is_never_the_page_s_even_listed() {
+    let _g = guard();
+    let local = [127, 0, 0, 1];
+    runtime().block_on(async {
+        let _listed = Listed::names(&["agents.example.com"]);
+        assert_eq!(json_of(through(Method::GET, "/api/status", None, "agents.example.com", local)).await.0, StatusCode::OK, "listed, and no agents' address yet");
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/agents/switch", Some(r#"{"on":true}"#))).await.0, StatusCode::OK);
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/agents/tunnel", Some(r#"{"provider":"own","name":"agents.example.com"}"#))).await.0, StatusCode::OK);
+        assert_eq!(json_of(through(Method::GET, "/api/status", None, "agents.example.com", local)).await.0, StatusCode::FORBIDDEN, "the agents' name, though listed");
+        assert_eq!(json_of(from_the_page(Method::GET, "/api/status", None)).await.0, StatusCode::OK);
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/data/clear", Some(r#"{"kinds":["agents"]}"#))).await.0, StatusCode::OK);
+    });
+}
+
+/// A public name that is this machine (an address, `localhost`) is refused as the
+/// agents' name or as the Host a proxy sends, and the page stays reachable: taken,
+/// the page's own gate would refuse the page (brief 80 §4.1).
+#[test]
+fn test_an_agents_name_that_is_this_machine_is_refused_and_the_page_stays_reachable() {
+    let _g = guard();
+    let port = *app().port.lock().unwrap();
+    runtime().block_on(async {
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/agents/switch", Some(r#"{"on":true}"#))).await.0, StatusCode::OK);
+        // the last four end in a number as browsers read one (brief 80's re-review, 4)
+        for name in [format!("127.0.0.1:{port}"), "localhost".into(), "app.localhost".into(), "[::1]".into(), "10.0.0.1".into(), "0x7f.0x1".into(), "0x7f.0.0.0x1".into(), "0X7F.0X1".into(), "127.0x".into()] {
+            let (_, said) = json_of(from_the_page(Method::POST, "/api/agents/tunnel", Some(&serde_json::json!({ "provider": "own", "name": name }).to_string()))).await;
+            assert_eq!(said["ok"], false, "{name}: {said}");
+            let (_, said) = json_of(from_the_page(Method::POST, "/api/agents/tunnel", Some(&serde_json::json!({ "provider": "own", "name": "agents.example.com", "sendsHost": name }).to_string()))).await;
+            assert_eq!(said["ok"], false, "{name} as the Host sent: {said}");
+            assert_eq!(json_of(from_the_page(Method::GET, "/api/status", None)).await.0, StatusCode::OK);
+        }
+        assert_eq!(json_of(from_the_page(Method::POST, "/api/data/clear", Some(r#"{"kinds":["agents"]}"#))).await.0, StatusCode::OK);
+    });
+}
+
 /// `BAGHOLDER_HOSTS` read: names lowercased, a port kept; an entry with a space,
 /// an empty one, or one that is no host name refuses the start, naming it.
 #[test]

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.12.1";
+pub const APP_VERSION: &str = "2.13.0";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -323,6 +323,8 @@ pub struct App {
     /// row), which the book keeps: the Markets tab's documents read it
     /// (`following`).
     following: std::sync::atomic::AtomicU64,
+    /// The agents' address: off, or its listener and tunnel (`agents`).
+    pub agents: crate::agents::Agents,
 }
 
 impl App {
@@ -383,6 +385,7 @@ impl App {
             holdings_cash_said: Mutex::new(Default::default()),
             fill_waits: Mutex::new(std::collections::BTreeMap::new()),
             following: std::sync::atomic::AtomicU64::new(0),
+            agents: crate::agents::Agents::default(),
         })
     }
 

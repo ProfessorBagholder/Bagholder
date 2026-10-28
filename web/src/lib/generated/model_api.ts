@@ -24,7 +24,7 @@ export type Clear = { kinds: Array<Kind>, };
 
 export type ClearAnswer = { ok: boolean, };
 
-export type Kind = "broker" | "entries" | "journal" | "market" | "orders" | "settings" | "login";
+export type Kind = "broker" | "entries" | "journal" | "market" | "orders" | "settings" | "login" | "agents";
 
 export type JournalEntryRequest = { 
 /**

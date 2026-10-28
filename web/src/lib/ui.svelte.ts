@@ -59,7 +59,7 @@ function freshTradeForm(): TradeForm {
 
 export const ui = $state<{
   menuOpen: boolean
-  modal: '' | 'trade' | 'import' | 'folder'
+  modal: '' | 'trade' | 'import' | 'folder' | 'agents'
   // '' | 'clear' | 'disconnect' | `cancel:<orderId>` | `bracket:<bracketId>`
   confirm: string
   /** what the header says of the person's own actions, oldest first, the newest showing: each until they close it */
@@ -259,6 +259,7 @@ export const DATA_KINDS: { kind: DataKind; label: string }[] = [
   { kind: 'orders', label: 'Orders and brackets' },
   { kind: 'settings', label: 'Watchlist, tiles and notifications' },
   { kind: 'login', label: 'Wealthsimple login' },
+  { kind: 'agents', label: 'Agents, their keys and their log' },
 ]
 export function openData(): void {
   ui.menuOpen = false
@@ -279,6 +280,12 @@ export async function clearDataNow(): Promise<void> {
   }
   ui.confirm = ''
   tell('Data cleared')
+}
+
+/** The Agents panel (docs/plans/agents-from-anywhere.md §4). */
+export function openAgents(): void {
+  ui.menuOpen = false
+  ui.modal = 'agents'
 }
 
 export function openTradeModal(): void {

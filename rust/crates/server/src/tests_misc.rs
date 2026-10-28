@@ -453,10 +453,13 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// here, with the reason it stays: this list is the one place timers are argued for.
-const TIMED_WAITS: [(&str, usize, &str); 19] = [
+const TIMED_WAITS: [(&str, usize, &str); 22] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
+    ("net/src/client.rs", 1, "a test's stand-in peer that answers a byte at a time, slower than the fetch is given, to show the fetch ends at its deadline"),
     ("net/src/machine.rs", 1, "every host's request rate on the one limiter (Yahoo, SEDAR+, the SEC, fund companies, news feeds, the archive at TMX): a turn taken, waited for with no lock held"),
+    ("server/src/agents/fetch.rs", 2, "a client's metadata document: looking its name up gets what is left of the fetch's five seconds, since the system's resolver keeps no deadline of its own; one in its tests, a resolver too slow for it"),
+    ("server/src/agents/listener.rs", 1, "agents switched off: the listener takes no connection from then on, and what is already in hand gets at most five seconds to finish, so a connection held open cannot keep it serving"),
     ("server/src/app.rs", 4, "`wait` itself, measured on the wall clock (`Wall`) so a deadline a sleeping machine passed is met on waking, looking at that clock once a minute as cron does; three in its test"),
     ("server/src/broker_reads.rs", 1, "Wealthsimple's reads: until the next pull window (weekdays 2 PM Mountain), the next balances read while a page is open, or a failed read's rest ending"),
     ("server/src/docs.rs", 1, "a ticket's quote, every five seconds while a page shows that ticket and not a moment longer: Wealthsimple offers no quote push"),
@@ -711,7 +714,8 @@ fn test_a_checkout_builds_its_page_then_its_server_and_stops_at_the_first_failur
 /// there; every other line the app says goes to its log (`app::log`). Command-line
 /// tools (`src/bin`, and the server's own subcommands) print their output, which is
 /// what they are for.
-const TERMINAL: [(&str, usize, &str); 9] = [
+const TERMINAL: [(&str, usize, &str); 10] = [
+    ("server/src/agents/tunnel.rs", 7, "the `tunnel-guard` subcommand, a child the server starts: why it could not start or keep the tunnel reaches the Agents panel through its standard error, which the server reads"),
     ("server/src/app.rs", 1, "`say`: where to open the app, and whether orders are live"),
     ("server/src/logfile.rs", 3, "the log itself cannot be written or was started twice: the terminal is all that is left"),
     ("server/src/main.rs", 6, "the browser could not be opened (open the address yourself), no port could be bound, `--version`; `mcp` with no data folder to read; a command started for work that has already ended (`BAGHOLDER_EXIT_WITH`), before any log is open; a first word that is no command this build runs"),
@@ -863,9 +867,9 @@ fn every_copy_the_repository_starts_on_another_folder_ends_with_its_starter() {
         let lines: Vec<&str> = text.lines().collect();
         let mut out = Vec::new();
         for (n, l) in lines.iter().enumerate() {
-            if l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"") {
+            if l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"") || l.contains("\"tunnel-guard\".into()") {
                 let window = lines[n.saturating_sub(12)..(n + 13).min(lines.len())].join("\n");
-                if !window.contains("BAGHOLDER_EXIT_WITH") {
+                if !window.contains("BAGHOLDER_EXIT_WITH") && !window.contains("exit_with::VAR") {
                     out.push(format!("{}: {}", n + 1, l.trim()));
                 }
             }
@@ -876,7 +880,8 @@ fn every_copy_the_repository_starts_on_another_folder_ends_with_its_starter() {
     assert_eq!(missing("BAGHOLDER_HOME=/tmp/x target/release/bagholder").len(), 1);
     assert!(missing("BAGHOLDER_EXIT_WITH=$PPID BAGHOLDER_HOME=/tmp/x target/release/bagholder").is_empty());
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let mut files = vec![root.join("CLAUDE.md"), root.join("rust/crates/server/src/capacity.rs")];
+    // and an agents' tunnel, through its guard (docs/plans/agents-from-anywhere.md, §4.4)
+    let mut files = vec![root.join("CLAUDE.md"), root.join("rust/crates/server/src/capacity.rs"), root.join("rust/crates/server/src/agents/tunnel.rs")];
     for dir in ["web/e2e", ".github/workflows"] {
         for e in std::fs::read_dir(root.join(dir)).unwrap() {
             let p = e.unwrap().path();
@@ -888,10 +893,10 @@ fn every_copy_the_repository_starts_on_another_folder_ends_with_its_starter() {
     let mut starts = 0;
     for f in &files {
         let text = std::fs::read_to_string(f).unwrap();
-        starts += text.lines().filter(|l| l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"")).count();
+        starts += text.lines().filter(|l| l.contains("BAGHOLDER_HOME") || l.contains("\"capacity\", \"probe\"") || l.contains("\"tunnel-guard\".into()")).count();
         let m = missing(&text);
         assert!(m.is_empty(), "{} starts a copy that names no BAGHOLDER_EXIT_WITH: {m:?}", f.display());
     }
-    assert!(starts >= 3, "the scratch command, the browser tests' server and the capacity probes: {starts}");
+    assert!(starts >= 4, "the scratch command, the browser tests' server, the capacity probes and the tunnel's guard: {starts}");
 }
 

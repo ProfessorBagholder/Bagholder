@@ -188,6 +188,14 @@ fn scrub_timestamps(v: &mut Value) {
                     }
                 }
             }
+            // where this machine has each tunnel's program, if anywhere: the machine's, not the route's
+            if let Some(Value::Array(programs)) = m.get_mut("programs") {
+                for p in programs {
+                    if let Value::Object(o) = p {
+                        o.insert("path".into(), json!("<this machine's>"));
+                    }
+                }
+            }
             // the data folder's VAPID public key, made at random for this test's folder
             if let Some(Value::Object(push)) = m.get_mut("push") {
                 if push.get("key").is_some_and(Value::is_string) {

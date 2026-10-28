@@ -374,7 +374,7 @@ test('Clear data: a box for each kind, Clear all ticks every one, nothing is sen
   await page.getByText('Clear data').click()
   const dlg = page.locator('#confirmDlg')
   await expect(page.getByRole('heading', { name: 'Clear data' })).toBeVisible()
-  const kinds = ['Wealthsimple records', 'Your entries and imports', 'Journal', 'Market data', 'Orders and brackets', 'Watchlist, tiles and notifications', 'Wealthsimple login']
+  const kinds = ['Wealthsimple records', 'Your entries and imports', 'Journal', 'Market data', 'Orders and brackets', 'Watchlist, tiles and notifications', 'Wealthsimple login', 'Agents, their keys and their log']
   for (const k of kinds) await expect(dlg.getByLabel(k)).not.toBeChecked()
   // nothing ticked: the button does nothing
   await expect(dlg.getByRole('button', { name: 'Clear data' })).toBeDisabled()
@@ -400,7 +400,7 @@ test('Clear data: a box for each kind, Clear all ticks every one, nothing is sen
   await dlg.getByRole('button', { name: 'Clear all' }).click()
   for (const k of kinds) await expect(dlg.getByLabel(k)).toBeChecked()
   await dlg.getByRole('button', { name: 'Clear data' }).click()
-  await expect.poll(() => (sent as { kinds: string[] }).kinds).toEqual(['broker', 'entries', 'journal', 'market', 'orders', 'settings', 'login'])
+  await expect.poll(() => (sent as { kinds: string[] }).kinds).toEqual(['broker', 'entries', 'journal', 'market', 'orders', 'settings', 'login', 'agents'])
 })
 
 test('Clear data refused says why in the dialog and leaves it open', async ({ page }) => {

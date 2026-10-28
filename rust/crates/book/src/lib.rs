@@ -6,6 +6,7 @@
 //!
 //! The book never reads the clock: every write is given the time it happened.
 
+pub mod agents;
 pub mod canon;
 pub mod changes;
 pub mod clear;

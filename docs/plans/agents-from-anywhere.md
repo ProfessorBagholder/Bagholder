@@ -241,7 +241,7 @@ Sourced from each provider's docs, or from its code at a pinned release: tailsca
   - `agent_reads`: agent, tool, arguments, at, or a refusal.
 - **Settings:** `agents.on`, `agents.port`, `agents.tunnel` (the provider chosen), `agents.host`.
 - **Hashing:** tokens and keys are 32 random bytes from `openssl::rand::rand_bytes`, so plain SHA-256 is enough to store them, with no password hash needed. They're compared with `openssl::memcmp::eq` on the hashes. Nothing new is added to the dependencies.
-- **Clear data:** a new kind, **Agents**, empties every agent table, the four settings, and stops the listener and tunnel. Clear all includes it. `clear.rs`'s every-table test holds it.
+- **Clear data:** a new kind, **Agents**, empties every agent table, the five settings, and stops the listener and tunnel. Clear all includes it. `clear.rs`'s every-table test holds it.
 - **Idle cost (§16):**
   - while off: nothing, no listener and no child;
   - while on: one listener and one tunnel child, with no timer and no polling;

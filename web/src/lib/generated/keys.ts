@@ -58,6 +58,8 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
     'items.*.tags': 'symbol',
   },
   'status': {
+    'agents.waiting': 'id',
+    'agents.allowed': 'id',
   },
   'orders': {
     'orders': 'id',
