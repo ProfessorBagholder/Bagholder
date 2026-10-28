@@ -1501,13 +1501,17 @@ impl Generated {
             }
         };
         let m = |cents: i64| Value::Object([("amount".to_string(), text(money(cents))), ("currency".to_string(), text(cur.code()))].into());
+        // asked with `currency: CAD` and `currencyOverride: MARKET`, as Bagholder asks:
+        // `bookValue` in CAD (USD at 1.35, the conversions' rate), `marketBookValue`
+        // in the listing's own currency
+        let cad = Value::Object([("amount".to_string(), text(money(if cur == Cur::Usd { value * 135 / 100 } else { value }))), ("currency".to_string(), text("CAD"))].into());
         set(
             self.templates.position.clone(),
             &[
                 (&["quantity"], text(units)),
                 // a contract sold to open is held short, its units below nothing
                 (&["direction"], text(if q < 0 { "SHORT" } else { "LONG" })),
-                (&["bookValue"], m(value)),
+                (&["bookValue"], cad),
                 (&["marketBookValue"], m(value)),
                 (&["totalValue"], m(value)),
                 (&["marketUnrealizedReturns"], m(0)),

@@ -54,13 +54,18 @@ What stays on the journal, and why:
 
 **The fallback, named and not built:** if the owner reports a lag, units now come from the balances read's security quantities (`sec-s`, `sec-o`, `sec-z`, skipped today at `read.rs:184`), recorded first.
 
-### 2.2 Book value: in the currency Wealthsimple shows
+### 2.2 Book value: in the listing's own currency, as Wealthsimple shows it
 
-The read is asked with `currency: "CAD"` (`client.rs:305`), the argument of `financials.current` (`graphql/FetchHoldingsExportPositionsAsOfDate.graphql:6`). In every recorded node `bookValue` is in Canadian dollars, a listing outside Canada's too. Its amount stays the same from day to day while the units do, so it is the cost converted when bought, not at each day's rate. The book value of the `sec-c-usd` line is not units times a rate and is never read (`cash_held` reads the quantity only).
+Amended 2026-10-28 (2.12.1), replacing the open point this section held. The owner: "an individual stock should never show the wrong currency", and "There can be no ambiguity as to how WS answers".
 
-**Decided by the owner's answer:** book value and average cost are shown in the currency Wealthsimple shows them.
-- **Canadian dollars:** as the read states them now; nothing more is asked.
-- **The listing's currency:** this plan's one open point. Whether `currencyOverride` (in the document, never sent) states the listing's own currency is not recorded. Nothing reads it until a reply of that form is recorded. Until then the build shows the book value as the read states it, in Canadian dollars, and its PR says so.
+The read is asked as Wealthsimple's own web app asks it: `currency: "CAD"` with `currencyOverride: "MARKET"` (`wealthsimple/src/client.rs`, `CURRENCY_OVERRIDE`). The web app, release 0.3.720893 read on 2026-10-28 with no sign-in, calls this query in its chunk 652 with `variables:{accountIds:i,asOf:...,currency:"CAD",currencyOverride:G.o2C.MARKET}`, and its main script defines that enum as `tn={MARKET:"MARKET"}`, its one value.
+
+- **A holding's Book** is the node's `marketBookValue`, in the currency the node states it: the listing's own. **Avg** is that over the units. Bagholder converts neither.
+- **`bookValue`, in CAD, stays** for what adds up in CAD: a holding's book in CAD, and from it the Portfolio's totals. Unrealized in CAD is the market value in CAD less it.
+- **A node stating no `marketBookValue`** leaves the holding's Book a figure not read (`— cost`), never taken from another source. A day read before 2.12.1 asked for it is read again when a page shows that day or a sale's units wait on it; a day read for its cash alone is not.
+- **Point 5's stated lots** take `marketBookValue` too.
+
+2.12.0 showed `bookValue` in CAD for every holding. It stayed a pre-release.
 
 ### 2.3 The cash shown: unchanged
 
@@ -154,7 +159,7 @@ The current read wins (no migration). The first pull under this build withdraws 
 
 ## Not included
 
-As brief §7: the "took N more" line; the journal's deposited lots and the opening-balance form; fees and execution days from statements; dropping the statement tables; brief 75's PR 4 and PR 5; anything else on the page. Also not included: asking the positions read with `currencyOverride`, unless the owner names the listing's currency (§2.2); and the fallback of §2.1, reading the balances read's security entries.
+As brief §7: the "took N more" line; the journal's deposited lots and the opening-balance form; fees and execution days from statements; dropping the statement tables; brief 75's PR 4 and PR 5; anything else on the page. Also not included: the fallback of §2.1, reading the balances read's security entries.
 
 ## Order
 

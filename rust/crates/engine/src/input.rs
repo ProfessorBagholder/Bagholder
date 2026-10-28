@@ -782,9 +782,12 @@ pub struct BrokerAccount {
     pub held: BTreeMap<InstrumentId, Dec>,
     /// What the broker states those units are worth, where it states it.
     pub held_value: BTreeMap<InstrumentId, Money>,
-    /// What the broker states those units cost (its book value), in the
-    /// currency it states it in, where it states it.
+    /// What the broker states those units cost (its book value) in the listing's
+    /// currency (`marketBookValue`), where it states it.
     pub held_book: BTreeMap<InstrumentId, Money>,
+    /// The same in CAD (`bookValue`), where it states it: what a total in CAD
+    /// adds up.
+    pub held_book_cad: BTreeMap<InstrumentId, Money>,
     /// The day the broker states `held` as of: today, read with the balances
     /// (`docs/plans/every-amount-as-wealthsimple-states-it.md` §2.1).
     pub held_as_of: Option<Date>,
@@ -804,8 +807,15 @@ pub struct BrokerAccount {
 pub struct HeldDay {
     /// Units per instrument, a short's negative.
     pub held: BTreeMap<InstrumentId, Dec>,
-    /// What those units cost, where the read states it.
+    /// What those units cost, in the listing's currency, where the read states it
+    /// (`marketBookValue`).
     pub book: BTreeMap<InstrumentId, Money>,
+    /// The same in CAD, where the read states it (`bookValue`): what a total in
+    /// CAD adds up.
+    pub book_cad: BTreeMap<InstrumentId, Money>,
+    /// Read before the book value in the listing's currency was asked: holding
+    /// units, it states none of them, so its book values are not read yet.
+    pub book_unasked: bool,
     /// Cash per currency.
     pub cash: BTreeMap<Currency, Dec>,
 }

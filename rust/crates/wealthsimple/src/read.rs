@@ -108,11 +108,13 @@ pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
 /// nodes): each security's units, a short's as a negative quantity. Cash is
 /// stated apart, and each position's value now (`totalValue`), which decides
 /// whether a coin's amount is dust by the broker's own figure, and its book
-/// value (`bookValue`, the cost Wealthsimple states for it, in the currency it
-/// states), which is the holding's book value (brief 79). `marketBookValue`
-/// beside it is not read: in every recorded reply it is
-/// the same amount in the same currency. Both are written to more digits than a
-/// decimal holds: each is taken to the places that fit.
+/// value twice: `bookValue` in CAD, what a total in CAD adds up, and
+/// `marketBookValue`, the cost in the listing's own currency, asked with
+/// `currencyOverride: MARKET` as Wealthsimple's own web app asks it
+/// (`crate::client::CURRENCY_OVERRIDE`), which is the holding's book value
+/// (brief 79). A node stating no `marketBookValue` leaves it unread, never taken
+/// from another figure. Each is written to more digits than a decimal holds:
+/// each is taken to the places that fit.
 ///
 /// Wealthsimple writes a short's quantity negative and a long's not (every
 /// recorded reply): a quantity whose sign contradicts its direction is a
@@ -141,7 +143,11 @@ pub fn units(nodes: &Value) -> Read<Vec<Units>> {
         };
         let value = Some(money("totalValue")?);
         let book_value = Some(money("bookValue")?);
-        out.push(Units { instrument: Reference::new(RefScheme::BrokerSecurity(broker()), id), quantity, book_value, value });
+        let market_book_value = match n.field("marketBookValue") {
+            Ok(m) if !matches!(m.value(), Value::Null) => Some(money("marketBookValue")?),
+            _ => None,
+        };
+        out.push(Units { instrument: Reference::new(RefScheme::BrokerSecurity(broker()), id), quantity, book_value, market_book_value, value });
     }
     Ok(out)
 }

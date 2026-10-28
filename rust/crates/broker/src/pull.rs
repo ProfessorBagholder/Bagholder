@@ -907,6 +907,7 @@ fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Conn
         let mut sum: BTreeMap<bagholder_core::InstrumentId, Dec> = BTreeMap::new();
         let mut valued: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
         let mut costed: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
+        let mut costed_market: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
         let mut cash: BTreeMap<bagholder_core::Currency, Dec> = BTreeMap::new();
         let mut complete = true;
         for k in ks {
@@ -926,8 +927,9 @@ fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Conn
                     Some(i) => {
                         let e = sum.entry(i).or_insert(Dec::ZERO);
                         *e = add(*e, u.quantity)?;
-                        // its value and book value, none once one id's states none or another currency
-                        for (slot, m) in [(valued.entry(i).or_insert(u.value.map(|v| bagholder_core::Money::zero(v.currency))), u.value), (costed.entry(i).or_insert(u.book_value.map(|v| bagholder_core::Money::zero(v.currency))), u.book_value)] {
+                        // its value and book values, none once one id's states none or another currency
+                        for (slots, m) in [(&mut valued, u.value), (&mut costed, u.book_value), (&mut costed_market, u.market_book_value)] {
+                            let slot = slots.entry(i).or_insert(m.map(|v| bagholder_core::Money::zero(v.currency)));
                             *slot = match (*slot, m) {
                                 (Some(a), Some(b)) if a.currency == b.currency => Some(bagholder_core::Money::new(add(a.amount, b.amount)?, a.currency)),
                                 _ => None,
@@ -943,7 +945,10 @@ fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Conn
         if !complete {
             continue;
         }
-        let lines: Vec<UnitsLine> = sum.into_iter().map(|(instrument, quantity)| UnitsLine { instrument, quantity, book_value: costed.get(&instrument).copied().flatten(), value: valued.get(&instrument).copied().flatten() }).collect();
+        let lines: Vec<UnitsLine> = sum
+            .into_iter()
+            .map(|(instrument, quantity)| UnitsLine { instrument, quantity, book_value: costed.get(&instrument).copied().flatten(), market_book_value: costed_market.get(&instrument).copied().flatten(), value: valued.get(&instrument).copied().flatten() })
+            .collect();
         if !book.units_on(*id, day)?.is_some_and(|(kept, kept_cash)| kept_cash == cash && same_holdings(&kept, &lines)) {
             let read = book.broker_read(connection, "units", now)?;
             book.store_units(*id, day, &lines, &cash, &read, now)?;
@@ -976,7 +981,7 @@ pub fn holdings_as_of(book: &Book, adapter: &mut dyn BrokerAdapter, connection: 
 /// book value of each instrument: what a holding shows (a worth moves with every
 /// price, and is not what a holding shows).
 fn same_holdings(a: &[UnitsLine], b: &[UnitsLine]) -> bool {
-    let of = |x: &[UnitsLine]| x.iter().map(|l| (l.instrument, (l.quantity, l.book_value))).collect::<BTreeMap<_, _>>();
+    let of = |x: &[UnitsLine]| x.iter().map(|l| (l.instrument, (l.quantity, l.book_value, l.market_book_value))).collect::<BTreeMap<_, _>>();
     of(a) == of(b)
 }
 

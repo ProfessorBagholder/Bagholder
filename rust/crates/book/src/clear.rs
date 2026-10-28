@@ -58,7 +58,7 @@ pub enum Holds {
     /// The record's change log (migration 028): what a clear deletes is logged
     /// like any write, and the build after it drops what it built from.
     Changes,
-    /// Who may read through the agents-only address, and what each read (migration 41).
+    /// Who may read through the agents-only address, and what each read (migration 42).
     Agents,
 }
 

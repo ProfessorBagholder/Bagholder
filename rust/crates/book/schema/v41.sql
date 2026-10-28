@@ -4,8 +4,6 @@ CREATE INDEX account_refs_value ON account_refs (value);
 CREATE INDEX account_values_account ON account_values (account_id, first_ns, first_seq);
 CREATE INDEX activity_reads_complete ON activity_reads (account_id, complete, at_ns);
 CREATE INDEX adjustments_applies ON adjustments (applies_record, applies_leg);
-CREATE INDEX agent_reads_agent ON agent_reads (agent, seq);
-CREATE INDEX agent_tokens_grant ON agent_tokens (grant_id);
 CREATE INDEX brackets_live ON brackets(phase) WHERE phase <> 'ended';
 CREATE INDEX broker_reads_part ON broker_reads (connection_id, part, at_ns);
 CREATE INDEX buying_power_account ON buying_power (account_id, first_ns, first_seq);
@@ -125,78 +123,6 @@ CREATE TABLE adjustments (
     applies_record TEXT NOT NULL,
     applies_leg TEXT NOT NULL,
     PRIMARY KEY (record_id, leg)
-) STRICT;
-CREATE TABLE agent_clients (
-    id TEXT PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ('metadata', 'registered')),
-    -- the name the agent gave, shown as the agent's own word
-    name TEXT NOT NULL,
-    -- the redirect URIs, each matched exactly: a JSON array of strings
-    redirect_uris TEXT NOT NULL,
-    made_at TEXT NOT NULL,
-    approved INTEGER NOT NULL DEFAULT 0 CHECK (approved IN (0, 1))
-) STRICT;
-CREATE TABLE agent_grants (
-    id TEXT PRIMARY KEY,
-    client_id TEXT NOT NULL REFERENCES agent_clients(id),
-    name TEXT NOT NULL,
-    who TEXT NOT NULL,
-    resource TEXT NOT NULL,
-    made_at TEXT NOT NULL,
-    last_used_at TEXT,
-    withdrawn_at TEXT
-) STRICT;
-CREATE TABLE agent_keys (
-    id TEXT PRIMARY KEY,
-    name TEXT NOT NULL,
-    way TEXT NOT NULL CHECK (way IN ('mcp', 'api')),
-    hash BLOB NOT NULL UNIQUE,
-    made_at TEXT NOT NULL,
-    last_used_at TEXT,
-    withdrawn_at TEXT
-) STRICT;
-CREATE TABLE agent_reads (
-    seq INTEGER PRIMARY KEY,
-    -- the grant's or the key's id; empty for a caller no grant or key names
-    agent TEXT NOT NULL,
-    at TEXT NOT NULL,
-    tool TEXT,
-    arguments TEXT,
-    refusal TEXT,
-    CHECK ((tool IS NULL) <> (refusal IS NULL))
-) STRICT;
-CREATE TABLE agent_requests (
-    id TEXT PRIMARY KEY,
-    code TEXT NOT NULL UNIQUE,
-    -- a registered client's id, or a metadata document's https URL, whose client is
-    -- kept only once the person allows it: until then the request holds what it said
-    client_id TEXT NOT NULL,
-    -- the name the client gave as it asked
-    client_name TEXT NOT NULL,
-    -- who is asking, as both pages show it: the metadata document's host, or a
-    -- registered client's redirect host
-    who TEXT NOT NULL,
-    redirect_uri TEXT NOT NULL,
-    -- the agent's own state, sent back with the code
-    state TEXT,
-    -- the PKCE challenge, S256
-    challenge TEXT NOT NULL,
-    resource TEXT NOT NULL,
-    made_at TEXT NOT NULL,
-    answer TEXT CHECK (answer IN ('allowed', 'denied')),
-    answered_at TEXT,
-    -- the authorization code handed to the public page once allowed, as its hash,
-    -- and when it was handed; a code is exchanged once
-    code_hash BLOB,
-    code_at TEXT,
-    code_used INTEGER NOT NULL DEFAULT 0 CHECK (code_used IN (0, 1))
-) STRICT;
-CREATE TABLE agent_tokens (
-    hash BLOB PRIMARY KEY,
-    kind TEXT NOT NULL CHECK (kind IN ('access', 'refresh')),
-    grant_id TEXT NOT NULL REFERENCES agent_grants(id) ON DELETE CASCADE,
-    expires_at TEXT NOT NULL,
-    used_at TEXT
 ) STRICT;
 CREATE TABLE bank_holidays (
     day TEXT PRIMARY KEY,
@@ -628,7 +554,7 @@ CREATE TABLE statement_units (
     -- the broker's own book value for the position, kept as its statement,
     -- never taken as a cost (brief 07 §5)
     book_value TEXT,
-    book_value_currency TEXT, value TEXT, value_currency TEXT,
+    book_value_currency TEXT, value TEXT, value_currency TEXT, market_book_value TEXT, market_book_value_currency TEXT,
     PRIMARY KEY (statement_id, instrument_id),
     CHECK ((book_value IS NULL) = (book_value_currency IS NULL))
 ) STRICT;
