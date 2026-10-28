@@ -34,7 +34,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `trade-6`
 - `trade-7`
 - `trade-8`
-- `trade-9`
+- `trade-9` retired
 - `trade-10`
 - `trade-11`
 - `trade-12`
@@ -92,6 +92,8 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `trade-64`
 - `trade-65`
 - `trade-66`
+- `trade-67`
+- `trade-68`
 - `what-you-enter-1`
 - `what-you-enter-2`
 - `what-you-enter-3`
@@ -208,6 +210,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `market-data-33`
 - `market-data-34`
 - `market-data-35`
+- `market-data-36`
 - `versions-and-the-update-check-1`
 - `versions-and-the-update-check-2`
 - `versions-and-the-update-check-3`
@@ -323,7 +326,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `pages-11`
 - `pages-12`
 - `pages-13`
-- `pages-14`
+- `pages-14` retired
 - `pages-15` retired
 - `pages-16` retired
 - `pages-17` retired
@@ -351,6 +354,9 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `pages-39`
 - `pages-40`
 - `pages-41`
+- `pages-42`
+- `pages-43`
+- `pages-44`
 - `dashboard-1`
 - `dashboard-2`
 - `dashboard-3`

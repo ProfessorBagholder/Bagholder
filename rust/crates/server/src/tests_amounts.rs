@@ -333,8 +333,9 @@ fn a_past_day_is_wealthsimple_s_and_is_read_once() {
 #[test]
 fn no_sentence_says_the_figures_differ() {
     // the comparing lines' own words: the units line, the month that did not
-    // reconcile, the movements no statement listed
-    const SAID: [&str; 4] = ["states {}, the book", "cannot count its units", "statement the book does not reconcile", "statement lists"];
+    // reconcile, the movements no statement listed; and a sale taking more than
+    // was held, which can no longer happen (amended 2026-10-28, point 5)
+    const SAID: [&str; 5] = ["states {}, the book", "cannot count its units", "statement the book does not reconcile", "statement lists", "more than the book held"];
     let root = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let mut found = Vec::new();
     let mut stack = vec![root.join("rust/crates/server/src"), root.join("web/src")];

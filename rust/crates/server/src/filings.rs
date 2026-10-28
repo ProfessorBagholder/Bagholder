@@ -683,8 +683,8 @@ pub fn stamp_day(iso: &str) -> String {
 /// the release's day (a company reader that reads its releases, as Harvest's
 /// does); else the release's text, as the feed that carried it keeps it; else
 /// the exchange's record where that lists it. Otherwise the headline alone, and
-/// a release that could not be read says why in the header, until a later one
-/// can.
+/// a release that could not be read goes to the log, a market source's failure
+/// (`feeds::market_source`), never to the page.
 pub fn distribution_detail<T: Notable>(app: &Arc<App>, key: &ListingKey, release: &T) -> String {
     let Some(f) = app.figures.get() else { return String::new() };
     // the record is read again for the amount before, so it is the one just paid

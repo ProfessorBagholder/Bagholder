@@ -19,6 +19,10 @@ pub const UNREACHABLE: &str = "Wealthsimple couldn't be reached.";
 /// or answered in a shape not read.
 pub const UNREADABLE: &str = "Wealthsimple couldn't be read.";
 
+/// The page's sentence when what was read could not be kept: the book on this
+/// machine failed, not Wealthsimple.
+pub const NOT_KEPT: &str = "What Wealthsimple answered could not be kept on this machine.";
+
 /// The page's sentence for a pass's failures: one only where the accounts read,
 /// which every pass makes first and every other read hangs on, failed; none where
 /// a part alone did.
@@ -162,6 +166,37 @@ mod tests {
         assert_eq!(crate::status::synced(&st), "2026-10-28T08:15:00Z", "the balances' last answer");
         after_balances(&mut st, &[], at("2026-10-28T09:10:00Z"));
         assert_eq!(crate::status::synced(&st), "2026-10-28T09:00:00Z", "answering again: the pull's time");
+    }
+
+    /// Every sentence the page is given about Wealthsimple is one of the two plain
+    /// ones: a scan of the server's code for every write to them names no step,
+    /// id or reason (`format!` builds none of them).
+    #[test]
+    fn the_page_is_given_only_the_plain_sentences_about_wealthsimple() {
+        let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut writes = 0;
+        let mut stack = vec![dir];
+        while let Some(d) = stack.pop() {
+            for e in std::fs::read_dir(&d).unwrap().map(Result::unwrap) {
+                let path = e.path();
+                if path.is_dir() {
+                    stack.push(path);
+                    continue;
+                }
+                let name = path.file_name().unwrap().to_string_lossy().to_string();
+                if !name.ends_with(".rs") || name.starts_with("tests_") || name == "reading.rs" {
+                    continue;
+                }
+                for (n, line) in std::fs::read_to_string(&path).unwrap().lines().enumerate() {
+                    let code = line.split("//").next().unwrap_or_default();
+                    if code.contains("sync_problem.check(") || code.contains("balances_problem.check(") {
+                        writes += 1;
+                        assert!(!code.contains("format!") && (code.contains("reading::") || code.contains("whole")), "{name}:{} gives the page a sentence of its own: {}", n + 1, code.trim());
+                    }
+                }
+            }
+        }
+        assert!(writes >= 1, "the scan reads the writes");
     }
 
     #[test]

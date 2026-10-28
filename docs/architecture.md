@@ -209,13 +209,13 @@ The person's AI assistants (Claude, or any other that speaks the Model Context P
 
 Every failure has an owner and a place it shows:
 
-- a source failing or changing shape: on the card or chart it feeds, and in the header's status while it persists;
-- a broker session lapsing, a pull or part of a pull failing: the header, naming what failed;
+- a market source failing or changing shape: the log, as it starts and as it ends; the figure keeps its last value where it is shown, and the header says nothing (the owner, 2026-10-28; brief 79 amended);
+- Wealthsimple not read at all (signed out, unreachable, the session refused): one plain sentence in the header ("Wealthsimple couldn't be reached."), and "Synced" stays at the last read; a part of a pull or of the balances read failing (one account's history, the holdings, buying power) is asked again at its own next turn and goes to the log, and "Synced" shows that read's last answer; no step name, account id or reason text reaches the page (`server/src/reading.rs`);
 - an order or bracket problem: the order, the Orders panel, a notification;
 - a figure that is waiting on a fact the app is still finding out (today's rate before the Bank publishes it, a payout frequency, a corporate event's value): the figure says so while the app works on it;
 - the app itself (a book it cannot open, a migration that failed): the page says so instead of loading.
 
-Nothing is logged only to a terminal, and nothing is caught and discarded.
+Nothing is logged only to a terminal, and nothing is caught and discarded. Each read of Wealthsimple is asked only of the kinds of account it issues it for (`wealthsimple/src/account_types.rs` `reads`): no read finds out what an account is by failing.
 
 ## 16. Running it
 

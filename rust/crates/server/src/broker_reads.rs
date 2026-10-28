@@ -158,9 +158,11 @@ pub fn run(app: Arc<App>) {
             Ok(next) => next,
             Err(e) => {
                 {
-                    // the page is told in plain words; why, the log alone
+                    // a pass fails whole on this machine (the book, the session file):
+                    // Wealthsimple's own failures are its parts'; told in plain words,
+                    // why in the log alone
                     let mut st = app.state.lock().unwrap();
-                    st.sync_problem.check(Some(crate::reading::UNREADABLE.to_string()));
+                    st.sync_problem.check(Some(crate::reading::NOT_KEPT.to_string()));
                     st.error = st.sync_problem.said().unwrap_or_default();
                 }
                 log(&format!("bagholder: Wealthsimple could not be read: {e}"));
