@@ -22,6 +22,12 @@ pub fn public(ip: IpAddr) -> bool {
     public_beside(ip, this_machine)
 }
 
+#[cfg(test)]
+thread_local! {
+    /// In a test, the addresses this machine is to have, in place of its own.
+    pub(crate) static OWN: std::cell::RefCell<Option<Vec<IpAddr>>> = const { std::cell::RefCell::new(None) };
+}
+
 /// The same, with `own` saying which addresses are this machine's.
 fn public_beside(ip: IpAddr, own: impl Fn(IpAddr) -> bool) -> bool {
     let range = match ip {
@@ -34,9 +40,56 @@ fn public_beside(ip: IpAddr, own: impl Fn(IpAddr) -> bool) -> bool {
     range && !own(ip)
 }
 
-/// Whether `ip` is one of this machine's own addresses: one a socket here can be
-/// bound to, which an address on none of its interfaces cannot.
+/// Whether `ip` is one of this machine's own addresses.
 pub fn this_machine(ip: IpAddr) -> bool {
+    #[cfg(test)]
+    if let Some(own) = OWN.with(|o| o.borrow().clone()) {
+        return own.contains(&ip);
+    }
+    own_address(ip)
+}
+
+/// On Linux and macOS, an address one of the interfaces has, as the system lists
+/// them: a bind tells nothing, as Linux binds any address under `ip_nonlocal_bind`.
+#[cfg(unix)]
+fn own_address(ip: IpAddr) -> bool {
+    let mut list: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: getifaddrs fills `list` with a list the system allocates, freed below
+    if unsafe { libc::getifaddrs(&mut list) } != 0 {
+        return false;
+    }
+    let mut found = false;
+    let mut at = list;
+    while !at.is_null() && !found {
+        // SAFETY: a node of the list getifaddrs returned, read before freeifaddrs
+        let ifa = unsafe { &*at };
+        if !ifa.ifa_addr.is_null() {
+            // SAFETY: a non-null address of the list, read by the family it states
+            let family = i32::from(unsafe { (*ifa.ifa_addr).sa_family });
+            let addr = if family == libc::AF_INET {
+                // SAFETY: an AF_INET address is a sockaddr_in
+                let sin = unsafe { &*ifa.ifa_addr.cast::<libc::sockaddr_in>() };
+                Some(IpAddr::V4(Ipv4Addr::from(u32::from_be(sin.sin_addr.s_addr))))
+            } else if family == libc::AF_INET6 {
+                // SAFETY: an AF_INET6 address is a sockaddr_in6
+                let sin6 = unsafe { &*ifa.ifa_addr.cast::<libc::sockaddr_in6>() };
+                Some(IpAddr::V6(Ipv6Addr::from(sin6.sin6_addr.s6_addr)))
+            } else {
+                None
+            };
+            found = addr == Some(ip);
+        }
+        at = ifa.ifa_next;
+    }
+    // SAFETY: the list getifaddrs allocated, freed once and not read after
+    unsafe { libc::freeifaddrs(list) };
+    found
+}
+
+/// On Windows, an address a socket here can be bound to, which an address on none
+/// of its interfaces cannot (Windows has no `ip_nonlocal_bind`).
+#[cfg(windows)]
+fn own_address(ip: IpAddr) -> bool {
     std::net::UdpSocket::bind(SocketAddr::new(ip, 0)).is_ok()
 }
 
@@ -364,10 +417,14 @@ mod tests {
         }
         assert!(!this_machine("93.184.215.14".parse().unwrap()));
         assert!(public("93.184.215.14".parse().unwrap()));
-        // an address in a public range that is this machine's own, as a server's can be
+        // an address in a public range that is this machine's own, as a server's can
+        // be: `public` asks, not resting on this machine's address being private
+        // (brief 80's re-review, 6)
         let own: IpAddr = "93.184.215.14".parse().unwrap();
-        assert!(!public_beside(own, |ip| ip == own));
-        assert!(public_beside("93.184.215.15".parse().unwrap(), |ip| ip == own));
+        OWN.with(|o| *o.borrow_mut() = Some(vec![own]));
+        assert!(!public(own));
+        assert!(public("93.184.215.15".parse().unwrap()));
+        OWN.with(|o| *o.borrow_mut() = None);
     }
 
     /// What a refusal says names no address the resolver gave and no reason a
