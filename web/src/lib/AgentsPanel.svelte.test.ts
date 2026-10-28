@@ -42,8 +42,9 @@ describe('the Agents panel says who is asking', () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: true, lines: [] }))))
     status.data = {
       agents: agents([
-        asking({ id: 'r1', code: 'ABCDEF', who: 'claude.ai', name: 'Claude', checked: true, redirectHost: 'claude.ai' }),
-        asking({ id: 'r2', code: 'GHJKLM', who: 'agent.example', name: 'Totally Claude', checked: false, redirectHost: 'agent.example' }),
+        // each sends the person back to a host other than the one it is known by
+        asking({ id: 'r1', code: 'ABCDEF', who: 'claude.ai', name: 'Claude', checked: true, redirectHost: 'claude.com' }),
+        asking({ id: 'r2', code: 'GHJKLM', who: 'agent.example', name: 'Totally Claude', checked: false, redirectHost: 'callback.example.net' }),
       ]),
     } as unknown as Status
     const { container } = render(AgentsPanel)
@@ -53,7 +54,9 @@ describe('the Agents panel says who is asking', () => {
     expect(cards[0]).toContain('claude.ai (Claude) is asking to read your trade history')
     expect(cards[0]).not.toContain('not checked')
     expect(cards[0]).toContain('its page shows code ABCDEF')
+    expect(cards[0]).toContain('It sends you back to claude.com.')
     expect(cards[1]).toContain('agent.example (“Totally Claude”, name given by the agent, not checked)')
+    expect(cards[1]).toContain('It sends you back to callback.example.net.')
   })
 })
 
@@ -126,6 +129,39 @@ describe('Copy steps for an agent', () => {
     await fireEvent.click(getByRole('button', { name: /(Copy steps for|Copied:) Muse/ }))
     expect(copied.at(-1)).toContain('Authorization: Bearer bhapi_made')
     expect(posted.filter((p) => p.includes('/api/agents/keys'))).toHaveLength(2)
+  })
+
+  // brief 80's re-review, 14: Grok Bot's steps take the key made for Grok Bot
+  // over MCP, and no other
+  it("uses Grok Bot's MCP key, never one for the JSON API", async () => {
+    const fetch = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+      const path = String(url)
+      if (path.includes('/api/agents/keys')) {
+        const asked = JSON.parse(String(init?.body ?? '{}'))
+        return new Response(JSON.stringify({ ok: true, id: 'k1', name: asked.name, way: asked.way, key: `bh${asked.way}_grok` }))
+      }
+      return new Response(JSON.stringify({ ok: true, lines: [] }))
+    })
+    vi.stubGlobal('fetch', fetch)
+    const copied: string[] = []
+    vi.stubGlobal('navigator', { clipboard: { writeText: async (t: string) => void copied.push(t) } })
+    status.data = { agents: { ...agents([]), address: 'https://agents.example.com', ready: { state: 'ready' } } } as unknown as Status
+    const { container, getByRole, getByLabelText } = render(AgentsPanel)
+    flushSync()
+    await fireEvent.click(getByRole('button', { name: /(Copy steps for|Copied:) Grok Bot/ }))
+    expect(copied.at(-1)).toContain('make one named Grok Bot for MCP')
+    await fireEvent.input(getByLabelText('Key name'), { target: { value: 'Grok Bot' } })
+    await fireEvent.change(getByLabelText('Way in'), { target: { value: 'api' } })
+    await fireEvent.click(getByRole('button', { name: 'Make key' }))
+    await vi.waitFor(() => expect(container.textContent).toContain('bhapi_grok'))
+    await fireEvent.click(getByRole('button', { name: /(Copy steps for|Copied:) Grok Bot/ }))
+    expect(copied.at(-1)).not.toContain('bhapi_grok')
+    await fireEvent.input(getByLabelText('Key name'), { target: { value: 'Grok Bot' } })
+    await fireEvent.change(getByLabelText('Way in'), { target: { value: 'mcp' } })
+    await fireEvent.click(getByRole('button', { name: 'Make key' }))
+    await vi.waitFor(() => expect(container.textContent).toContain('bhmcp_grok'))
+    await fireEvent.click(getByRole('button', { name: /(Copy steps for|Copied:) Grok Bot/ }))
+    expect(copied.at(-1)).toContain('/mcp/key. Header: Authorization: Bearer bhmcp_grok')
   })
 })
 

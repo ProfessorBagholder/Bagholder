@@ -742,6 +742,19 @@ fn a_redirect_that_is_not_a_public_host_is_refused_everywhere() {
     }
 }
 
+/// An address as a redirect's host is taken only as written canonically, and
+/// public: another spelling of an address is refused, so the host shown is the
+/// one a browser goes to (brief 80's re-review, 14).
+#[test]
+fn a_redirect_address_is_taken_only_in_its_canonical_form() {
+    for ok in ["https://93.184.215.14/cb", "https://[2606:4700:4700::1111]/cb"] {
+        assert!(oauth::redirect_ok(ok).is_ok(), "{ok}");
+    }
+    for refused in ["https://093.184.215.14/cb", "https://[2606:4700:4700:0:0:0:0:1111]/cb", "https://[2606:4700:4700:0::1111]/cb"] {
+        assert!(oauth::redirect_ok(refused).is_err(), "{refused}");
+    }
+}
+
 /// A metadata document whose `client_id` is not its own URL is refused.
 #[test]
 fn a_metadata_document_naming_another_client_is_refused() {
@@ -811,11 +824,19 @@ fn the_status_route_answers_for_its_own_id_alone() {
 #[test]
 fn strangers_refused_are_counted_by_reason_and_never_written() {
     let h = harness();
+    // the book's stamp: SQLite's count of commits made by other connections, read
+    // on one held open throughout (brief 80 §2.1; its re-review, 14)
+    let watching = rusqlite::Connection::open(h.home.path().join(bagholder_book::BOOK_FILE)).unwrap();
+    let stamp = || watching.query_row("PRAGMA data_version", [], |r| r.get::<_, i64>(0)).unwrap();
+    // the harness's book opened once by this build, as the app's is before any caller
+    drop(h.store());
+    let before = stamp();
     let huge = "a".repeat(64 * 1024);
     assert_eq!(h.ask("GET", "/.well-known/oauth-protected-resource", &[("host", &huge)], vec![]).status, StatusCode::MISDIRECTED_REQUEST);
     for _ in 0..1000 {
         assert_eq!(h.ask("GET", "/api/agents/trades", &[("authorization", "Bearer bhk_wrong")], vec![]).status, StatusCode::UNAUTHORIZED);
     }
+    assert_eq!(stamp(), before, "the book's stamp moved");
     assert!(h.store().reads("", usize::MAX).unwrap().is_empty(), "nothing written");
     assert_eq!(listener::strangers(&h.ctx), vec![("for another host".to_string(), 1), ("with a wrong key".to_string(), 1000)]);
 }
