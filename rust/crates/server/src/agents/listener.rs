@@ -77,19 +77,22 @@ pub fn strangers(ctx: &Ctx) -> Vec<(String, u64)> {
     ctx.limits.lock().unwrap_or_else(|e| e.into_inner()).strangers.iter().map(|(why, n)| (why.to_string(), *n)).collect()
 }
 
-/// A waiting page's ask after the sign-in `id`, a request the store keeps:
-/// refused when it asked less than `POLL_EVERY` ago. Only kept requests are
-/// counted, and one is forgotten once its life is over, so this holds a few.
-pub fn poll(ctx: &Ctx, id: &str, now: Timestamp) -> Result<(), Response> {
+/// A waiting page's ask after the sign-in `id`: refused when it asked less than
+/// `POLL_EVERY` ago, before anything is read for it (brief 80's re-review, 10).
+pub fn too_soon(ctx: &Ctx, id: &str, now: Timestamp) -> Result<(), Response> {
     let mut l = ctx.limits.lock().unwrap_or_else(|e| e.into_inner());
     l.polls.retain(|_, at| *at >= now - super::REQUEST_LIFE);
-    if let Some(at) = l.polls.get(id) {
-        if now < *at + super::POLL_EVERY {
-            return Err(too_many(super::POLL_EVERY.as_secs().max(1) as u64));
-        }
+    match l.polls.get(id) {
+        Some(at) if now < *at + super::POLL_EVERY => Err(too_many(super::POLL_EVERY.as_secs().max(1) as u64)),
+        _ => Ok(()),
     }
-    l.polls.insert(id.to_string(), now);
-    Ok(())
+}
+
+/// A waiting page's ask after a sign-in the store keeps, noted. Only kept
+/// requests are noted, and one is forgotten once its life is over, so this holds
+/// a few.
+pub fn polled(ctx: &Ctx, id: &str, now: Timestamp) {
+    ctx.limits.lock().unwrap_or_else(|e| e.into_inner()).polls.insert(id.to_string(), now);
 }
 
 /// An answer of `status` with an error in words, as JSON.

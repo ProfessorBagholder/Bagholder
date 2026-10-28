@@ -351,6 +351,9 @@ pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -
         // an id is 32 hex digits: anything else, the code among them, names nothing
         let Some(id) = q.request.filter(|i| i.len() == 32 && i.bytes().all(|b| b.is_ascii_hexdigit())) else { return not() };
         let now = ctx.now();
+        if let Err(too_soon) = super::listener::too_soon(&ctx, &id, now) {
+            return too_soon;
+        }
         let store = match ctx.store() {
             Ok(s) => s,
             Err(e) => return unavailable(e),
@@ -360,9 +363,7 @@ pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -
             Ok(_) => return not(),
             Err(e) => return unavailable(e),
         };
-        if let Err(too_soon) = super::listener::poll(&ctx, &r.id, now) {
-            return too_soon;
-        }
+        super::listener::polled(&ctx, &r.id, now);
         let iss = ctx.base();
         match r.answer {
             None => axum::Json(json!({ "state": "waiting" })).into_response(),

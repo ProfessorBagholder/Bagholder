@@ -470,14 +470,23 @@ fn a_waiting_page_s_polls_never_use_up_the_allowance_before_sign_in() {
 }
 
 /// A waiting page asks after its sign-in at most once a `POLL_EVERY`: one that asks
-/// sooner is told to wait, and the sign-in still answers after.
+/// sooner is told to wait before the book is opened (brief 80's re-review, 10: with
+/// the book moved away, it is still told to wait, not that there is no such
+/// sign-in), and the sign-in still answers after.
 #[test]
 fn a_waiting_page_asking_again_within_the_second_is_told_to_wait() {
     let h = harness();
     let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
     let poll = || h.get(&format!("/oauth/authorize/status?request={id}"));
     assert_eq!(poll().status, StatusCode::OK);
-    assert_eq!(poll().status, StatusCode::TOO_MANY_REQUESTS);
+    let (home, away) = (h.home.path().to_path_buf(), h.home.path().with_extension("away"));
+    std::fs::rename(&home, &away).unwrap();
+    let asked = poll().status;
+    if home.exists() {
+        std::fs::remove_dir_all(&home).unwrap();
+    }
+    std::fs::rename(&away, &home).unwrap();
+    assert_eq!(asked, StatusCode::TOO_MANY_REQUESTS);
     h.advance(POLL_EVERY);
     assert_eq!(poll().json()["state"], "waiting");
 }
