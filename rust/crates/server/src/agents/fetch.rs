@@ -243,7 +243,9 @@ pub fn metadata(url: &str, resolve: &Arc<dyn Resolve>, get: &dyn Get) -> Result<
 /// The same, within `within` from resolving the name to the document's last byte.
 pub fn metadata_within(url: &str, resolve: &Arc<dyn Resolve>, get: &dyn Get, within: Duration) -> Result<serde_json::Value, String> {
     let started = Instant::now();
-    let to = checked(url, resolve, within)?;
+    // what the name resolved to, or that it did not, is never said: a stranger asks,
+    // and it describes this machine's network (brief 80's re-review, 11)
+    let to = checked(url, resolve, within).map_err(|_| format!("{url} was not fetched"))?;
     let left = within.checked_sub(started.elapsed()).filter(|d| !d.is_zero()).ok_or_else(|| format!("{url} was not fetched within {} seconds", within.as_secs()))?;
     // why a connection failed is never said: it can name this machine's network
     let r = get.get(to, url, &[("Accept", "application/json")], left).map_err(|_| format!("{url} could not be fetched"))?;
@@ -378,8 +380,10 @@ mod tests {
         for bad in ["127.0.0.1", "10.1.2.3", "172.16.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "100.101.102.103", "fc00::1", "fd12:3456::1", "::ffff:127.0.0.1", "::1", "0.0.0.0", "224.0.0.1", "fe80::1", "192.0.0.8", "fec0::1"] {
             let ip: IpAddr = bad.parse().unwrap();
             let get = recorded(200, b"{}");
-            let said = metadata("https://agent.example/client.json", &answers(vec![ip]), &get).unwrap_err();
-            assert!(said.contains("not a public address"), "{bad}: {said}");
+            let why = checked("https://agent.example/client.json", &answers(vec![ip]), FETCH_LIMIT).unwrap_err();
+            assert!(why.contains("not a public address"), "{bad}: {why}");
+            // and the refusal says only that it was not fetched
+            assert_eq!(metadata("https://agent.example/client.json", &answers(vec![ip]), &get).unwrap_err(), "https://agent.example/client.json was not fetched", "{bad}");
             assert!(get.asked.lock().unwrap().is_empty(), "{bad}: something was fetched");
             // and one bad answer among good ones refuses the whole name
             let get = recorded(200, b"{}");
@@ -444,8 +448,11 @@ mod tests {
     /// connection failed: a stranger asks, and those name this machine's network.
     #[test]
     fn a_refusal_names_no_address_resolved_and_no_connect_error() {
-        let said = metadata("https://agent.example/client.json", &answers(vec!["10.0.0.5".parse().unwrap()]), &recorded(200, b"{}")).unwrap_err();
-        assert!(!said.contains("10.0.0.5"), "{said}");
+        // a name resolving to a private address, to none, or not at all: the same words
+        let doc = "https://agent.example/client.json";
+        for resolved in [answers(vec!["10.0.0.5".parse().unwrap()]), answers(vec![]), answers(vec!["93.184.215.14".parse().unwrap(), "127.0.0.1".parse().unwrap()])] {
+            assert_eq!(metadata(doc, &resolved, &recorded(200, b"{}")).unwrap_err(), format!("{doc} was not fetched"));
+        }
         struct Refused;
         impl Get for Refused {
             fn get(&self, _to: SocketAddr, _url: &str, _h: &[(&str, &str)], _within: Duration) -> Result<bagholder_net::client::Response, String> {
@@ -471,7 +478,7 @@ mod tests {
         let started = Instant::now();
         let said = metadata_within("https://agent.example/client.json", &(Arc::new(Slow) as Arc<dyn Resolve>), &get, Duration::from_millis(200)).unwrap_err();
         assert!(started.elapsed() < Duration::from_millis(1000), "waited {:?}", started.elapsed());
-        assert!(said.contains("not resolved within"), "{said}");
+        assert_eq!(said, "https://agent.example/client.json was not fetched");
         assert!(get.asked.lock().unwrap().is_empty());
     }
 
