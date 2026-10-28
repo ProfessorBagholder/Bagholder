@@ -272,7 +272,7 @@ pub struct Outside {
 
 impl Outside {
     pub fn network() -> Outside {
-        Outside { resolve: std::sync::Arc::new(System), get: std::sync::Arc::new(Net), public_dns: std::sync::Arc::new(PublicDns) }
+        Outside { resolve: std::sync::Arc::new(System), get: std::sync::Arc::new(Net), public_dns: std::sync::Arc::new(PublicDns::network()) }
     }
 }
 
@@ -292,9 +292,22 @@ pub fn dns_json(body: &[u8]) -> Result<Vec<IpAddr>, String> {
     Ok(got)
 }
 
+/// What asks a public DNS server one question: at an address, a URL.
+pub type AskDns = Arc<dyn Fn(SocketAddr, &str) -> Result<bagholder_net::client::Response, String> + Send + Sync>;
+
 /// Public DNS over HTTPS: Cloudflare's 1.1.1.1 and Google's 8.8.8.8, both asked,
 /// each at its own address, and the answers of either taken.
-pub struct PublicDns;
+pub struct PublicDns {
+    /// The network in use; recorded answers in tests.
+    pub ask: AskDns,
+}
+
+impl PublicDns {
+    /// Over the network.
+    pub fn network() -> PublicDns {
+        PublicDns { ask: Arc::new(|to, url| bagholder_net::client::get_at(&machine_clock(), to, url, &[("Accept", "application/dns-json")], FETCH_LIMIT, 64 * 1024).map_err(|e| e.to_string())) }
+    }
+}
 
 impl Resolve for PublicDns {
     fn resolve(&self, host: &str, _port: u16) -> Result<Vec<IpAddr>, String> {
@@ -305,7 +318,7 @@ impl Resolve for PublicDns {
             let mut got = Vec::new();
             for ty in ["A", "AAAA"] {
                 let url = format!("https://{server}/{}?name={host}&type={ty}", if server == "dns.google" { "resolve" } else { "dns-query" });
-                match bagholder_net::client::get_at(&machine_clock(), to, &url, &[("Accept", "application/dns-json")], FETCH_LIMIT, 64 * 1024) {
+                match (self.ask)(to, &url) {
                     Ok(r) if r.status == 200 => got.extend(dns_json(&r.body).map_err(|e| format!("{server} {e}"))?),
                     Ok(r) => said.push(format!("{server} answered {}", r.status)),
                     Err(e) => said.push(format!("{server}: {e}")),
@@ -476,5 +489,47 @@ mod tests {
         assert!(read("cloudflare-www.github.com-AAAA.json").is_empty(), "a CNAME alone is no address");
         assert!(read("google-www.github.com-AAAA.json").is_empty());
         assert!(dns_json(b"<html>blocked</html>").is_err());
+    }
+
+    /// Public DNS is asked as it is run: each server at its own address and path,
+    /// A and AAAA, the answers of both merged, over recorded answers through the
+    /// seam for its fetch (brief 80's re-review, 7). Where every question fails it
+    /// says so; where they answer with no address it says that.
+    #[test]
+    fn public_dns_asks_both_servers_both_kinds_and_merges_what_they_answer() {
+        let replies = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/replies/public-dns");
+        let asked: Arc<std::sync::Mutex<Vec<(SocketAddr, String)>>> = Arc::default();
+        let recorded = |answering: bool| -> PublicDns {
+            let (asked, replies) = (asked.clone(), replies.clone());
+            PublicDns {
+                ask: Arc::new(move |to, url| {
+                    asked.lock().unwrap().push((to, url.to_string()));
+                    if !answering {
+                        return Err("unreachable".into());
+                    }
+                    let server = if url.starts_with("https://dns.google/") { "google" } else { "cloudflare" };
+                    let (name, ty) = url.split_once("?name=").and_then(|(_, q)| q.split_once("&type=")).unwrap();
+                    let body = std::fs::read(replies.join(format!("{server}-{name}-{ty}.json"))).map_err(|e| e.to_string())?;
+                    Ok(bagholder_net::client::Response { status: 200, body, headers: vec![] })
+                }),
+            }
+        };
+        let ips = |l: &[&str]| l.iter().map(|a| a.parse::<IpAddr>().unwrap()).collect::<Vec<_>>();
+        assert_eq!(recorded(true).resolve("one.one.one.one", 443).unwrap(), ips(&["1.0.0.1", "1.1.1.1", "2606:4700:4700::1001", "2606:4700:4700::1111"]));
+        let one: SocketAddr = "1.1.1.1:443".parse().unwrap();
+        let eight: SocketAddr = "8.8.8.8:443".parse().unwrap();
+        assert_eq!(
+            std::mem::take(&mut *asked.lock().unwrap()),
+            vec![
+                (one, "https://cloudflare-dns.com/dns-query?name=one.one.one.one&type=A".to_string()),
+                (one, "https://cloudflare-dns.com/dns-query?name=one.one.one.one&type=AAAA".to_string()),
+                (eight, "https://dns.google/resolve?name=one.one.one.one&type=A".to_string()),
+                (eight, "https://dns.google/resolve?name=one.one.one.one&type=AAAA".to_string()),
+            ]
+        );
+        // a name whose AAAA answers are a CNAME alone: the A answers of both
+        assert_eq!(recorded(true).resolve("www.github.com", 443).unwrap(), ips(&["20.29.134.23", "140.82.114.4"]));
+        let said = recorded(false).resolve("one.one.one.one", 443).unwrap_err();
+        assert!(said.starts_with("public DNS could not be asked"), "{said}");
     }
 }

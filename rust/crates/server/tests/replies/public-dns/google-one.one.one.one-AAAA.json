@@ -1,0 +1,1 @@
+{"Status":0,"TC":false,"RD":true,"RA":true,"AD":true,"CD":false,"Question":[{"name":"one.one.one.one.","type":28}],"Answer":[{"name":"one.one.one.one.","type":28,"TTL":21600,"data":"2606:4700:4700::1111"},{"name":"one.one.one.one.","type":28,"TTL":21600,"data":"2606:4700:4700::1001"}],"Comment":"Response from 173.245.58.249."}
