@@ -20,7 +20,7 @@ use bagholder_wealthsimple::generated::{Generated, Shape, Size, FILL_FORMS, SHAP
 
 /// Each holding, by Bagholder's account and instrument (an account or a listing
 /// Wealthsimple knows by two ids is one): its units (a short's negative), its
-/// book value and that value's currency.
+/// book value and that value's currency, the listing's own.
 type Holdings = BTreeMap<(String, String), (Dec, Dec, String)>;
 
 fn noon(day: Date) -> Timestamp {
@@ -51,9 +51,14 @@ fn stated(ws: &mut Generated, day: Date, book: &Book) -> Holdings {
             if security.starts_with("sec-c-") {
                 continue;
             }
-            let instrument = book.instrument_by_ref(&bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::BrokerSecurity(Broker::named("wealthsimple")), security.clone())).unwrap().unwrap_or_else(|| panic!("{security}: no instrument")).to_string();
-            let value = Dec::parse(&text(&["bookValue", "amount"])).unwrap().abs();
-            let (units, currency) = (Dec::parse(&text(&["quantity"])).unwrap(), text(&["bookValue", "currency"]));
+            let instrument = book.instrument_by_ref(&bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::BrokerSecurity(Broker::named("wealthsimple")), security.clone())).unwrap().unwrap_or_else(|| panic!("{security}: no instrument"));
+            // the book value in the listing's own currency, as 2.11.5 showed every
+            // holding's Book and Avg: the read's `marketBookValue`, never `bookValue` in CAD
+            let listed = book.instrument(instrument).unwrap().currency.to_string();
+            assert_eq!(text(&["marketBookValue", "currency"]), listed, "{security}: the stand-in states its book value in another currency than the listing's");
+            let instrument = instrument.to_string();
+            let value = Dec::parse(&text(&["marketBookValue", "amount"])).unwrap().abs();
+            let (units, currency) = (Dec::parse(&text(&["quantity"])).unwrap(), listed);
             // the same holding under each id of an account: once
             let e = out.entry((account.clone(), instrument)).or_insert((Dec::ZERO, Dec::ZERO, currency));
             e.0 = e.0.checked_add(units).unwrap();
@@ -168,17 +173,22 @@ fn pulled(seed: u64, today: Date, spoiled: bool) -> (Holdings, Holdings, BTreeMa
 
 /// Test 1: over the made-up Wealthsimple, every shape at twelve seeds and on two
 /// todays, each holding's units and book value in the page's data are what it
-/// states, and the Cashflow table's are the holding's; the same with its history
+/// states, the book value in the listing's own currency (`marketBookValue`, as
+/// 2.11.5 showed every Book and Avg in it), and the Cashflow table's are the
+/// holding's; the same with its history
 /// spoiled four ways.
 #[test]
 fn a_book_whose_history_is_wrong_still_shows_wealthsimple_s_amounts_exactly() {
     let _g = crate::tests_common::guard();
+    // US listings held, whose book value in CAD differs from the listing's own
+    let mut us = 0;
     for today in ["2026-10-25", "2026-10-21"].map(|d| d.parse::<Date>().unwrap()) {
         for seed in 1..=12u64 {
             for spoiled in [false, true] {
                 let at = format!("seed {seed}, {today}{}", if spoiled { ", the history spoiled" } else { "" });
                 let (want, got, table, trips) = pulled(seed, today, spoiled);
                 assert!(!want.is_empty(), "{at}: nothing held");
+                us += want.values().filter(|h| h.2 == "USD").count();
                 assert!(trips > 0, "{at}: no holding links to a trade");
                 let differ: Vec<_> = want.keys().chain(got.keys()).collect::<BTreeSet<_>>().into_iter().filter(|k| got.get(*k) != want.get(*k)).map(|k| (k, want.get(k), got.get(k))).collect();
                 assert!(differ.is_empty(), "{at}: the holdings shown are not what Wealthsimple states (stated, shown): {differ:?}");
@@ -188,6 +198,7 @@ fn a_book_whose_history_is_wrong_still_shows_wealthsimple_s_amounts_exactly() {
             }
         }
     }
+    assert!(us > 0, "no US listing held: the listing's currency is not tested");
 }
 
 /// The recorded month of one account, pulled, and its figures open.

@@ -119,7 +119,7 @@ fn a_day_not_read_yet_holds_the_sale_waiting_until_it_is_read() {
     let a = b.ids.account("T");
     let mut stated_now = e.inputs().market.brokers[&a].clone();
     let s = b.ids.instrument("S");
-    stated_now.days_held.insert(day, bagholder_engine::input::HeldDay { held: [(s, d("100"))].into(), book: [(s, bagholder_core::Money::new(d("1200"), bagholder_core::Currency::CAD))].into(), cash: Default::default() });
+    stated_now.days_held.insert(day, bagholder_engine::input::HeldDay { held: [(s, d("100"))].into(), book: [(s, bagholder_core::Money::new(d("1200"), bagholder_core::Currency::CAD))].into(), ..Default::default() });
     e.apply(Change::Broker(a, Some(stated_now)));
     assert_eq!(reads(&e), [StatedRead::Opened(day)]);
     assert_eq!(realized(&e), [Some(d("300"))]);

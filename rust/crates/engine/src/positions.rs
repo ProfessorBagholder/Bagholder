@@ -152,7 +152,7 @@ pub fn current_price(inputs: &Inputs, instrument: InstrumentId) -> Option<Dec> {
 /// fills, when it was opened and the fees its lots paid, never an amount.
 pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, account: Option<AccountId>, instrument: Option<InstrumentId>) -> Vec<PositionFig> {
     let sources = crate::stated::Sources::of(inputs);
-    let stated = inputs.market.brokers.iter().filter(|(a, _)| account.is_none_or(|x| x == **a)).map(|(a, b)| crate::stated::Stated { account: *a, held: &b.held, book: &b.held_book });
+    let stated = inputs.market.brokers.iter().filter(|(a, _)| account.is_none_or(|x| x == **a)).map(|(a, b)| crate::stated::Stated { account: *a, held: &b.held, book: &b.held_book, book_cad: &b.held_book_cad });
     let held = match instrument {
         Some(i) => stated.filter_map(|s| crate::stated::holding_of(&sources, &s, i, None)).collect(),
         None => crate::stated::holdings(&sources, stated, None),

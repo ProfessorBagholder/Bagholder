@@ -95,9 +95,12 @@ pub struct Units {
     /// The broker's own reference for the instrument.
     pub instrument: Reference,
     pub quantity: Dec,
-    /// The broker's book value: what the units cost, as the holding shows it
-    /// (brief 79), never a cost the journal takes.
+    /// The broker's book value in CAD: what a total in CAD adds up, never a cost
+    /// the journal takes.
     pub book_value: Option<Money>,
+    /// The broker's book value in the listing's own currency: what the units
+    /// cost, as the holding shows it (brief 79).
+    pub market_book_value: Option<Money>,
     /// What the broker states the position is worth now.
     pub value: Option<Money>,
 }

@@ -108,6 +108,34 @@ fn dates_ending_on_a_past_day_show_the_holdings_its_read_states() {
     }
 }
 
+/// A past day read before the book value in the listing's currency was asked
+/// (2.12.1): its holdings show, their Book not read, and the day is named to be
+/// read again; read again, it is not named.
+#[test]
+fn a_past_day_read_before_its_book_value_was_asked_is_read_again() {
+    let mut b = build(&case());
+    let mut e = engine(&mut b);
+    let day: Date = "2026-02-08".parse().unwrap();
+    let (a, x) = (b.ids.account("A"), b.ids.instrument("X"));
+    let mut stated = e.inputs().market.brokers[&a].clone();
+    let read = stated.days_held.get_mut(&day).unwrap();
+    read.book.clear();
+    read.book_unasked = true;
+    e.apply(Change::Broker(a, Some(stated.clone())));
+    let held = e.past(day);
+    let p = held.positions.iter().find(|p| p.instrument == x).expect("the read's holding");
+    assert!(p.book.is_err(), "no Book from another figure: {:?}", p.book);
+    assert!(e.needs().holdings_on.contains(&day), "{:?}", e.needs().holdings_on);
+    let read = stated.days_held.get_mut(&day).unwrap();
+    read.book.insert(x, Money::new(Dec::from_int(1000), p.currency));
+    read.book_unasked = false;
+    drop(held);
+    e.apply(Change::Broker(a, Some(stated)));
+    let held = e.past(day);
+    assert!(!e.needs().holdings_on.contains(&day));
+    assert_eq!(held.positions.iter().find(|p| p.instrument == x).unwrap().book.clone().unwrap().amount, Dec::from_int(1000));
+}
+
 /// A past day no read states is not yet read: the engine names it to be read
 /// while a screen holds it, and stops once its read is there.
 #[test]

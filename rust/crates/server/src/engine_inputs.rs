@@ -235,13 +235,20 @@ pub fn broker_account(s: &bagholder_book::statements::Stated) -> Option<bagholde
         b.held_as_of = Some(*day);
         b.held = units.clone();
         b.held_value = s.unit_values.clone();
-        b.held_book = s.unit_books.clone();
+        b.held_book = s.unit_market_books.clone();
+        b.held_book_cad = s.unit_books.clone();
     }
     // each past day's holdings and cash, as the positions read as of it states them
     b.days_held = s
         .days_held
         .iter()
-        .map(|(d, h)| (*d, bagholder_engine::input::HeldDay { held: h.units.clone(), book: h.books.iter().filter_map(|(i, m)| m.map(|m| (*i, m))).collect(), cash: h.cash.clone() }))
+        .map(|(d, h)| {
+            let of = |books: &BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>>| books.iter().filter_map(|(i, m)| m.map(|m| (*i, m))).collect();
+            // a read holding units that states no book value in the listing's currency
+            // was made before that was asked
+            let book_unasked = !h.units.is_empty() && h.market_books.values().all(Option::is_none);
+            (*d, bagholder_engine::input::HeldDay { held: h.units.clone(), book: of(&h.market_books), book_cad: of(&h.books), book_unasked, cash: h.cash.clone() })
+        })
         .collect();
     b.buying_power = s.buying_power.as_ref().map(|(_, p)| p.clone());
     b.margin_rates = s.margin_rates.as_ref().map(|(_, r)| r.clone()).unwrap_or_default();
@@ -357,12 +364,12 @@ pub(crate) mod tests {
         let i = book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), now).unwrap().unwrap();
         let read = book.broker_read(conn, "units", now).unwrap();
         let q = Dec::parse("0.0000005").unwrap();
-        book.store_units(a, "2026-09-26".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: None, value: None }], &Default::default(), &read, now).unwrap();
+        book.store_units(a, "2026-09-26".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: None, market_book_value: None, value: None }], &Default::default(), &read, now).unwrap();
         let b = &brokers(&book).unwrap()[&a];
         assert_eq!(b.held[&i], q, "kept before its worth was, its units stand");
         assert!(b.held_value.is_empty() && b.held_book.is_empty());
         let (worth, cost) = (Money::new(Dec::parse("0.0000014").unwrap(), Currency::CAD), Money::new(Dec::parse("0.0000011").unwrap(), Currency::CAD));
-        book.store_units(a, "2026-09-27".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: Some(cost), value: Some(worth) }], &Default::default(), &read, now).unwrap();
+        book.store_units(a, "2026-09-27".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: Some(cost), market_book_value: Some(cost), value: Some(worth) }], &Default::default(), &read, now).unwrap();
         let b = &brokers(&book).unwrap()[&a];
         assert_eq!((b.held[&i], b.held_value[&i], b.held_book[&i]), (q, worth, cost));
     }

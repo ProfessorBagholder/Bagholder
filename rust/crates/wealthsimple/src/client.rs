@@ -18,6 +18,13 @@ use crate::session::{self, SessionFile, Tokens};
 /// The least time between two requests to Wealthsimple.
 pub const PACE: std::time::Duration = std::time::Duration::from_millis(150);
 
+/// The `currencyOverride` the positions read is asked with, as Wealthsimple's own
+/// web app asks `FetchHoldingsExportPositionsAsOfDate` (release 0.3.720893, its
+/// chunk 652: `currency:"CAD",currencyOverride:G.o2C.MARKET`, the enum
+/// `{MARKET:"MARKET"}`, read 2026-10-28): each position's `marketBookValue` is
+/// then in the listing's own currency.
+pub const CURRENCY_OVERRIDE: &str = "MARKET";
+
 fn doc(name: &str) -> &'static str {
     match name {
         "FetchAllAccounts" => include_str!("../graphql/FetchAllAccounts.graphql"),
@@ -278,7 +285,7 @@ impl Source for Client<'_> {
         let mut out = BTreeMap::new();
         // twenty accounts a request, as the balances are asked
         for chunk in accounts.chunks(20) {
-            let data = self.graphql(op, obj(vec![("accountIds", Value::Array(chunk.iter().map(|a| text(a)).collect())), ("asOf", text(&day.to_string())), ("currency", text("CAD"))]))?;
+            let data = self.graphql(op, obj(vec![("accountIds", Value::Array(chunk.iter().map(|a| text(a)).collect())), ("asOf", text(&day.to_string())), ("currency", text("CAD")), ("currencyOverride", text(CURRENCY_OVERRIDE))]))?;
             for a in Node::root(&data).list("accounts").map_err(|m| mismatch(op, m))? {
                 let id = a.text("id").map_err(|m| mismatch(op, m))?.to_string();
                 let edges = a.obj("financials").and_then(|f| f.obj("current")).and_then(|c| c.obj("positionsAsOfDate")).and_then(|p| p.list("edges")).map_err(|m| mismatch(op, m))?;
