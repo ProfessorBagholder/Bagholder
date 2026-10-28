@@ -55,15 +55,22 @@ jobs:
       # cache (`server/tests/start_failures.rs`)
       - name: strace
         run: sudo apt-get update && sudo apt-get install -y strace
+      # cargo-nextest runs each test in a process of its own, as many at once as the
+      # runner has cores: the suite's tests no longer wait in line on one shared lock
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-nextest@0.9.148
       # a warning fails the build: the workspace is kept warning-free; the suite runs
-      # on a temp folder of its own, and a test that leaves anything there fails it
+      # on a temp folder of its own, and a test that leaves anything there fails it;
+      # nextest runs no doc test, so they run apart
       - name: The Rust suite
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
         run: |
-          cargo test --workspace --locked --no-run
-          ../bin/check-test-leftovers.sh cargo test --workspace --locked -- --skip capacity::tests
+          cargo nextest list --workspace --locked > /dev/null
+          ../bin/check-test-leftovers.sh cargo nextest run --workspace --locked --no-fail-fast -E 'not test(/^capacity::tests::/)'
+          ../bin/check-test-leftovers.sh cargo test --workspace --locked --doc
         working-directory: rust
       # the developer's subcommands (`bagholder demo`, `pull-broker`), each behind a
       # feature no release build enables: their own tests, built with them

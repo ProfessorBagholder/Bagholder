@@ -142,14 +142,22 @@ jobs:
           CI: "true"
         run: cargo test --workspace --locked --no-run
         working-directory: rust
-      # on a temp folder of its own: a test that leaves anything there fails it
+      # cargo-nextest runs each test in a process of its own, as many at once as the
+      # runner has cores (`tests.yml`)
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        with:
+          tool: cargo-nextest@0.9.148
+      # on a temp folder of its own: a test that leaves anything there fails it;
+      # nextest runs no doc test, so they run apart
       - name: The Rust suite
         if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
         env:
           CI: "true"
         run: |
-          cargo test --workspace --locked --no-run
-          ../bin/check-test-leftovers.sh cargo test --workspace --locked -- --skip capacity::tests
+          cargo nextest list --workspace --locked > /dev/null
+          ../bin/check-test-leftovers.sh cargo nextest run --workspace --locked --no-fail-fast -E 'not test(/^capacity::tests::/)'
+          ../bin/check-test-leftovers.sh cargo test --workspace --locked --doc
         working-directory: rust
       # the test a sandboxed local run cannot hold: the notification applet, built with
       # osacompile, which needs Apple Events (#[ignore]d with that reason)
