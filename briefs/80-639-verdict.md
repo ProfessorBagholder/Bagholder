@@ -68,3 +68,30 @@ Tests hold the constants at the plan's values (5 pending, 20 unapproved, 60 a mi
 ## Then
 
 One new head with all of this, the PR text updated. I re-review the changed parts with the plants above, CI once, and #639 merges on clearance and green checks as 2.12.0.
+
+## Re-review at d6349a88 (6fe224e5 and its TIMED_WAITS line), 2026-10-27
+
+Eight readers checked each section against this brief, each gap checked by a refuter (29 confirmed, 2 refuted). Run here: the PR's tests pass (agents 78, `tunnel_guard` 2, `agents_restart` 1, net 13, mcp 8, `http::tests` 11, clear 10; nothing left). **49 plants, each an exact edit, run here: 47 caught by the test the PR names, among them §1.1, both halves of §1.2, every §2.1 to §2.4 rule, §3.1 to §3.5, all of §4, §5.1 to §5.7, §6.1 to §6.5 and §9.** The two not caught were written to show gaps (below). The changes:
+
+### Must fix
+1. **A copy of the book never starts the person's tunnel.** `open()` starts the tunnel whenever `agents.on` is 1 (`http/agents.rs:179-201`), so a copy run for some work (a scratch build on a copied book, the release check on the owner's Mac) starts their real tunnel: a Cloudflare named tunnel joins as a second replica answering on copied grants. A copy started with `BAGHOLDER_EXIT_WITH` (the repository's rule for every scratch copy) starts no tunnel. Test and plant.
+2. **A tunnel the person stopped stays stopped across a restart.** Nothing records a Stop (`stop_tunnel`, `:316-325`), so the next start brings the public address back. The tunnel starts again only if it was running when Bagholder stopped, kept in the agents' own settings. Test and plant.
+3. **The JSON API cuts a read's arguments** to `LOGGED_TEXT` as MCP does (`api.rs:99` is untouched; a 60 KB `sort` is stored whole, about 64 MB per key). Test over `/api/agents/*`; plant: the cut removed.
+4. **A host whose last label is a number in any form browsers read is refused** (WHATWG's "ends in a number": all digits, or `0x` with hex digits). `0x7f.0x1`, `0x7f.0.0.0x1`, `0X7F.0X1` and `127.0x` pass `dns_name` (`fetch.rs:90`) and browsers send them to 127.0.0.x. At registration, authorization and the gate's names (§4.1). Tests with each; plant: the rule removed.
+
+### Tests that must hold their rule
+5. **The decoded ceiling in the path that ships:** a coded body through `get_at` (plant: `get_at` passing `u64::MAX` to `decoded`, `client.rs:811`).
+6. **`public()` asks this machine's addresses:** a seam for the own-address list, so the test does not rest on CI's address being private (plant 49 here: `public()` not asking passed every test). `this_machine` reads the interfaces' addresses, not a bind (a bind succeeds for any address under `ip_nonlocal_bind`).
+7. **`PublicDns::resolve` runs in a test**, over recorded DNS-over-HTTPS answers through a seam for its fetch: the A and AAAA loop, each server's path, the merge and the error rule (plant 48 here: AAAA dropped from the loop passed every test). Record an AAAA answer with an address from 8.8.8.8 (the recordings hold a CNAME only).
+8. **Clear with a tunnel running:** a stand-in started first, gone after Clear (plant: the tunnel's stop removed from `switch_off`). Clear stops the listener and tunnel before it empties the tables.
+9. **OpenAPI:** each described route called with every parameter its description lists, built from the description (plant: `parameters()` skipping the optional ones).
+
+### Small, in the same head
+10. The status poll's per-id interval is checked before the book is opened.
+11. A refusal of a metadata document says only that it was not fetched, whatever the name resolved to.
+12. An approved agent's open MCP sessions are bounded by a named constant.
+13. The one-service test covers `/mcp` as well as `/mcp/key`.
+14. The 'never written' test checks the book's stamp, as §2.1 asked; the component test for who is asking uses two hosts and checks the redirect host; a test of the canonical-form rule for IP literals; Grok Bot's key match tested.
+15. The PR text no longer says the app moves Funnel to 8443.
+
+Accepted as they stand: §3.5's metadata e2e replaced by the component test (an e2e run has no public address); §5.5's server half held by reading; §5.4's and §5.6's tests on their helpers; `every_copy` held by `the_tunnel_s_guard_is_given_this_process_to_end_with`; 'within the click' held by reading.
