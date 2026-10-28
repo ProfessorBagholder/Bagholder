@@ -23,8 +23,8 @@ pub struct FactNeeds {
     /// says whether the contract expired worthless.
     pub closes: BTreeMap<InstrumentId, BTreeSet<Date>>,
     /// Each instrument a past day's holdings price (`crate::engine::Past`), and
-    /// the spans of days they do: from the day the holding was first held to that
-    /// day, whose last close on or before it is its price then.
+    /// the spans of days they do: that day alone, whose last close on or before
+    /// it is its price then.
     pub spans: BTreeMap<InstrumentId, BTreeSet<(Date, Date)>>,
     /// Each instrument held today in some account: its price is quoted.
     pub held: BTreeSet<InstrumentId>,
@@ -32,6 +32,11 @@ pub struct FactNeeds {
     /// hold for every account (brief 79 §2.4): a day a screen shows, and each day
     /// the net worth history needs an account's cash of.
     pub holdings_on: BTreeSet<Date>,
+    /// Of `holdings_on`, each day a sale's units wait on: the day before a sale
+    /// that took units the activity feed never showed arriving (brief 79, amended
+    /// 2026-10-28, point 5). Read while any page is open, as the trades it holds
+    /// back are shown on every screen.
+    pub before_sales: BTreeSet<Date>,
     /// Each security held now: its distributions and schedule are read.
     pub payers: BTreeSet<InstrumentId>,
     /// The person's oldest day: the span the benchmarks must cover.

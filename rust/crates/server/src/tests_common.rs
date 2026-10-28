@@ -173,6 +173,9 @@ impl bagholder_broker::BrokerAdapter for ReadBefore {
     fn broker(&self) -> bagholder_core::Broker {
         self.0.broker()
     }
+    fn reads(&self, account_type: &bagholder_core::account::AccountType) -> bagholder_broker::Reads {
+        self.0.reads(account_type)
+    }
     fn mapping(&self) -> &dyn bagholder_book::mapping::Mapping {
         &PaidUnread
     }

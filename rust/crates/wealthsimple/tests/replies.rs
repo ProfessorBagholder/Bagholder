@@ -174,7 +174,9 @@ impl Source for Routed<'_> {
         self.replay.margin_rates(account)
     }
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
-        if self.op == Op::Positions { self.client.positions(account, day) } else { self.replay.positions(account, day) }
+        // the day's own read asks the network; today's, which every pull asks too,
+        // the capture answers (brief 79 §2.1)
+        if self.op == Op::Positions && day == as_of() { self.client.positions(account, day) } else { self.replay.positions(account, day) }
     }
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {
         if self.op == Op::Balances { self.client.balances(accounts) } else { self.replay.balances(accounts) }
@@ -204,14 +206,39 @@ impl Pulled {
     fn account(&self) -> Option<AccountId> {
         self.book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap()
     }
+    /// What the book states of the account, its units the read of the day the
+    /// network answered (`as_of`), not today's the capture answers beside it.
     fn stated(&self) -> bagholder_book::statements::Stated {
-        self.book.stated(self.account().expect("the account")).unwrap()
+        let account = self.account().expect("the account");
+        let mut s = self.book.stated(account).unwrap();
+        match self.book.units_on(account, as_of()).unwrap() {
+            Some((lines, _)) => {
+                s.units = Some((as_of(), lines.iter().map(|l| (l.instrument, l.quantity)).collect()));
+                s.unit_values = lines.iter().filter_map(|l| l.value.map(|v| (l.instrument, v))).collect();
+                s.unit_books = lines.iter().filter_map(|l| l.book_value.map(|v| (l.instrument, v))).collect();
+            }
+            None => {
+                s.units = None;
+                s.unit_values.clear();
+                s.unit_books.clear();
+            }
+        }
+        s
     }
     fn problems(&self) -> Vec<(String, String)> {
         self.book.problems().unwrap().into_iter().map(|(_, p)| (p.code, p.detail)).collect()
     }
+    /// The pull's failures, each once: the holdings read as of today and as of the
+    /// day before meet the same one twice.
     fn failures(&self) -> Vec<(String, String)> {
-        self.report.failures.iter().map(|(part, f)| (part.clone(), mismatch::<()>(Err(f.clone())))).collect()
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (part, f) in &self.report.failures {
+            let one = (part.clone(), mismatch::<()>(Err(f.clone())));
+            if !out.contains(&one) {
+                out.push(one);
+            }
+        }
+        out
     }
 }
 
@@ -605,7 +632,7 @@ fn securities_answered_empty_leave_every_row_waiting_on_its_security_and_the_uni
     // each holding no row names is one whose security was not answered
     let failures = p.failures();
     assert_eq!(failures.len(), 19);
-    assert!(failures.iter().all(|(part, why)| part == "units:anon-tfsa-1" && why.contains("is not answered")), "{failures:?}");
+    assert!(failures.iter().all(|(part, why)| part.starts_with("units:sec-") && why.contains("is not answered")), "{failures:?}");
     assert_eq!(p.stated().units, None);
 }
 
@@ -613,7 +640,7 @@ fn securities_answered_empty_leave_every_row_waiting_on_its_security_and_the_uni
 fn securities_with_a_strike_of_another_type_leave_the_contract_out_and_the_units_unstated() {
     let p = pulled(Op::Securities, &[edited("wrong-shape-securities-strike-as-number.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, format!("units:{CONTRACT}"));
     assert!(why.contains(CONTRACT) && why.contains("strikePrice"), "{why}");
     assert_eq!(contract_in(&p), None);
     assert_eq!(p.stated().units, None);
@@ -624,7 +651,7 @@ fn securities_with_a_strike_of_another_type_leave_the_contract_out_and_the_units
 fn securities_with_a_contract_on_no_units_leave_the_contract_out_and_the_units_unstated() {
     let p = pulled(Op::Securities, &[edited("wrong-meaning-securities-multiplier-zero.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, format!("units:{CONTRACT}"));
     assert!(why.contains(CONTRACT) && why.contains("multiplier"), "{why}");
     assert_eq!(contract_in(&p), None);
     assert_eq!(p.stated().units, None);
@@ -965,7 +992,7 @@ fn positions_state_what_each_holding_is_worth_and_one_that_states_none_writes_no
     assert_eq!(s.unit_values.len(), units.len(), "every holding's worth, as Wealthsimple states it");
     let p = pulled(Op::Positions, &[edited("wrong-shape-positions-without-value.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, "holdings");
     assert!(why.contains("totalValue"), "{why}");
     assert_eq!(p.stated().units, None);
 }
@@ -988,7 +1015,7 @@ fn positions_state_each_holding_s_book_value_and_one_that_states_none_writes_no_
     strip_key(&mut v, "bookValue");
     let p = pulled(Op::Positions, &[v.canonical()]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, "holdings");
     assert!(why.contains("bookValue"), "{why}");
     assert_eq!(p.stated().units, None);
 }
@@ -1016,7 +1043,7 @@ fn positions_answered_empty_write_that_nothing_is_held() {
 fn positions_with_a_quantity_of_another_type_write_no_units() {
     let p = pulled(Op::Positions, &[edited("wrong-shape-positions-quantity-as-number.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, "holdings");
     assert!(why.contains("quantity"), "{why}");
     assert_eq!(p.stated().units, None);
 }
@@ -1025,7 +1052,7 @@ fn positions_with_a_quantity_of_another_type_write_no_units() {
 fn positions_with_a_long_of_negative_units_write_no_units() {
     let p = pulled(Op::Positions, &[edited("wrong-meaning-positions-long-negative.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, "holdings");
     assert!(why.contains("quantity") && why.contains("-13000") && why.contains("LONG"), "{why}");
     assert_eq!(p.stated().units, None);
 }

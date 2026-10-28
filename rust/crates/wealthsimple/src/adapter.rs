@@ -363,6 +363,9 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn broker(&self) -> Broker {
         broker()
     }
+    fn reads(&self, account_type: &bagholder_core::account::AccountType) -> bagholder_broker::Reads {
+        crate::account_types::reads(account_type)
+    }
     fn mapping(&self) -> &dyn Mapping {
         &WealthsimpleMapping
     }

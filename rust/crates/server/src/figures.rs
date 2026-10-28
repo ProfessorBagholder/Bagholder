@@ -971,6 +971,16 @@ mod tests {
         book.keep_outside_days("loc", "2014-01-01".parse().unwrap(), "2025-11-19".parse().unwrap(), &[day("2025-11-01", "8000"), day("2025-11-10", "7800")], now).unwrap();
         let moved = f.debts_changed().unwrap();
         assert!(!moved.is_empty(), "a new read of the outside balances by day moves nothing, so the page never reads it");
+        // the accounts' own holdings those days, read as a page showing them reads
+        // them (brief 79 §2.4): the pull's of the 18th, unchanged since
+        let read = book.broker_read(conn, "holdings", now).unwrap();
+        for a in book.accounts().unwrap().into_iter().map(|a| a.id) {
+            let Some((lines, cash)) = book.units_on(a, "2025-11-18".parse().unwrap()).unwrap() else { continue };
+            for d in ["2025-11-05", "2025-11-12"] {
+                book.store_units(a, d.parse().unwrap(), &lines, &cash, &read, now).unwrap();
+            }
+            f.holdings_read(a).unwrap();
+        }
         assert_eq!(owed_on(&f, "2025-11-05").as_deref(), Some("8000"));
         assert_eq!(owed_on(&f, "2025-11-12").as_deref(), Some("7800"));
     }

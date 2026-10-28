@@ -218,9 +218,13 @@ fn sum(xs: &[Dec]) -> Dec {
 /// today and no price or rate changes, yesterday's point and today's (the tiles)
 /// are the same, assets and debts both. Each generated book has a margin account
 /// holding a stock, with cash in two currencies; a cash account holding it too; a
-/// chequing account, a line of credit and a credit card, each stating a value or
-/// not, the card's balance owed or in credit; any account's cash may be below
-/// zero; every balance carried from before the first transaction. Today's net is
+/// chequing account, each stating its value (Wealthsimple states every one's:
+/// no holdings are read of a chequing account, so its past days are its stated
+/// values, brief 79 amended 2026-10-28), and a line of credit and a credit card,
+/// each stating a value or not, the card's balance owed or in credit; the margin
+/// account's cash may be below zero (another's below zero counts today alone:
+/// its past days are its stated values, brief 79 §2.4); every balance carried
+/// from before the first transaction. Today's net is
 /// also each account's holdings and cash, worked out here on its own.
 #[test]
 fn yesterday_meets_today_when_nothing_moves() {
@@ -235,7 +239,12 @@ fn yesterday_meets_today_when_nothing_moves() {
         for a in &ids[1..] {
             cash.insert(a, vec![("CAD", g.amount(500_000))]);
         }
-        let stated: BTreeMap<&str, bool> = ids.iter().map(|a| (*a, matches!(*a, "M" | "C") || g.coin())).collect();
+        let stated: BTreeMap<&str, bool> = ids.iter().map(|a| (*a, matches!(*a, "M" | "C" | "S") || g.coin())).collect();
+        for a in ["C", "S"].into_iter().filter(|a| stated[a]) {
+            for (_, v) in cash.get_mut(a).unwrap() {
+                *v = v.trim_start_matches('-').to_string();
+            }
+        }
         let usd = Dec::parse("1.40").unwrap();
         let p = Dec::parse(&price).unwrap();
         let held = |a: &str| -> Dec {

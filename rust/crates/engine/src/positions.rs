@@ -146,15 +146,17 @@ pub fn current_price(inputs: &Inputs, instrument: InstrumentId) -> Option<Dec> {
 
 /// The open positions: the holdings each broker states (`crate::stated`), in the
 /// order of their accounts and instruments, each linked to the journal's round
-/// trips open in it; `only` one instrument's. Every amount is the broker's
+/// trips open in it; only `account`'s, and only `instrument`'s, where given, so
+/// a change to one builds only what it touches. Every amount is the broker's
 /// (brief 79 §1): the journal gives a holding its trade, its journal entry, its
 /// fills, when it was opened and the fees its lots paid, never an amount.
-pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, only: Option<InstrumentId>) -> Vec<PositionFig> {
-    let stated = inputs.market.brokers.iter().map(|(a, b)| crate::stated::Stated { account: *a, held: &b.held, book: &b.held_book });
-    let mut held = crate::stated::holdings(&crate::stated::Sources::of(inputs), stated, None);
-    if let Some(i) = only {
-        held.retain(|h| h.instrument == i);
-    }
+pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, account: Option<AccountId>, instrument: Option<InstrumentId>) -> Vec<PositionFig> {
+    let sources = crate::stated::Sources::of(inputs);
+    let stated = inputs.market.brokers.iter().filter(|(a, _)| account.is_none_or(|x| x == **a)).map(|(a, b)| crate::stated::Stated { account: *a, held: &b.held, book: &b.held_book });
+    let held = match instrument {
+        Some(i) => stated.filter_map(|s| crate::stated::holding_of(&sources, &s, i, None)).collect(),
+        None => crate::stated::holdings(&sources, stated, None),
+    };
     held.into_iter().map(|h| linked(inputs, Some(matched), Some(identity), h)).collect()
 }
 

@@ -468,7 +468,7 @@ impl Engine {
         let i = &self.inputs;
         self.trades = build_trades(i, &self.matched, &self.identity);
         self.group_held = self.trades.iter().filter_map(|t| if let TradeKey::Group(_) = t.key { Some(t.trips.clone()) } else { None }).flatten().collect();
-        self.positions = build_positions(i, &self.matched, &self.identity, None);
+        self.positions = build_positions(i, &self.matched, &self.identity, None, None);
         self.cash = build_cashflow(i, &self.matched);
         self.paid = BTreeMap::new();
         for r in self.cash.iter().filter(|r| pays_cash(r)) {
@@ -631,15 +631,27 @@ impl Engine {
                 n.holdings_on.insert(p.day);
             }
         }
-        // each day the net worth history needs an account's cash of, a card's aside
-        // (its balance is worked back): from its first stated value to yesterday, or
-        // to its last where it closed
+        // each day a sale's units wait on, the feed never having shown them arrive
+        // (brief 79, amended 2026-10-28, point 5)
+        for b in &self.matched.beyond {
+            if let crate::ledger::StatedRead::Unread(day) = b.read {
+                n.holdings_on.insert(day);
+                n.before_sales.insert(day);
+            }
+        }
+        // each day the net worth history needs an account's cash of: a margin
+        // account's, and one whose value is never stated (`scope::cash_read_by_day`),
+        // from its first stated value to yesterday, or to its last where it closed
         let today = self.inputs.clock.today;
         // the history's first day, from which an account no value of is stated counts
         let first = brokers.values().filter_map(|b| b.net_value.keys().next().copied()).min();
         for (a, b) in brokers {
             let Some(info) = self.inputs.ledger.accounts.get(a) else { continue };
-            if matches!(info.account.account_type, bagholder_core::account::AccountType::Known { kind: bagholder_core::account::AccountKind::CreditCard | bagholder_core::account::AccountKind::LineOfCredit, .. }) {
+            let kind = match &info.account.account_type {
+                bagholder_core::account::AccountType::Known { kind, .. } => Some(*kind),
+                _ => None,
+            };
+            if !crate::scope::cash_read_by_day(kind, b.net_value.is_empty()) {
                 continue;
             }
             let open = info.account.status == bagholder_core::account::AccountStatus::Open;
@@ -1006,6 +1018,27 @@ impl Engine {
                 self.compare(&before, &mut moved);
             }
             Change::Broker(a, b) => {
+                // a day of the account's positions read a sale's units rest on, read or
+                // read again: the holdings it reaches are matched again (brief 79,
+                // amended 2026-10-28, point 5)
+                let empty = BTreeMap::new();
+                let was_days = self.inputs.market.brokers.get(&a).map_or(&empty, |x| &x.days_held);
+                let now_days = b.as_ref().map_or(&empty, |x| &x.days_held);
+                let seeds: BTreeSet<Node> = self.matched.beyond.iter().filter(|x| x.account == a && x.read.day().is_some_and(|d| was_days.get(&d) != now_days.get(&d))).map(|x| Node::Instrument(x.instrument)).collect();
+                if !seeds.is_empty() {
+                    let before = self.snapshot(Parts::ALL);
+                    match b {
+                        Some(b) => self.inputs.market.brokers.insert(a, b),
+                        None => self.inputs.market.brokers.remove(&a),
+                    };
+                    self.rematch_families(seeds);
+                    self.identity = identify(&self.inputs.ledger, &self.matched);
+                    self.equity.remove(&a);
+                    self.equity.extend(build_equity(&self.inputs, Some(&BTreeSet::from([a]))));
+                    self.derive();
+                    self.compare(&before, &mut moved);
+                    return moved;
+                }
                 let before_equity: Option<AccountEquity> = self.equity.get(&a).cloned();
                 let before_stated: Option<BrokerAccount> = self.inputs.market.brokers.get(&a).cloned();
                 match b {
@@ -1017,7 +1050,7 @@ impl Engine {
                 // the account's holdings are what the broker states: built again
                 let was: Vec<PositionFig> = self.positions.iter().filter(|p| p.account == a).cloned().collect();
                 self.positions.retain(|p| p.account != a);
-                let now: Vec<PositionFig> = build_positions(&self.inputs, &self.matched, &self.identity, None).into_iter().filter(|p| p.account == a).collect();
+                let now: Vec<PositionFig> = build_positions(&self.inputs, &self.matched, &self.identity, Some(a), None);
                 let order = |p: &PositionFig| (p.account, p.instrument, p.direction);
                 for p in &now {
                     let at = self.positions.partition_point(|x| order(x) <= order(p));
@@ -1526,7 +1559,7 @@ impl Engine {
                 true
             }
         });
-        let now: Vec<PositionFig> = shown.iter().flat_map(|i| build_positions(&self.inputs, &self.matched, &self.identity, Some(*i))).collect();
+        let now: Vec<PositionFig> = shown.iter().flat_map(|i| build_positions(&self.inputs, &self.matched, &self.identity, None, Some(*i))).collect();
         let order = |p: &PositionFig| (p.account, p.instrument, p.direction);
         for p in &now {
             let at = self.positions.partition_point(|x| order(x) <= order(p));
@@ -1587,7 +1620,7 @@ impl Engine {
     /// A price moved: that instrument's positions.
     fn reprice(&mut self, instrument: InstrumentId, moved: &mut Moved) {
         let before_positions: Vec<PositionFig> = self.positions.iter().filter(|p| p.instrument == instrument).cloned().collect();
-        let fresh = build_positions(&self.inputs, &self.matched, &self.identity, Some(instrument));
+        let fresh = build_positions(&self.inputs, &self.matched, &self.identity, None, Some(instrument));
         self.positions.retain(|p| p.instrument != instrument);
         self.positions.extend(fresh);
         self.positions.sort_by(|a, b| (a.account, a.instrument, a.direction).cmp(&(b.account, b.instrument, b.direction)));

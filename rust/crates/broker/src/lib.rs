@@ -159,6 +159,20 @@ impl AccountStated {
     }
 }
 
+/// The reads beyond the accounts read and the activity that a broker issues for
+/// one kind of account (`BrokerAdapter::reads`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Reads {
+    /// Its cash now: the balances read, or a card's own read.
+    pub cash: bool,
+    /// Its holdings as of a day (the positions read).
+    pub positions: bool,
+    /// Its value and net deposits by day.
+    pub history: bool,
+    /// What it can borrow now, and the rates it pays on what it borrows.
+    pub margin: bool,
+}
+
 /// The book's own moves, for a record read against positions.
 pub trait BookMoves {
     fn moves(&mut self, accounts: &[String], days: &[jiff::civil::Date]) -> Vec<Moved>;
@@ -170,6 +184,14 @@ pub trait BrokerAdapter {
     fn broker(&self) -> Broker;
     fn mapping(&self) -> &dyn Mapping;
     fn accounts(&mut self) -> Answer<Vec<AccountStated>>;
+    /// The reads the broker issues for a kind of account (brief 79, amended
+    /// 2026-10-28): each read is asked only of the kinds it is issued for, never
+    /// to learn a kind by failing. Every kind gets the accounts read and its
+    /// activity; a broker that states nothing else gets nothing else.
+    fn reads(&self, account_type: &AccountType) -> Reads {
+        let _ = account_type;
+        Reads::default()
+    }
     /// An account's activity, from `from` (the whole of it when `None`).
     fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Activity>;
     /// The rows about to be recorded, so an adapter can read what they share
@@ -233,7 +255,6 @@ pub trait BrokerAdapter {
     /// Each account's cash per currency now: an account left out is one the
     /// broker did not state, and nothing is stored for it.
     fn cash(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, BTreeMap<Currency, Dec>>>;
-    /// An account's positions as of a day.
     /// What each margin account can borrow now, in CAD, or why the broker cannot say.
     fn buying_power(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, Result<Dec, String>>>;
     /// A margin account's yearly interest rate on what it borrows, per currency,

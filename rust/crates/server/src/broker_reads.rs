@@ -158,8 +158,9 @@ pub fn run(app: Arc<App>) {
             Ok(next) => next,
             Err(e) => {
                 {
+                    // the page is told in plain words; why, the log alone
                     let mut st = app.state.lock().unwrap();
-                    st.sync_problem.check(Some(format!("Wealthsimple could not be read: {e}")));
+                    st.sync_problem.check(Some(crate::reading::UNREADABLE.to_string()));
                     st.error = st.sync_problem.said().unwrap_or_default();
                 }
                 log(&format!("bagholder: Wealthsimple could not be read: {e}"));
@@ -351,9 +352,15 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
     // a past day a page shows, or the net worth history needs, whose positions read
     // is not read yet (brief 79 §2.4): the newest first, one a second, only while a
     // page shows the holdings (the positions document carries the net worth
-    // history), and never while resting from a failure
-    if open && app.events.watched("positions") && !rest.resting(now) {
-        if let Some(day) = f.read(|e| e.needs().holdings_on.last().copied()).flatten() {
+    // history), and never while resting from a failure; a day a sale's units wait
+    // on while any page is open (amended 2026-10-28, point 5)
+    if open && !rest.resting(now) {
+        let watched = app.events.watched("positions");
+        let due = f.read(|e| {
+            let n = e.needs();
+            n.before_sales.last().copied().or_else(|| n.holdings_on.last().copied().filter(|_| watched))
+        });
+        if let Some(day) = due.flatten() {
             match past_holdings_now(app, f, &book, conn, session_file(app), day, now)? {
                 Read::Lapsed => {
                     crate::session::note_session_expired(app);
@@ -500,27 +507,21 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
         log(&format!("bagholder: a suspect read of {account}, nothing removed: {why}"));
     }
     let (failed, lapsed) = failures(&report.failures);
-    let suspect = report.suspect.iter().map(|(a, _)| format!("a suspect read of {a}, nothing removed")).collect::<Vec<_>>();
-    let said = [failed.clone()].into_iter().chain(suspect).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
     if lapsed {
         return Ok(Read::Lapsed);
     }
     // Wealthsimple answered requests signed with the token held
     crate::session::heard(app, crate::session::Heard::Issued);
-    {
-        let mut st = app.state.lock().unwrap();
-        st.last_sync = now.to_string();
-        st.sync_problem.check((!said.is_empty()).then(|| format!("Sync failed: {said}")));
-        st.error = st.sync_problem.said().unwrap_or_default();
+    // the page is told only that Wealthsimple as a whole could not be read; a part
+    // failing is asked again at its next turn and goes to the log (`reading`)
+    let whole = crate::reading::after_pull(&mut app.state.lock().unwrap(), &report.failures, daily, now);
+    if !daily && !failed.is_empty() {
+        log(&format!("bagholder: a pull of the activity: could not be read: {failed}"));
     }
-    if !said.is_empty() {
-        log(&format!("bagholder: sync failed: {said}"));
-    }
+    sync_went(app, whole);
     if failed.is_empty() {
-        sync_went(app, None);
         Ok(Read::Done)
     } else {
-        sync_went(app, Some(&failed));
         Ok(Read::Failed)
     }
 }
@@ -529,7 +530,8 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
 /// Notifications: `Sync failing`, once per run of failures).
 const SYNC_FAILS_TOLD: i64 = 3;
 
-/// A sync ended: a failure counts toward telling, a success starts the count over.
+/// A sync ended: Wealthsimple not read as a whole counts toward telling, in the
+/// page's own plain words; a sync that read it starts the count over.
 pub(crate) fn sync_went(app: &Arc<App>, failed: Option<&str>) {
     let Some(reason) = failed else {
         let mut st = app.state.lock().unwrap();
@@ -565,13 +567,10 @@ fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: S
     if lapsed {
         return Ok((Read::Lapsed, false));
     }
-    let mut st = app.state.lock().unwrap();
-    st.balances_problem.check((!failed.is_empty()).then(|| format!("Balances could not be read: {failed}")));
-    st.portfolio_error = st.balances_problem.said().unwrap_or_default();
+    crate::reading::after_balances(&mut app.state.lock().unwrap(), &read.failures, now);
     if failed.is_empty() {
         Ok((Read::Done, !read.cash_moved.is_empty()))
     } else {
-        log(&format!("bagholder: balances could not be read: {failed}"));
         Ok((Read::Failed, false))
     }
 }

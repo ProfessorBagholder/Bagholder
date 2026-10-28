@@ -3,7 +3,7 @@
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "85608.78",
+          "CAD": "155634",
           "USD": "4643.98"
         },
         "units": {
@@ -44,7 +44,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "23871.06"
         },
         "units": {},
         "bought": {
@@ -151,7 +151,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "41757.79",
+          "CAD": "105324.39",
           "USD": "60308.88"
         },
         "units": {
@@ -179,14 +179,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 9
+    "header": []
   },
   "seed 02": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "39014.14",
+          "CAD": "76162.66",
           "USD": "108249.75"
         },
         "units": {
@@ -227,7 +226,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "32927.79"
         },
         "units": {},
         "bought": {
@@ -277,7 +276,7 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "10482.49",
+          "CAD": "97434.45",
           "USD": "109919.49"
         },
         "units": {
@@ -305,7 +304,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "500",
+          "CAD": "104098.47",
           "USD": "68910.27"
         },
         "units": {
@@ -335,7 +334,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "53870.98",
+          "CAD": "103275.9",
           "USD": "48825.13"
         },
         "units": {
@@ -362,8 +361,7 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 10
+    "header": []
   },
   "seed 03": {
     "accounts": {
@@ -403,7 +401,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "103142.73"
         },
         "units": {},
         "bought": {
@@ -460,7 +458,7 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "104677.62",
+          "CAD": "202778.36",
           "USD": "103398.48"
         },
         "units": {
@@ -487,7 +485,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "127385.64",
+          "CAD": "179624.23",
           "USD": "29456.3"
         },
         "units": {
@@ -517,7 +515,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "118808.47",
+          "CAD": "123252.43",
           "USD": "518.32"
         },
         "units": {
@@ -542,14 +540,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 10
+    "header": []
   },
   "seed 04": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "110359.73",
+          "CAD": "112631.6",
           "USD": "66873.56"
         },
         "units": {
@@ -588,7 +585,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "27234.95"
         },
         "units": {},
         "bought": {
@@ -648,7 +645,7 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "19575.76",
+          "CAD": "22585.2",
           "USD": "42734.36"
         },
         "units": {
@@ -674,7 +671,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "26187.51",
+          "CAD": "177398.53",
           "USD": "6494.91"
         },
         "units": {
@@ -701,7 +698,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "32777.13",
+          "CAD": "35179.41",
           "USD": "674.03"
         },
         "units": {
@@ -723,14 +720,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 10
+    "header": []
   },
   "seed 05": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "80497.56",
+          "CAD": "117573.33",
           "USD": "42191.11"
         },
         "units": {
@@ -766,7 +762,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "1081.79"
         },
         "units": {},
         "bought": {
@@ -821,7 +817,7 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "16523.15",
+          "CAD": "57059.59",
           "USD": "8852.89"
         },
         "units": {
@@ -851,7 +847,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "25377.75",
+          "CAD": "64058.95",
           "USD": "15166.81"
         },
         "units": {
@@ -880,7 +876,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "21834.63",
+          "CAD": "57771.88",
           "USD": "1312.98"
         },
         "units": {
@@ -908,14 +904,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 8
+    "header": []
   },
   "seed 06": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "52121.48",
+          "CAD": "60306.23",
           "USD": "5726.85"
         },
         "units": {
@@ -952,7 +947,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "105937.4"
         },
         "units": {},
         "bought": {
@@ -1007,7 +1002,7 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "91739.67",
+          "CAD": "115005.82",
           "USD": "11524.49"
         },
         "units": {
@@ -1036,7 +1031,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "10144.01",
+          "CAD": "53904.78",
           "USD": "41657.67"
         },
         "units": {
@@ -1059,7 +1054,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "790.96",
+          "CAD": "19150.33",
           "USD": "147358.7"
         },
         "units": {
@@ -1086,14 +1081,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 14
+    "header": []
   },
   "seed 07": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "129933.61",
+          "CAD": "179803.12",
           "USD": "500"
         },
         "units": {
@@ -1130,7 +1124,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "7616.68"
         },
         "units": {},
         "bought": {
@@ -1210,7 +1204,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "1397.43",
+          "CAD": "47288.86",
           "USD": "124740.73"
         },
         "units": {
@@ -1242,7 +1236,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "109102.46",
+          "CAD": "111134.5",
           "USD": "37647.17"
         },
         "units": {
@@ -1268,14 +1262,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 10
+    "header": []
   },
   "seed 08": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "94522.88",
+          "CAD": "167595.6",
           "USD": "500"
         },
         "units": {
@@ -1312,7 +1305,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "18134.5"
         },
         "units": {},
         "bought": {
@@ -1367,7 +1360,7 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "71668.47",
+          "CAD": "116967.13",
           "USD": "46338.64"
         },
         "units": {
@@ -1418,7 +1411,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "36529.36",
+          "CAD": "62114.09",
           "USD": "18318.17"
         },
         "units": {
@@ -1447,14 +1440,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 7
+    "header": []
   },
   "seed 09": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "225975.01",
+          "CAD": "256658.73",
           "USD": "69068.13"
         },
         "units": {
@@ -1490,7 +1482,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "19173.22"
         },
         "units": {},
         "bought": {
@@ -1544,7 +1536,7 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "51729.3",
+          "CAD": "145226.81",
           "USD": "75905.07"
         },
         "units": {
@@ -1570,7 +1562,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "789.29",
+          "CAD": "10367.56",
           "USD": "34842.3"
         },
         "units": {
@@ -1594,7 +1586,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "1170.5",
+          "CAD": "10918.68",
           "USD": "4814.92"
         },
         "units": {
@@ -1620,14 +1612,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 10
+    "header": []
   },
   "seed 10": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "67643.83",
+          "CAD": "125985.84",
           "USD": "1193.95"
         },
         "units": {
@@ -1661,7 +1652,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "42776.44"
         },
         "units": {},
         "bought": {
@@ -1716,7 +1707,7 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "67360.38",
+          "CAD": "70452.75",
           "USD": "11297.77"
         },
         "units": {
@@ -1740,7 +1731,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "68723.79",
+          "CAD": "110626.33",
           "USD": "500"
         },
         "units": {
@@ -1792,14 +1783,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 11
+    "header": []
   },
   "seed 11": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "371876.69",
+          "CAD": "404790.35",
           "USD": "8371.64"
         },
         "units": {
@@ -1836,7 +1826,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "2090.8"
         },
         "units": {},
         "bought": {
@@ -1890,7 +1880,7 @@
       },
       "Generated 6": {
         "cash": {
-          "CAD": "74165.58",
+          "CAD": "129014.46",
           "USD": "1054.81"
         },
         "units": {
@@ -1920,7 +1910,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "12811.92",
+          "CAD": "107345.32",
           "USD": "97737.61"
         },
         "units": {
@@ -1948,7 +1938,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "110017.91",
+          "CAD": "146841.81",
           "USD": "1205.13"
         },
         "units": {
@@ -1975,14 +1965,13 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 10
+    "header": []
   },
   "seed 12": {
     "accounts": {
       "Generated 0": {
         "cash": {
-          "CAD": "242509.34",
+          "CAD": "265864.45",
           "USD": "500"
         },
         "units": {
@@ -2010,7 +1999,7 @@
       },
       "Generated 2": {
         "cash": {
-          "CAD": "12.34"
+          "CAD": "35969.52"
         },
         "units": {},
         "bought": {
@@ -2092,7 +2081,7 @@
       },
       "Generated 7": {
         "cash": {
-          "CAD": "28063.65",
+          "CAD": "90880.44",
           "USD": "40545.67"
         },
         "units": {
@@ -2125,7 +2114,7 @@
       },
       "Generated 8": {
         "cash": {
-          "CAD": "7652.87",
+          "CAD": "50370.28",
           "USD": "1096.52"
         },
         "units": {
@@ -2155,7 +2144,6 @@
         }
       }
     },
-    "header": [],
-    "withdrawn at opening, the book read a version before": 8
+    "header": []
   }
 }

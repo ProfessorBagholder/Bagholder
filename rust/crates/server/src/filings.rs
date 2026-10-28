@@ -98,8 +98,9 @@ fn failed_read(c: &Connection, subject: &str, source: &str, why: &bagholder_net:
 }
 
 /// The TSX's interlisted list, read again when the copy kept is a day old; a read
-/// that fails keeps the last list, rests (`FAILED_READ_REST`), and is said in the
-/// header until one goes through.
+/// that fails keeps the last list, rests (`FAILED_READ_REST`), and goes to the log
+/// as it starts failing and as it ends, never to the page (brief 79, amended
+/// 2026-10-28).
 fn interlisted_current(app: &Arc<App>, c: &Connection, regulators: &dyn disclosures::Regulators) -> Result<(), String> {
     let read = sf::interlisted_read_at(c).map_err(|e| e.to_string())?;
     if age_hours(&read).is_some_and(|h| h < bagholder_market::interlisted::READ_EVERY_HOURS) {
@@ -107,10 +108,6 @@ fn interlisted_current(app: &Arc<App>, c: &Connection, regulators: &dyn disclosu
     }
     let failure = sf::read_failure(c, INTERLISTED, INTERLISTED_SOURCE).map_err(|e| e.to_string())?;
     if resting(failure.as_ref()) {
-        // said until a read goes through, after a restart too
-        if let Some(f) = failure.filter(|f| f.failures >= bagholder_sources::health::SAID_AFTER) {
-            crate::feeds::feed_down(app, INTERLISTED, f.why);
-        }
         return Ok(());
     }
     match regulators.interlisted() {
@@ -129,7 +126,7 @@ fn interlisted_current(app: &Arc<App>, c: &Connection, regulators: &dyn disclosu
 }
 
 /// The header's name for the interlisted list's failure, and the list's source.
-const INTERLISTED: &str = "interlisted";
+pub(crate) const INTERLISTED: &str = "interlisted";
 const INTERLISTED_SOURCE: &str = "tsx";
 
 /// A listing's own filer settled again where it is a day old: the one its own
@@ -1973,7 +1970,7 @@ mod tests {
     /// each failure in a row, and is said until a read goes through: the TSX's
     /// interlisted list, and a regulator asked who files a listing never settled.
     #[test]
-    fn a_failed_read_rests_and_is_said_until_one_goes_through() {
+    fn a_failed_read_rests_and_is_never_said_in_the_header() {
         let (_home, app) = built_app();
         let c = store();
         let key = on("XYZ", "TSX");
@@ -1991,16 +1988,18 @@ mod tests {
         assert_eq!((r.lists_read.get(), r.asked.get()), (1, 1), "each failure asked once over six passes");
         let out = v(filings_payload_in(&app, &c, &key, false, &|| refresh_filings_in(&app, &c, &key, &r)));
         assert!(f(&out["sources"]["SEDAR+"], "error").contains("could not be asked"), "the failure said while it rests: {out}");
-        // past the first rest: asked again, and failing twice in a row, said in the header
+        // past the first rest: asked again, and failing twice in a row, never said in
+        // the header: a market source's failure goes to the log (brief 79, amended
+        // 2026-10-28)
         age("read_failures", "failed_at", FAILED_READ_REST.as_secs());
         let _ = refresh_filings_in(&app, &c, &key, &r);
         assert_eq!((r.lists_read.get(), r.asked.get()), (2, 2));
-        assert!(said(), "{:?}", crate::feeds::feed_failures(&app));
+        assert!(!said(), "{:?}", crate::feeds::feed_failures(&app));
         // the rest grows: past the first rest again, still resting
         age("read_failures", "failed_at", FAILED_READ_REST.as_secs());
         let _ = refresh_filings_in(&app, &c, &key, &r);
         assert_eq!((r.lists_read.get(), r.asked.get()), (2, 2), "twice the rest after a second failure");
-        assert!(said(), "still said while it rests");
+        assert!(!said(), "never said while it rests");
         // past the grown rest, the sources answer: nothing stands, nothing said
         age("read_failures", "failed_at", bagholder_sources::market::grown_rest(FAILED_READ_REST, 2).as_secs());
         r.list_down = false;
@@ -2125,7 +2124,7 @@ mod tests {
     /// header only for a failure of the source's: one refused offline asked no
     /// one, and stays unsaid however often it comes back (brief 45, 4).
     #[test]
-    fn a_document_read_refused_offline_is_never_said_and_a_failed_one_is() {
+    fn a_document_read_that_fails_is_never_said_in_the_header() {
         let (_home, app) = built_app();
         let key = on("XYZ", "NYSE");
         let mut r = Regs::new();
@@ -2146,7 +2145,9 @@ mod tests {
         for _ in 0..2 {
             read_while_shown(&app, doc, &key, &|_, _| Err("the SEC could not be reached".into()));
         }
-        assert!(said().contains("XYZ · US's document sec:1 could not be read: the SEC could not be reached"), "{}", said());
+        // a market source's failure goes to the log, never to the header (brief 79,
+        // amended 2026-10-28)
+        assert!(!said().contains("could not be read"), "{}", said());
         drop(feed);
     }
 

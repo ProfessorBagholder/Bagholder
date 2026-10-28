@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.11.5";
+pub const APP_VERSION: &str = "2.13.0";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -63,6 +63,14 @@ pub struct State {
     pub sync_problem: Confirmed,
     /// The balances read's failure, said from the second read in a row that meets one.
     pub balances_problem: Confirmed,
+    /// The parts of the pulls failing now, each logged as it starts and as it ends.
+    pub pull_failing: crate::reading::Failing,
+    /// The parts of the balances reads failing now.
+    pub balances_failing: crate::reading::Failing,
+    /// When a pull last answered with no part failing.
+    pub pull_answered: Option<bagholder_core::jiff::Timestamp>,
+    /// When the balances were last read with no part failing.
+    pub balances_answered: Option<bagholder_core::jiff::Timestamp>,
 }
 
 struct Job {
@@ -286,6 +294,9 @@ pub struct App {
     pub login: crate::login::LoginState,
     /// The market-data loops' own state: what they are reading now, and for whom.
     pub feeds: crate::feeds::FeedsState,
+    /// The market sources failing now, each logged as it starts and as it ends:
+    /// never said on the page (brief 79, amended 2026-10-28).
+    pub market_failing: Mutex<crate::reading::Failing>,
     /// The one thread that shows this app's notifications, and what wakes it.
     pub notify: crate::notify::NotifyState,
     /// The order loops' own state: brackets in flight, and the last readback.
@@ -362,6 +373,7 @@ impl App {
             docs: crate::docs::DocsState::default(),
             login: crate::login::LoginState::default(),
             feeds: crate::feeds::FeedsState::default(),
+            market_failing: Mutex::new(crate::reading::Failing::default()),
             notify: crate::notify::NotifyState::default(),
             orders: crate::orders::OrdersState::from_env(),
             figures: std::sync::OnceLock::new(),

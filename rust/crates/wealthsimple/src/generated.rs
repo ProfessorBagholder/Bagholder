@@ -398,6 +398,8 @@ pub struct Generated {
     conversions: BTreeMap<String, Value>,
     templates: Templates,
     asked: usize,
+    /// Each read of one account asked, by the read's name, in the order asked.
+    pub reads: Vec<(&'static str, String)>,
     /// Each account whose activity was asked, and from which day (the whole of
     /// it when `None`), in order.
     pub asked_activity: Vec<(String, Option<jiff::civil::Date>)>,
@@ -582,7 +584,7 @@ impl Generated {
         }
         let shapes: BTreeSet<Shape> = shapes.iter().copied().collect();
         assert!(!shapes.contains(&Shape::LateRow) || shapes.contains(&Shape::Closed), "a late row is in the closed account");
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), written_on: None, split_on: None, coin_sales: 0 };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates, asked: 0, reads: Vec::new(), asked_activity: Vec::new(), shapes, redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), written_on: None, split_on: None, coin_sales: 0 };
         let mut plans = g.plan(&mut r, size, start);
         let span = (today - start).get_days().max(2) as i64;
         let on = |n: i64| start.checked_add(jiff::Span::new().days(n)).expect("a day");
@@ -741,7 +743,7 @@ impl Generated {
             };
             plans.entry(*day).or_default().push(p);
         }
-        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), written_on: None, split_on: None, coin_sales: 0 };
+        let mut g = Generated { today, accounts, listings, rows: Vec::new(), conversions: BTreeMap::new(), templates: Templates::read(), asked: 0, reads: Vec::new(), asked_activity: Vec::new(), shapes: BTreeSet::new(), redirect: Vec::new(), moves: 0, funded: 0, late: None, held: Vec::new(), written_on: None, split_on: None, coin_sales: 0 };
         // nothing stated whole is drawn
         g.run(&mut Rng(0), plans);
         g
@@ -1086,6 +1088,22 @@ impl Generated {
         self.cash_moved(a, Cur::Cad, cad, day);
         self.net_deposit(a, cad, day);
         self.conversion(a, day, &mut n, usd, cad, funding);
+    }
+
+    /// A buy of `units` of the first share listed, filled in `account` today: the
+    /// units and the cash moved at once, its row listed only once `publish_late`
+    /// is called, as an order filled before the feed lists it.
+    pub fn filled_today(&mut self, account: &str, units: i64) {
+        let a = self.account_index(account).unwrap_or_else(|| panic!("no account {account}"));
+        let listing = self.listings.iter().position(|l| l.sort == Sort::Share).expect("a share listed");
+        let l = self.listings[listing].clone();
+        let cost = l.cost(units, l.price).max(1);
+        let id = format!("{}-today", self.next_id("buy"));
+        let row = self.row("DIY_BUY", "LIMIT_ORDER", a, at(self.today, 40_000 + self.rows.len() as u32), &id);
+        let row = set(self.with_security(row, listing), &[(&["amount"], text(money(cost))), (&["currency"], text(l.cur.code())), (&["assetQuantity"], text(units_text(units, l.scale()))), (&["status"], text("FILLED"))]);
+        self.held.push(row);
+        self.cash_moved(a, l.cur, -cost, self.today);
+        self.move_units(a, listing, units, self.today);
     }
 
     /// A deposit of `cents` CAD into `account` today, the cash there already, its
@@ -1506,6 +1524,12 @@ impl Generated {
         &self.rows
     }
 
+    /// The rows made, for a test to spoil: the history the feed answers changed,
+    /// every balance and holding still stated as made.
+    pub fn rows_mut(&mut self) -> &mut Vec<Value> {
+        &mut self.rows
+    }
+
     /// An account's cash now, per currency, as its balances state it.
     pub fn cash_of(&self, account: &str) -> BTreeMap<String, Dec> {
         let Some(a) = self.account_index(account) else { return BTreeMap::new() };
@@ -1529,6 +1553,16 @@ impl Generated {
             *e = e.checked_add(Dec::new(*q, l.scale()).expect("units fit")).expect("units add");
         }
         out
+    }
+
+    /// How many requests it has answered.
+    pub fn asked(&self) -> usize {
+        self.asked
+    }
+
+    /// Every account's id and Wealthsimple's word for its type.
+    pub fn account_types(&self) -> Vec<(String, String)> {
+        self.accounts.iter().map(|a| (a.id.clone(), a.ty.to_string())).collect()
     }
 
     /// Every account's id.
@@ -1637,6 +1671,7 @@ impl Source for Generated {
 
     fn card(&mut self, account: &str) -> Answer<Value> {
         self.asked += 1;
+        self.reads.push(("card", account.to_string()));
         let a = self.account_index(account).ok_or_else(|| Failure::Refused(format!("no card account {account}")))?;
         let owed = -self.cash(a, Cur::Cad);
         Ok(set(self.templates.card.clone(), &[(&["id"], text(account)), (&["balance", "current"], text(money(owed))), (&["balance", "outstanding"], text(money(owed))), (&["balance", "pending"], text("0.00"))]))
@@ -1650,11 +1685,13 @@ impl Source for Generated {
     fn positions_of(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
         // one request, as Wealthsimple's document takes every account at once
         self.asked += 1;
+        self.reads.extend(accounts.iter().map(|a| ("positions", a.clone())));
         accounts.iter().map(|a| Ok((a.clone(), self.positions_in(a, day)?))).collect()
     }
 
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {
         self.asked += 1;
+        self.reads.extend(accounts.iter().map(|a| ("balances", a.clone())));
         Ok(accounts
             .iter()
             .filter_map(|id| self.account_index(id))
@@ -1681,6 +1718,7 @@ impl Source for Generated {
 
     fn buying_power(&mut self, account: &str) -> Answer<Value> {
         self.asked += 1;
+        self.reads.push(("buying power", account.to_string()));
         let a = self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;
         let cad = self.accounts[a].buying_power.unwrap_or_else(|| self.cash(a, Cur::Cad) + self.cash(a, Cur::Usd) * 135 / 100);
         let reply = format!(r#"{{"id":"{account}","financials":{{"current":{{"id":"c","marginV3":{{"trading":{{"buyingPower":{{"__typename":"BuyingPowerMetricAvailable","total":{{"amount":"{}","currency":"CAD"}}}},"__typename":"MarginTrading"}},"__typename":"MarginV3"}},"__typename":"Current"}},"__typename":"Financials"}},"__typename":"Account"}}"#, money(cad));
@@ -1689,6 +1727,7 @@ impl Source for Generated {
 
     fn margin_rates(&mut self, account: &str) -> Answer<Value> {
         self.asked += 1;
+        self.reads.push(("margin rates", account.to_string()));
         self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;
         // the made-up person's rates, the same for every margin account
         let reply = format!(r#"{{"id":"{account}","appliedRates":{{"__typename":"AppliedMarginInterestRates","cadPositionRate":"0.0545","usdPositionRate":"0.0745"}},"__typename":"Account"}}"#);
@@ -1697,6 +1736,7 @@ impl Source for Generated {
 
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         self.asked += 1;
+        self.reads.push(("history", account.to_string()));
         let a = self.account_index(account).ok_or_else(|| Failure::Refused(format!("no account {account}")))?;
         let acct = &self.accounts[a];
         let m = |cents: i64| Value::Object([("amount".to_string(), text(money(cents))), ("cents".to_string(), Value::Number(cents.to_string())), ("currency".to_string(), text("CAD"))].into());

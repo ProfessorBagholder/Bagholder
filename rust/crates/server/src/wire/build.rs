@@ -1116,9 +1116,15 @@ mod tests {
         assert!(unique(positions.iter().map(|p| p["id"].as_str().unwrap_or_default()).collect()));
         assert!(unique(cash_rows.iter().map(|r| r["id"].as_str().unwrap_or_default()).collect()));
         for t in trades.iter().filter(|t| t["status"] == "open") {
-            let p = t["position"].as_str().expect("an open trade names its holding");
-            assert!(positions.iter().any(|x| id(x) == p && x["trade"] == t["id"]), "{p}");
+            match t["position"].as_str() {
+                // the holding Wealthsimple states, which the trade opens
+                Some(p) => assert!(positions.iter().any(|x| id(x) == p && x["trade"] == t["id"]), "{p}"),
+                // a round trip the journal has open where Wealthsimple states nothing
+                // held is no holding (brief 79 §1): the month's history starts mid-way
+                None => assert!(!positions.iter().any(|x| x["symbol"] == t["symbol"] && x["account"] == t["account"]), "{}: held, and its open trade names no holding", t["symbol"]),
+            }
         }
+        assert!(trades.iter().any(|t| t["status"] == "open" && t["position"].is_string()), "an open trade names its holding");
         for p in &positions {
             assert!(!p["security"].as_str().unwrap_or_default().is_empty(), "{}: the broker's id an order names", p["symbol"]);
             assert!(!p["account"].as_str().unwrap_or_default().is_empty());

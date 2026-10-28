@@ -7,6 +7,14 @@
 
 import type { Position, Trade } from './model'
 import { waits } from './dec'
+import { hold, waiting } from './fmt'
+
+/** The Hold a trade or a holding shows: its days, what they wait on, or a dash
+ *  for a holding the journal holds no lot of (Wealthsimple's, brief 79). */
+export function holdText(t: Trade): string {
+  if (t.held != null && waits(t.held)) return waiting(t.held)
+  return t.holding && t.held == null ? hold(null) : hold(t.holdDays)
+}
 
 export function holdingAsTrade(p: Position): Trade {
   return {
@@ -33,7 +41,7 @@ export function holdingAsTrade(p: Position): Trade {
     get exit() { return p.last },
     get entryDate() { return p.opened },
     get lastDate() { return p.opened },
-    // none where the journal holds no lot of it
+    // none where the journal holds no lot of it (`holdText`)
     get holdDays() { return p.held == null || waits(p.held) ? 0 : p.held },
     get pnl() { return p.unreal },
     get pnlCad() { return p.unreal },

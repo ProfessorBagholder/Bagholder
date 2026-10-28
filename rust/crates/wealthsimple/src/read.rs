@@ -109,8 +109,8 @@ pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
 /// stated apart, and each position's value now (`totalValue`), which decides
 /// whether a coin's amount is dust by the broker's own figure, and its book
 /// value (`bookValue`, the cost Wealthsimple states for it, in the currency it
-/// states), which the average cost the book keeps is checked against (brief 20
-/// §4). `marketBookValue` beside it is not read: in every recorded reply it is
+/// states), which is the holding's book value (brief 79). `marketBookValue`
+/// beside it is not read: in every recorded reply it is
 /// the same amount in the same currency. Both are written to more digits than a
 /// decimal holds: each is taken to the places that fit.
 ///

@@ -214,6 +214,12 @@ impl Source for Replay {
         self.asked.push(format!("positions {account} {day}"));
         self.positions.get(&(account.to_string(), day.to_string())).cloned().ok_or_else(|| Failure::Refused(format!("no positions of {account} as of {day} in the capture")))
     }
+    fn positions_of(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
+        // one request for every account, as Wealthsimple's document is asked: each
+        // account asked, and the whole refused where the capture lacks one
+        let answers: Vec<(String, Answer<Value>)> = accounts.iter().map(|a| (a.clone(), self.positions(a, day))).collect();
+        answers.into_iter().map(|(a, r)| Ok((a, r?))).collect()
+    }
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {
         self.asked.push("balances".into());
         self.asked_balances.push(accounts.to_vec());

@@ -997,6 +997,20 @@ fn owed_of(kind: Option<AccountKind>, cash: Dec) -> Dec {
     }
 }
 
+/// Whether an account's cash on a past day is read from the positions read of
+/// that day (brief 79 §2.4): a margin account's, for what it borrowed, and one
+/// whose value is never stated, for what it holds, of the kinds the positions
+/// read is issued for (`wealthsimple::account_types::reads`). A card's balance is
+/// worked back instead; any other account's past day is its stated value alone,
+/// and it owes nothing then.
+pub fn cash_read_by_day(kind: Option<AccountKind>, unvalued: bool) -> bool {
+    match kind {
+        Some(AccountKind::Margin) => true,
+        Some(AccountKind::Cash | AccountKind::Crypto | AccountKind::EventContracts) => unvalued,
+        _ => false,
+    }
+}
+
 fn kind_of(a: &crate::input::AccountInfo) -> Option<AccountKind> {
     match &a.account.account_type {
         AccountType::Known { kind, .. } => Some(*kind),
@@ -1009,10 +1023,10 @@ fn kind_of(a: &crate::input::AccountInfo) -> Option<AccountKind> {
 /// broker's accounts counts its latest stated value on or before the day, at the
 /// rate of the day it was stated for, from its first stated day, and a closed
 /// account until its last; an open account whose value is never stated counts
-/// its cash. What each owes at the day's close (`owed_of`, from `CashByDay`, at
-/// the day's rate) is a debt, and added back to what the account holds: the same
-/// parts, by the same rule, as today's point (`portfolio`), so a day on which
-/// nothing moves ends where the next begins. Under every account, each thing held
+/// its cash. What each owes at the day's close (`owed_of`, at the day's rate) is a
+/// debt, and added back to what the account holds: a card's or a line of
+/// credit's balance worked back (`CashByDay`), and a margin account's cash as the
+/// positions read of that day states it (`cash_read_by_day`). Under every account, each thing held
 /// or owed outside counts its latest statement on or before the day
 /// (`Debts::history`, and its balance now from the day it was stated). Today is
 /// `now`: the figures the tiles show. A day with a part that cannot be stated (a
@@ -1122,13 +1136,15 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
                 let Some(a) = accounts.get(at).filter(|a| a.id == *id) else { continue };
                 balance(a.kind, a.values.is_none(), *c, v, day, &mut parts[at]);
             }
-            // every other account's cash as the positions read as of that day states
-            // it, from its first stated value to its last where it closed: what it
-            // owes below zero (as today's counts it, whatever its kind), and what it
-            // holds where no value of it is stated
+            // a margin account's cash, and that of one whose value is never stated, as
+            // the positions read as of that day states it, from its first stated value
+            // to its last where it closed: what it borrowed, and what it holds where no
+            // value of it is stated (`cash_read_by_day`); a day one of them is not read
+            // yet waits on that read, said once for the day
+            let mut unread = false;
             for (at, a) in accounts.iter().enumerate() {
                 let outside_its_days = a.values.as_ref().is_some_and(|s| s.first.is_some_and(|f| day < f) || s.until.is_some_and(|u| day > u));
-                if is_card(a.kind) || outside_its_days {
+                if is_card(a.kind) || outside_its_days || !cash_read_by_day(a.kind, a.values.is_none()) {
                     continue;
                 }
                 match inputs.market.brokers.get(&a.id).and_then(|b| b.days_held.get(&day)) {
@@ -1137,7 +1153,7 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
                             balance(a.kind, a.values.is_none(), *c, &Ok(*v), day, &mut parts[at]);
                         }
                     }
-                    None => balance(a.kind, a.values.is_none(), Currency::CAD, &Err(Gaps::of(Gap::HoldingsUnread(day))), day, &mut parts[at]),
+                    None => unread = true,
                 }
             }
             let (mut assets, mut owed) = (zero(), zero());
@@ -1162,6 +1178,11 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
                 if let Some(v) = h.on(day) {
                     add_fig(&mut owed, v);
                 }
+            }
+            if unread {
+                let waits: Fig<Money> = Err(Gaps::of(Gap::HoldingsUnread(day)));
+                add_fig(&mut assets, &waits);
+                add_fig(&mut owed, &waits);
             }
             out.push(NetWorthDay { day, assets, debts: owed });
             day = match day.tomorrow() {

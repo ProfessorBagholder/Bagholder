@@ -15,13 +15,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use bagholder_book::records::Incoming;
 use bagholder_book::statements::{AccountDay, UnitsLine};
 use bagholder_book::Book;
-use bagholder_core::account::{AccountKind, AccountRef, AccountStatus, AccountType};
+use bagholder_core::account::{AccountRef, AccountStatus};
 use bagholder_core::instrument::RefScheme;
 use bagholder_core::json;
 use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, ConnectionId, Dec, RecordId};
 
-use crate::{AccountStated, BookMoves, BrokerAdapter, Failure, Moved, MovedWhat, Row, Step};
+use crate::{AccountStated, BookMoves, BrokerAdapter, Failure, Moved, MovedWhat, Reads, Row, Step};
 
 /// What one pull did and what failed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -361,13 +361,15 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // the broker's (ids it links as one, `linked`): its statement is theirs added
     // up, every one of them read, as 2.9.0 read them.
     let mut keys_of: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
+    let mut reads_of: BTreeMap<AccountId, Reads> = BTreeMap::new();
     for a in stated.iter().filter(|a| a.open) {
         keys_of.entry(ids[&a.key]).or_default().push(a.key.clone());
+        reads_of.entry(ids[&a.key]).or_insert_with(|| adapter.reads(&a.account_type));
     }
-    let margin: BTreeSet<AccountId> = stated.iter().filter(|a| a.open && is_margin(&a.account_type)).map(|a| ids[&a.key]).collect();
+    let margin: BTreeSet<AccountId> = reads_of.iter().filter(|(_, r)| r.margin).map(|(a, _)| *a).collect();
     store_net_values(book, connection, &stated, &keys_of, now)?;
     step(Step::Balances);
-    store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
+    store_balances(book, adapter, connection, &issued(&keys_of, &reads_of, |r| r.cash), &margin, now, &mut report.failures)?;
     // each margin account's interest rates, with the day's pull alone: a rate
     // changes seldom, and the five-minute balances do not ask it again
     if daily {
@@ -379,8 +381,11 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // the holdings now, every account's in one read, as each pull and the
     // balances read them (brief 79 §2.1)
     step(Step::Holdings);
-    let all: Vec<(AccountId, Vec<String>)> = keys_of.iter().map(|(a, k)| (*a, k.clone())).collect();
-    store_holdings(book, adapter, connection, &all, today, now, &mut report.failures)?;
+    let held: Vec<(AccountId, Vec<String>)> = issued(&keys_of, &reads_of, |r| r.positions).into_iter().collect();
+    // a pull of the activity alone follows a balances read, which read them
+    if daily {
+        store_holdings(book, adapter, connection, &held, today, now, &mut report.failures)?;
+    }
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
     // the day's pull: as each closed yesterday, which a past day reads (§2.4).
@@ -390,12 +395,13 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // broker's to stand on, and is asked again (2.10.2 wrote one onto accounts it
     // merged)
     let mut closed_yesterday = Vec::new();
-    for (id, ks) in keys_of.iter().filter(|_| daily) {
-        let current = match book.stated(*id)?.units {
-            Some((d, lines)) if d == as_of && !lines.is_empty() => {
+    for (id, ks) in held.iter().filter(|_| daily) {
+        // the day's own read, not the newest: today's is stored above
+        let current = match book.units_on(*id, as_of)? {
+            Some((lines, _)) if !lines.is_empty() => {
                 let mut named = true;
-                for i in lines.keys() {
-                    named &= book.current_name(*i)?.is_some() || book.option_terms(*i)?.is_some();
+                for l in &lines {
+                    named &= book.current_name(l.instrument)?.is_some() || book.option_terms(l.instrument)?.is_some();
                 }
                 named
             }
@@ -422,7 +428,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     let open: BTreeSet<AccountId> = stated.iter().filter(|a| a.open).map(|a| ids[&a.key]).collect();
     let mut last_of: BTreeMap<AccountId, Option<jiff::civil::Date>> = BTreeMap::new();
     let mut dated = Vec::new();
-    for a in stated.iter().filter(|_| daily) {
+    for a in stated.iter().filter(|a| daily && adapter.reads(&a.account_type).history) {
         let id = ids[&a.key];
         let last = match last_of.get(&id) {
             Some(l) => *l,
@@ -670,8 +676,9 @@ fn link_moves(book: &Book, stored: &[RecordId]) -> Result<usize> {
 
 /// Whether an account borrows: only a margin account's buying power is margin
 /// it can draw (a registered account's is its cash).
-fn is_margin(t: &AccountType) -> bool {
-    matches!(t, AccountType::Known { kind: AccountKind::Margin, .. })
+/// The accounts of `keys_of` whose kind the broker issues a read for (`reads`).
+fn issued(keys_of: &BTreeMap<AccountId, Vec<String>>, reads_of: &BTreeMap<AccountId, Reads>, read: impl Fn(&Reads) -> bool) -> BTreeMap<AccountId, Vec<String>> {
+    keys_of.iter().filter(|(a, _)| reads_of.get(a).is_some_and(&read)).map(|(a, k)| (*a, k.clone())).collect()
 }
 
 /// What a read of the balances stored, and what failed.
@@ -709,19 +716,18 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         }
     };
     let mut keys_of: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
-    let mut margin = BTreeSet::new();
+    let mut reads_of: BTreeMap<AccountId, Reads> = BTreeMap::new();
     for a in stated.iter().filter(|a| a.open) {
         let Some(id) = book.account_by_ref(&AccountRef::new(broker.clone(), a.key.clone()))? else { continue };
         if book.account(id)?.connection != connection {
             continue;
         }
-        if is_margin(&a.account_type) {
-            margin.insert(id);
-        }
         keys_of.entry(id).or_default().push(a.key.clone());
+        reads_of.entry(id).or_insert_with(|| adapter.reads(&a.account_type));
     }
+    let margin: BTreeSet<AccountId> = reads_of.iter().filter(|(_, r)| r.margin).map(|(a, _)| *a).collect();
     accounts.extend(store_net_values(book, connection, &stated, &keys_of, now)?);
-    accounts.extend(store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?);
+    accounts.extend(store_balances(book, adapter, connection, &issued(&keys_of, &reads_of, |r| r.cash), &margin, now, &mut failures)?);
     let mut cash_moved = Vec::new();
     for a in &accounts {
         let stated = book.stated_latest(*a)?;
@@ -734,9 +740,9 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         }
     }
     // the holdings now, every account's in one read (brief 79 §2.1)
-    let all: Vec<(AccountId, Vec<String>)> = keys_of.iter().map(|(a, k)| (*a, k.clone())).collect();
+    let held: Vec<(AccountId, Vec<String>)> = issued(&keys_of, &reads_of, |r| r.positions).into_iter().collect();
     let today = adapter.day(now);
-    let held_cash = store_holdings(book, adapter, connection, &all, today, now, &mut failures)?;
+    let held_cash = store_holdings(book, adapter, connection, &held, today, now, &mut failures)?;
     let mut cash_differs = Vec::new();
     for (a, cash) in &held_cash {
         accounts.insert(*a);
@@ -954,7 +960,8 @@ fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Conn
 pub fn holdings_as_of(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, day: jiff::civil::Date, now: jiff::Timestamp) -> Result<(Vec<AccountId>, Vec<(String, Failure)>)> {
     let broker = adapter.broker();
     let mut accounts = Vec::new();
-    for a in book.accounts()?.into_iter().filter(|a| a.connection == connection) {
+    // the accounts of a kind the positions read is issued for (`BrokerAdapter::reads`)
+    for a in book.accounts()?.into_iter().filter(|a| a.connection == connection && adapter.reads(&a.account_type).positions) {
         let keys: Vec<String> = book.account_refs(a.id)?.into_iter().filter(|r| r.broker == broker).map(|r| r.value).collect();
         if !keys.is_empty() {
             accounts.push((a.id, keys));

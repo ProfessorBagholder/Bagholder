@@ -113,8 +113,9 @@ fn a_pull_with_nothing_new_asks_only_the_accounts_their_activity_and_their_cash(
     let (second, asked) = once(&book, &dir(), "2025-11-19T21:00:00Z");
     assert!(second.failures.is_empty(), "{:?}", second.failures);
     assert_eq!((second.records_new, second.records_revised), (0, 0));
-    // and the net worth feature's outside accounts, one read a pull (plan debts-held-outside-wealthsimple)
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances", "net worth"]);
+    // and the net worth feature's outside accounts, one read a pull (plan debts-held-outside-wealthsimple),
+    // and the holdings now, each pull (brief 79 §2.1): yesterday's, stated already, not again
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances", "net worth", "positions anon-tfsa-1 2025-11-19"]);
 }
 
 #[test]
@@ -133,7 +134,7 @@ fn a_pull_with_one_new_trade_asks_only_what_the_trade_needs_besides() {
     let (third, asked) = once(&book, later.path(), "2025-11-19T22:00:00Z");
     assert!(third.failures.is_empty(), "{:?}", third.failures);
     assert_eq!(third.records_new, 1);
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances", "net worth"]);
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances", "net worth", "positions anon-tfsa-1 2025-11-19"]);
 }
 
 /// A day an earlier read stored wrong is stated again by the next day's pull:
@@ -612,6 +613,9 @@ struct Unrecorded {
 impl bagholder_broker::BrokerAdapter for Unrecorded {
     fn broker(&self) -> Broker {
         self.inner.broker()
+    }
+    fn reads(&self, account_type: &bagholder_core::account::AccountType) -> bagholder_broker::Reads {
+        self.inner.reads(account_type)
     }
     fn mapping(&self) -> &dyn bagholder_book::mapping::Mapping {
         self.inner.mapping()
@@ -1275,4 +1279,100 @@ fn a_book_of_every_shape_carried_from_version_36_is_the_same_book_after_its_next
     assert!(report.suspect.is_empty(), "{:?}", report.suspect);
     assert_eq!(report.accounts_merged, 1, "{report:?}");
     assert_eq!(held(&book), before);
+}
+
+/// What an earlier version booked from the monthly statements is withdrawn by
+/// the first pull (brief 79, `docs/plans/every-amount-as-wealthsimple-states-it.md`
+/// §3.7 and §5, test 7): a statement fill that took a feed fill's place hands its
+/// trade back, the feed's record live again, and a cash movement booked from a
+/// statement goes with nothing to hand back. Nothing of the statements' is live
+/// after, and the next pull finds nothing.
+#[test]
+fn the_first_pull_withdraws_what_the_statements_booked() {
+    use bagholder_book::records::Incoming;
+    use bagholder_core::journal::{Anchor, Opening};
+    use bagholder_wealthsimple::statement::StatementMapping;
+    let home = tempfile::tempdir().unwrap();
+    let now = "2025-11-19T20:00:00Z";
+    let (book, _) = Book::open_in(home.path(), "test", at(now)).unwrap();
+    let (r, _) = once(&book, &dir(), now);
+    assert!(r.failures.is_empty(), "{:?}", r.failures);
+    assert_eq!((r.statements_withdrawn, r.statements_left), (0, 0), "a book with nothing of the statements'");
+
+    // a feed fill, a trade opened on it, and the statement's fill in its place
+    let feed = SourceName::named("wealthsimple");
+    let (record, bought) = book.live_records(&feed).unwrap().into_iter().find_map(|id| book.transactions_of(id).unwrap().into_iter().find(|t| t.kind == Kind::Buy).map(|t| (id, t))).expect("the capture buys");
+    let opening = Opening { transaction: bought.id.clone(), instrument: bought.instrument.unwrap() };
+    let trade = book.open_trade(&opening, at(now)).unwrap();
+    // the fill's account and security as Wealthsimple names them
+    let account = book.account_refs(bought.account).unwrap().into_iter().next().unwrap().value;
+    let security = book.instrument_refs(opening.instrument).unwrap().into_iter().find_map(|r| matches!(r.scheme, bagholder_core::instrument::RefScheme::BrokerSecurity(_)).then_some(r.value)).unwrap();
+    let quantity = bought.quantity.unwrap();
+    let cash = bought.cash.unwrap();
+    let fill = format!(
+        r#"{{"kind":"fill","currency":"{c}","account":"{a}","security":"{s}","side":"buy","effect":null,"instrumentKind":"security","instrumentCurrency":"{c}","occurredAt":null,"settleDate":null,"tradeDate":"{d}","quantity":"{q}","price":null,"priceCurrency":null,"cash":"{m}","cashCurrency":"{c}","fee":null,"feeCurrency":null,"fxRate":null}}"#,
+        c = cash.currency,
+        a = account,
+        s = security,
+        d = bought.trade_date,
+        q = quantity.checked_add(Dec::parse("0.000001").unwrap()).unwrap().to_text(),
+        m = cash.amount.to_text(),
+    );
+    let connection = connection(&book, now);
+    let statement = book.store_superseding(&StatementMapping, &Incoming { connection: Some(connection), source_key: "statement-fill", payload: &fill, refs: vec![] }, &[record], "the statement's units", at(now)).unwrap();
+    let withdrawal = format!(r#"{{"currency":"CAD","account":"{}","transactionDate":"2025-11-10","description":"Withdrawal","transactionType":"WD","cashMovement":"-12.34"}}"#, account);
+    book.store(&StatementMapping, &Incoming { connection: Some(connection), source_key: "statement-withdrawal", payload: &withdrawal, refs: vec![] }, at(now)).unwrap();
+    assert_eq!(book.record(record).unwrap().state, RecordState::Superseded);
+    assert_eq!(book.trade(trade).unwrap().anchor, Anchor::Opening(Opening { transaction: bagholder_core::TransactionId::new(statement.record, bagholder_core::Leg::named("trade")), instrument: opening.instrument }));
+    assert_eq!(book.live_records(&bagholder_wealthsimple::statement::source()).unwrap().len(), 2);
+
+    let (r, _) = once(&book, &dir(), "2025-11-19T20:10:00Z");
+    assert!(r.failures.is_empty(), "{:?}", r.failures);
+    assert_eq!((r.statements_withdrawn, r.statements_left), (2, 0));
+    assert_eq!(book.record(record).unwrap().state, RecordState::Live, "the feed's fill is live again");
+    assert_eq!(book.transactions_of(record).unwrap().iter().filter(|t| t.kind == Kind::Buy).count(), 1, "with its fill");
+    assert_eq!(book.trade(trade).unwrap().anchor, Anchor::Opening(opening), "and its trade");
+    assert_eq!(book.live_records(&bagholder_wealthsimple::statement::source()).unwrap(), vec![], "nothing of the statements' is live");
+
+    let (r, _) = once(&book, &dir(), "2025-11-19T20:20:00Z");
+    assert_eq!((r.statements_withdrawn, r.statements_left), (0, 0), "a pull after finds nothing");
+}
+
+/// Each read is asked only of the kinds of account Wealthsimple issues it for
+/// (brief 79, amended 2026-10-28, point 1): over a made-up Wealthsimple with an
+/// account of every kind it makes, a day's pull and a balances read ask each
+/// account exactly the reads `account_types::reads` names for its kind, and never
+/// learn a kind by failing.
+#[test]
+fn each_read_is_asked_only_of_the_kinds_it_is_issued_for() {
+    use bagholder_wealthsimple::account_types::{account_type, reads};
+    let size = Size { accounts: 12, instruments: 12, trades: 40, months: 3, seed: 7, deep: 0 };
+    let today = shaped_today();
+    let (_home, book, mut ws, report) = shaped_by(size, today, &SHAPES);
+    assert!(report.failures.is_empty(), "{:?}", report.failures);
+    let now = today.to_zoned(jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(jiff::SignedDuration::from_hours(21)).unwrap();
+    let connection = book.connections().unwrap()[0].id;
+    let read = bagholder_broker::pull::balances(&book, &mut ws, connection, now).unwrap();
+    assert!(read.failures.is_empty(), "{:?}", read.failures);
+    let open_keys: std::collections::BTreeSet<String> = ws.accounts().unwrap().into_iter().filter(|a| a.open).map(|a| a.key).collect();
+    let asked = |account: &str, what: &[&str]| ws.source.reads.iter().any(|(r, a)| a == account && what.contains(r));
+    let kinds = ws.source.account_types();
+    let mut open = 0;
+    for (account, ty) in &kinds {
+        // a closed account, or a closed id behind an open one: its history once, and nothing else
+        if !open_keys.contains(account) {
+            continue;
+        }
+        open += 1;
+        let want = reads(&account_type(ty));
+        let got = bagholder_broker::Reads {
+            cash: asked(account, &["balances", "card"]),
+            positions: asked(account, &["positions"]),
+            history: asked(account, &["history"]),
+            margin: asked(account, &["buying power"]) && asked(account, &["margin rates"]),
+        };
+        assert_eq!(got, want, "{ty}: the reads asked are its kind's");
+        assert_eq!(asked(account, &["buying power"]) || asked(account, &["margin rates"]), want.margin, "{ty}: borrowing read only of a margin account");
+    }
+    assert!(open >= 6, "open accounts of every kind made: {open}");
 }

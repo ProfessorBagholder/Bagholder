@@ -95,6 +95,12 @@ pub fn holdings<'a>(of: &Sources, stated: impl IntoIterator<Item = Stated<'a>>, 
     out
 }
 
+/// The one holding of `instrument` that `stated` names, as `holdings` gives it.
+pub fn holding_of(of: &Sources, stated: &Stated, instrument: InstrumentId, as_of: Option<Date>) -> Option<Holding> {
+    let units = stated.held.get(&instrument).filter(|u| !u.is_zero())?;
+    Some(holding(of, stated.account, instrument, *units, stated.book.get(&instrument).copied(), as_of))
+}
+
 fn holding(of: &Sources, account: AccountId, instrument: InstrumentId, units: Dec, book: Option<Money>, as_of: Option<Date>) -> Holding {
     let info = of.instruments.get(&instrument);
     let kind = info.map(|i| i.instrument.kind).unwrap_or(InstrumentKind::Security);

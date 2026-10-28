@@ -19,6 +19,8 @@ export const GAP_WORDS: string[] = [
   'currency-unstated',
   'value-unstated',
   'price-unknown',
+  'book-unstated',
+  'holdings-unread',
   'payer-not-read',
   'no-distribution-yet',
   'schedule-unstated',

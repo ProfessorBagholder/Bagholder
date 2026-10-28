@@ -198,38 +198,19 @@ fn test_a_distribution_notice_whose_record_cannot_be_read_says_why_until_one_can
     assert_eq!(error(&app), "");
 }
 
+/// A market source failing, once or however often and for however many
+/// listings, goes to the log and never to the page (brief 79, amended
+/// 2026-10-28): the figure waits where it is shown.
 #[test]
-fn test_one_source_down_is_one_sentence_for_every_listing_it_stopped() {
+fn test_a_market_source_failing_is_never_said_however_many_listings_it_stopped() {
     let (_home, app) = fresh();
-    // each failed twice in a row, so each is said
-    for _ in 0..2 {
+    for _ in 0..3 {
         for sym in ["ASTS", "LUNR", "MU"] {
             crate::feeds::feed_failed(&app, &format!("shorts:{sym}@US"), "FINRA could not be reached");
         }
         crate::feeds::feed_failed(&app, "shorts:VEQT@XTSE", "CIRO could not be reached");
+        assert_eq!(error(&app), "");
     }
-    assert_eq!(
-        error(&app),
-        "The short interest of ASTS · US, LUNR · US, MU · US could not be read: FINRA could not be reached. The short interest of VEQT · TSX could not be read: CIRO could not be reached."
-    );
     crate::feeds::feed_answered(&app, "shorts:LUNR@US");
-    assert!(error(&app).starts_with("The short interest of ASTS · US, MU · US could not be read"), "{}", error(&app));
-}
-
-/// A single failed request to an outside source is not told to the person: the
-/// failure is said once the next asking fails too, and an answer between starts
-/// the count again.
-#[test]
-fn test_a_single_failed_request_to_a_source_is_not_said() {
-    let (_home, app) = fresh();
-    let feed = "shorts:ZZQQ@XTSE";
-    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403");
-    assert_eq!(error(&app), "", "one failure");
-    crate::feeds::feed_answered(&app, feed);
-    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403");
-    assert_eq!(error(&app), "", "one failure after an answer");
-    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403");
-    assert_eq!(error(&app), "The short interest of ZZQQ · TSX could not be read: CIRO: HTTP 403.");
-    crate::feeds::feed_answered(&app, feed);
     assert_eq!(error(&app), "");
 }

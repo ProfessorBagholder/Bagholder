@@ -85,13 +85,26 @@ pub(crate) fn feed_failed(app: &Arc<App>, feed: &str, why: impl Into<bagholder_n
         *n += 1;
         *n
     };
-    // logged as a run of failures starts; said once it is confirmed
+    // logged as a run of failures starts and as it ends (`feed_answered`); said
+    // once it is confirmed, unless it is a market source's (`market_source`)
     if missed == 1 {
         log(&format!("bagholder feeds: {feed}: {why}"));
     }
     if missed >= bagholder_sources::health::SAID_AFTER {
         feed_down(app, feed, why);
     }
+}
+
+/// Whether `feed` is a market source's read: news, short interest, the Fear &
+/// Greed index, the regulators' filings and documents, the TSX's interlisted
+/// list, distributions, the sectors exposures are read from. One failing is
+/// asked again at its next turn and goes to the log as it starts and as it ends,
+/// never to the page (brief 79, amended 2026-10-28): the figure waits where it is
+/// shown. What fails on this machine (the cache, the notifications, a store
+/// read, the update check) is still said.
+pub(crate) fn market_source(feed: &str) -> bool {
+    const SOURCES: [&str; 6] = ["news", EXPOSURE, crate::filings::INTERLISTED, DISCLOSURES, DISCLOSURES_READING, "distributions"];
+    SOURCES.contains(&feed) || feed.starts_with(SHORTS_OF) || feed.starts_with("fear:")
 }
 
 /// `feed` is down and no asking again can answer it until something changes (a
@@ -105,32 +118,19 @@ pub(crate) fn feed_down(app: &Arc<App>, feed: &str, why: String) {
 
 /// `feed` has answered: its failure, if one was standing, is no longer said.
 pub(crate) fn feed_answered(app: &Arc<App>, feed: &str) {
-    app.feeds.missed.lock().unwrap_or_else(|e| e.into_inner()).remove(feed);
+    if app.feeds.missed.lock().unwrap_or_else(|e| e.into_inner()).remove(feed).is_some() {
+        log(&format!("bagholder feeds: {feed}: answers again"));
+    }
     if app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner()).remove(feed).is_some() {
         app.events.signal();
     }
 }
 
-/// The feeds failing now, one sentence each, in a steady order: part of the header's error line.
-/// A listing's short interest failing is kept by listing, and said once for every
-/// listing the same failure stopped: a source that is down is one sentence, not one
-/// a listing.
+/// The feeds failing now, a market source's aside (`market_source`), one
+/// sentence each, in a steady order: part of the header's error line.
 pub fn feed_failures(app: &Arc<App>) -> Vec<String> {
     let failing = app.feeds.failing.lock().unwrap_or_else(|e| e.into_inner());
-    let mut out = Vec::new();
-    let mut shorts: Vec<(String, Vec<String>)> = Vec::new();
-    for (feed, why) in failing.iter() {
-        // each listing by its own key, named with its venue: two listings of one ticker are two
-        match feed.strip_prefix(SHORTS_OF).and_then(|k| k.parse::<bagholder_core::ListingKey>().ok()) {
-            Some(listing) => match shorts.iter_mut().find(|(w, _)| w == why) {
-                Some((_, named)) => named.push(listing.named()),
-                None => shorts.push((why.clone(), vec![listing.named()])),
-            },
-            None => out.push(why.clone()),
-        }
-    }
-    out.extend(shorts.into_iter().map(|(why, named)| format!("The short interest of {} could not be read: {why}", named.join(", "))));
-    out
+    failing.iter().filter(|(feed, _)| !market_source(feed)).map(|(_, why)| why.clone()).collect()
 }
 
 /// The header's entry for a listing's short interest, before its symbol.
@@ -154,6 +154,10 @@ pub(crate) const DISCLOSURES_READING: &str = "disclosures-reading";
 pub(crate) const RELEASES: &str = "releases";
 /// The header's entry for the exposure records' pass.
 const EXPOSURE: &str = "exposure";
+/// The header's entry for the exposure records as this machine keeps them: the
+/// book's securities and the stored records read (a market source's answers go
+/// under `EXPOSURE`).
+const EXPOSURE_STORE: &str = "exposure-store";
 /// The header's entry for the short selling held, as the table reads it.
 const SHORTS: &str = "shorts";
 
@@ -262,7 +266,7 @@ pub fn refresh_exposures(app: &Arc<App>) {
     let secs: HashMap<String, Security> = match crate::market_context::securities(app) {
         Ok(v) => v.into_iter().filter(|s| !s.id.is_empty()).map(|s| (s.id.clone(), s)).collect(),
         Err(e) => {
-            feed_failed(app, EXPOSURE, format!("The exposure records could not be brought up to date: the book's securities could not be read: {e}"));
+            feed_failed(app, EXPOSURE_STORE, format!("The exposure records could not be brought up to date: the book's securities could not be read: {e}"));
             return;
         }
     };
@@ -272,7 +276,7 @@ pub fn refresh_exposures(app: &Arc<App>) {
     let (today_s, _, _) = bagholder_market::clock_now();
     let Ok(p) = pool(app) else { return };
     let ctx = exposure::Ctx { conn: &c, pool: p, today: today_s.clone() };
-    let exposure_failed = |e: bagholder_net::Failure| feed_failed(app, "exposure", e.map(|e| format!("The exposures could not be refreshed: {e}")));
+    let exposure_failed = |e: bagholder_net::Failure| feed_failed(app, EXPOSURE_STORE, e.map(|e| format!("The exposures could not be refreshed: {e}")));
     let stale = |ids: &[String]| exposure::stale(&ctx, ids);
     let mut todo: Vec<String> = match stale(&held) {
         Ok(t) => t.into_iter().filter(|sid| secs.contains_key(sid)).collect(),
@@ -315,6 +319,8 @@ pub fn refresh_exposures(app: &Arc<App>) {
     jobs.extend(unders.into_iter().map(|(u, ex)| ExposureJob::Under(u, ex)));
     jobs.extend(watched.into_iter().map(|(sy, e, cc)| ExposureJob::Watch(sy, e, cc)));
     drop(ctx);
+    // the book's securities and the stored records read
+    feed_answered(app, EXPOSURE_STORE);
     if jobs.is_empty() {
         feed_answered(app, EXPOSURE);
         return;
@@ -2062,24 +2068,20 @@ mod tests {
     }
 
     #[test]
-    fn test_a_failed_read_is_said_in_the_header_over_the_reading_held_until_the_index_answers() {
+    fn test_a_failed_read_keeps_the_reading_held_and_is_never_said_on_the_page() {
         let _g = crate::tests_common::guard();
         let a = app();
         read_fear_with(&a, "stocks", || Ok(gauge(40.0))).unwrap();
-        // one failed read is not said; the next failing too is
-        let _ = read_fear_with(&a, "stocks", || Err("CNN could not be reached.".into()));
-        assert!(feed_failures(&a).is_empty(), "one failed read");
-        let _ = read_fear_with(&a, "stocks", || Err("CNN could not be reached.".into()));
-        assert_eq!(feed_failures(&a), vec!["CNN could not be reached.".to_string()]);
-        assert!(crate::status::status(&a).error.contains("CNN could not be reached."), "the header says it");
+        // a market source failing, however often, goes to the log and never to the
+        // page (brief 79, amended 2026-10-28): the older reading stays drawn
+        for _ in 0..3 {
+            let _ = read_fear_with(&a, "stocks", || Err("CNN could not be reached.".into()));
+        }
+        assert!(feed_failures(&a).is_empty(), "nothing for the page");
+        assert!(!crate::status::status(&a).error.contains("CNN"), "the header says nothing of it");
         assert_eq!(fear_stored(&a, "stocks").gauge.map(|g| g.gauge.score), Some(40.0), "the older reading stays drawn");
         read_fear_with(&a, "stocks", || Ok(gauge(55.0))).unwrap();
-        assert!(feed_failures(&a).is_empty(), "gone once the index answers");
-        // a read refused by BAGHOLDER_OFFLINE asked nobody: by its kind, never said however often
-        for _ in 0..3 {
-            let _ = read_fear_with(&a, "crypto", || Err(bagholder_net::Failure::Offline));
-        }
-        assert!(feed_failures(&a).is_empty(), "a read refused by BAGHOLDER_OFFLINE asked nobody and is not said");
+        assert_eq!(fear_stored(&a, "stocks").gauge.map(|g| g.gauge.score), Some(55.0));
     }
 
     // --- News: read for a page showing the card, not for any open page

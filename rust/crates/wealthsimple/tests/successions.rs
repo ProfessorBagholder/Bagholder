@@ -91,11 +91,14 @@ fn capture(old_status: &str) -> tempfile::TempDir {
         edges.push(row("anon-order-ch-1", "DIY_BUY", OLD, "1000.0000", "150.00", "2025-11-03T15:00:00.000000+00:00"));
         edges.push(row("anon-order-ch-2", "DIY_SELL", NEW, "400.0000", "72.00", "2025-11-17T15:00:00.000000+00:00"));
     });
-    edit_file(dir.path(), "positions@anon-tfsa-1@2025-11-18.json", |v| {
-        let accounts = list(obj(obj(v, "data"), "accounts"));
-        let edges = list(obj(obj(obj(obj(&mut accounts[0], "financials"), "current"), "positionsAsOfDate"), "edges"));
-        edges.push(parse(&format!(r#"{{"node": {{"direction": "LONG", "quantity": "600", "security": {{"id": "{NEW}"}}, "totalValue": {{"amount": "1800", "currency": "CAD"}}, "bookValue": {{"amount": "1500", "currency": "CAD"}}}}}}"#)));
-    });
+    // the holdings as of the day before and as of today, which every pull asks
+    for file in ["positions@anon-tfsa-1@2025-11-18.json", "edited-positions@anon-tfsa-1@2025-11-19.json"] {
+        edit_file(dir.path(), file, |v| {
+            let accounts = list(obj(obj(v, "data"), "accounts"));
+            let edges = list(obj(obj(obj(obj(&mut accounts[0], "financials"), "current"), "positionsAsOfDate"), "edges"));
+            edges.push(parse(&format!(r#"{{"node": {{"direction": "LONG", "quantity": "600", "security": {{"id": "{NEW}"}}, "totalValue": {{"amount": "1800", "currency": "CAD"}}, "bookValue": {{"amount": "1500", "currency": "CAD"}}}}}}"#)));
+        });
+    }
     dir
 }
 
