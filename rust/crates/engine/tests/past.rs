@@ -91,6 +91,23 @@ fn a_past_days_holdings_are_its_read_and_move_only_with_what_they_are_worked_out
     assert!(!e.apply(Change::Broker(a, Some(stated))).0.contains_key(&Entity::Past), "a day no screen holds was said to move");
 }
 
+/// Dates ending on that day show its read's holdings: held then, whenever the
+/// journal opened them, they are in the dates however they begin, and none is
+/// left out for the journal holding no lot of it.
+#[test]
+fn dates_ending_on_a_past_day_show_the_holdings_its_read_states() {
+    let mut b = build(&case());
+    let e = Engine::build(b.inputs.clone());
+    let x = b.ids.instrument("X");
+    let day: Date = "2026-02-08".parse().unwrap();
+    for from in [None, Some(day), Some("2026-01-01".parse().unwrap())] {
+        let f = bagholder_engine::scope::Filters { dates: bagholder_engine::scope::Dates::Range { from, to: Some(day) }, ..Default::default() };
+        let pf = e.holdings(&f);
+        let held: Vec<_> = pf.positions.iter().map(|i| pf.held(&[])[*i].instrument).collect();
+        assert_eq!(held, [x], "from {from:?}");
+    }
+}
+
 /// A past day no read states is not yet read: the engine names it to be read
 /// while a screen holds it, and stops once its read is there.
 #[test]

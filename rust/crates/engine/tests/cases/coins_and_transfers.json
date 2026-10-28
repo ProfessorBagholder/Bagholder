@@ -416,6 +416,123 @@
     }
   },
   {
+    "name": "the broker stating a coin's dust: worth less at its quote than the smallest order, no holding; the trade closed as before",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust (trade-7); brief 79: the holdings are the positions read's",
+    "working": [
+      "t1 and t2 as the case before: the 0.05 left is written off with t2, the trade closed 2026-02-02, P&L 19.40",
+      "Wealthsimple's positions read still states the 0.05, book value 0.50",
+      "0.05 x 12.00 (the quote) = 0.60 < 1.00, the smallest coin order: dust, no holding"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "quotes": {"C": {"price": "12.00", "source": "crypto"}},
+    "brokers": {"A": {"held": {"C": "0.05"}, "held_book": {"C": "0.50 CAD"}}},
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-9.95",
+        "cash": "119.40"
+      }
+    ],
+    "expect": {
+      "trades": [
+        {
+          "opened_by": "t1",
+          "closed": "2026-02-02",
+          "qty": "10",
+          "pnl": "19.40"
+        }
+      ],
+      "position_count": 0,
+      "positions": [],
+      "beyond": []
+    }
+  },
+  {
+    "name": "the broker stating a coin worth the smallest order or more at its quote: a holding of the units it states",
+    "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust (trade-7); brief 79: the holdings are the positions read's",
+    "working": [
+      "Wealthsimple's positions read states 0.1 C, book value 1.00",
+      "0.1 x 12.00 (the quote) = 1.20, not less than 1.00: held"
+    ],
+    "today": "2026-03-02",
+    "accounts": [
+      {
+        "id": "A",
+        "kind": "crypto",
+        "coin_minimum": "1.00 CAD"
+      }
+    ],
+    "instruments": [
+      {
+        "id": "C",
+        "kind": "crypto"
+      }
+    ],
+    "quotes": {"C": {"price": "12.00", "source": "crypto"}},
+    "brokers": {"A": {"held": {"C": "0.1"}, "held_book": {"C": "1.00 CAD"}}},
+    "transactions": [
+      {
+        "id": "t1",
+        "account": "A",
+        "day": "2026-01-05",
+        "at": "2026-01-05T15:00:00Z",
+        "kind": "buy",
+        "instrument": "C",
+        "qty": "10",
+        "cash": "-100"
+      },
+      {
+        "id": "t2",
+        "account": "A",
+        "day": "2026-02-02",
+        "at": "2026-02-02T15:00:00Z",
+        "kind": "sell",
+        "instrument": "C",
+        "qty": "-9.9",
+        "cash": "118.80"
+      }
+    ],
+    "expect": {
+      "position_count": 1,
+      "positions": [
+        {
+          "instrument": "C",
+          "account": "A",
+          "qty": "0.1"
+        }
+      ],
+      "beyond": []
+    }
+  },
+  {
     "name": "a sale that leaves a coin worth the broker's smallest order or more leaves it held, the trade open",
     "spec": "SPEC.md §2 Trade: a coin is flat once what is left of it is dust",
     "working": [

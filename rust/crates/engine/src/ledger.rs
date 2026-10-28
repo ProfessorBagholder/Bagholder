@@ -1263,7 +1263,7 @@ impl<'a, 'm> Matcher<'a, 'm> {
     /// Units beyond worth less than the broker's smallest coin order at the
     /// transaction's own price are dust (`crate::dust`), and not listed.
     fn beyond(&mut self, t: &Transaction, account: AccountId, instrument: InstrumentId, qty: Dec) {
-        if self.price_of(t, instrument).is_some_and(|p| crate::dust::is_dust(self.inputs, account, instrument, qty, p, t.trade_date)) {
+        if self.price_of(t, instrument).is_some_and(|p| crate::dust::is_dust(&crate::stated::Sources::of(self.inputs), account, instrument, qty, p, t.trade_date)) {
             return self.out.dust.push(Dust { transaction: t.id.clone(), account, instrument, qty, beyond: true });
         }
         self.out.beyond.push(Beyond { transaction: t.id.clone(), account, instrument, qty, read: StatedRead::Unstated });
@@ -1638,7 +1638,7 @@ impl<'a, 'm> Matcher<'a, 'm> {
         let Some(price) = self.price_of(t, instrument) else { return };
         let held = self.book(account, instrument).lots.iter().filter(|l| l.direction == Direction::Long).try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty));
         let Ok(held) = held else { return };
-        if !held.is_positive() || !crate::dust::is_dust(self.inputs, account, instrument, held, price, t.trade_date) {
+        if !held.is_positive() || !crate::dust::is_dust(&crate::stated::Sources::of(self.inputs), account, instrument, held, price, t.trade_date) {
             return;
         }
         let zero = Money::zero(self.currency(instrument));

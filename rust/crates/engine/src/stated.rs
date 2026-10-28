@@ -17,7 +17,7 @@ use bagholder_core::{AccountId, Currency, Dec, InstrumentId, Money, Rounding};
 
 use crate::fx::live_to_cad;
 use crate::gap::{Fig, Gap, Gaps};
-use crate::input::{Clock, InstrumentInfo, Market, Rates};
+use crate::input::{AccountInfo, Clock, InstrumentInfo, Market, Rates};
 use crate::ledger::{multiplier, Direction};
 use crate::positions::{close_mark_in, mark_in, Mark};
 use crate::trades::PRICE_PLACES;
@@ -26,6 +26,8 @@ use crate::trades::PRICE_PLACES;
 /// prices and the rates.
 pub struct Sources<'a> {
     pub instruments: &'a BTreeMap<InstrumentId, InstrumentInfo>,
+    /// The accounts: the smallest coin order each one's broker takes.
+    pub accounts: &'a BTreeMap<AccountId, AccountInfo>,
     pub market: &'a Market,
     pub rates: &'a Rates,
     pub clock: &'a Clock,
@@ -33,7 +35,7 @@ pub struct Sources<'a> {
 
 impl<'a> Sources<'a> {
     pub fn of(inputs: &'a crate::input::Inputs) -> Sources<'a> {
-        Sources { instruments: &inputs.ledger.instruments, market: &inputs.market, rates: &inputs.facts.rates, clock: &inputs.clock }
+        Sources { instruments: &inputs.ledger.instruments, accounts: &inputs.ledger.accounts, market: &inputs.market, rates: &inputs.facts.rates, clock: &inputs.clock }
     }
 }
 
@@ -81,24 +83,25 @@ pub struct Holding {
 
 /// The holdings `stated` names, in the order it gives them, each instrument in
 /// its own order: marked now, or, `as_of` a past day, at that day's close and
-/// that day's rate. A line stating no units is no holding.
+/// that day's rate. A line stating no units is no holding, nor is a coin's
+/// dust.
 pub fn holdings<'a>(of: &Sources, stated: impl IntoIterator<Item = Stated<'a>>, as_of: Option<Date>) -> Vec<Holding> {
     let mut out = Vec::new();
     for s in stated {
-        for (instrument, units) in s.held {
-            if units.is_zero() {
-                continue;
-            }
-            out.push(holding(of, s.account, *instrument, *units, s.book.get(instrument).copied(), as_of));
-        }
+        out.extend(s.held.keys().filter_map(|i| holding_of(of, &s, *i, as_of)));
     }
     out
 }
 
-/// The one holding of `instrument` that `stated` names, as `holdings` gives it.
+/// The one holding of `instrument` that `stated` names, as `holdings` gives it:
+/// none where it states no units, or where they are a coin worth less at its
+/// mark than the smallest coin order the broker takes (dust, `SPEC.md`
+/// trade-7: not a holding, the owner's rule of 2026-09-27).
 pub fn holding_of(of: &Sources, stated: &Stated, instrument: InstrumentId, as_of: Option<Date>) -> Option<Holding> {
     let units = stated.held.get(&instrument).filter(|u| !u.is_zero())?;
-    Some(holding(of, stated.account, instrument, *units, stated.book.get(&instrument).copied(), as_of))
+    let h = holding(of, stated.account, instrument, *units, stated.book.get(&instrument).copied(), as_of);
+    let dust = h.mark.as_ref().is_ok_and(|m| crate::dust::is_dust(of, h.account, h.instrument, h.qty, m.price, as_of.unwrap_or(of.clock.today)));
+    (!dust).then_some(h)
 }
 
 fn holding(of: &Sources, account: AccountId, instrument: InstrumentId, units: Dec, book: Option<Money>, as_of: Option<Date>) -> Holding {

@@ -280,8 +280,10 @@ fn holding_instrument_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> 
 /// direction; the journal it shares with its trade; its result by the sign of
 /// its unrealized P&L; Price by its average cost, Hold by its days held, P&L by
 /// its unrealized P&L, Qty by its units; and the dates when it was held at some
-/// time in them, so a range ending today narrows nothing.
-pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
+/// time in them, so a range ending today narrows nothing. `held_on` is the day it
+/// is held as of: today, or a past day's close, held then whenever the journal
+/// opened it (a past day's holding is the positions read of that day's).
+pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig, held_on: Date) -> bool {
     let today = inputs.clock.today;
     holding_instrument_matches(f, inputs, p)
         && journal_matches(f, &p.journal, p.direction)
@@ -290,7 +292,7 @@ pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
         && bound_keeps(f.hold, p.held_days.as_ref().and_then(|d| d.as_ref().ok()).map(|d| Dec::from_int(*d)))
         && bound_keeps(f.pnl, p.unrealized.as_ref().ok().map(|m| m.amount))
         && bound_keeps(f.qty, p.qty.as_ref().ok().copied())
-        && f.overlaps(today, p.opened_on.unwrap_or(today), today)
+        && f.overlaps(today, p.opened_on.unwrap_or(held_on), held_on)
 }
 
 /// A sum of the stated members, and how many were left out. The sum is the
@@ -771,7 +773,7 @@ pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTr
 
 /// The holdings' part of a filter set.
 pub fn portfolio_in_scope(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days: PastDays) -> Portfolio {
-    portfolio(f, inputs, positions, past_days)
+    portfolio(f, inputs, positions, inputs.clock.today, past_days)
 }
 
 /// The cashflow's part of a filter set, over the holdings' part.
@@ -794,7 +796,7 @@ pub fn scope(
     past_days: PastDays,
 ) -> Scoped {
     let d = dashboard(f, inputs, trades, equity, benchmarks);
-    let portfolio = portfolio(f, inputs, positions, past_days);
+    let portfolio = portfolio(f, inputs, positions, inputs.clock.today, past_days);
     let cashflow = cashflow(f, inputs, trades, positions, cash_rows, rates, &portfolio);
     Scoped {
         trades: trades_in_scope(f, inputs, trades),
@@ -899,6 +901,8 @@ impl Held {
 /// last day counted where it stops (a closed account).
 struct Stated<'a> {
     first: Option<Date>,
+    /// The last day stated: a day after it comes to that day's statement.
+    last: Date,
     days: std::iter::Peekable<std::collections::btree_map::Iter<'a, Date, Money>>,
     held: Option<Fig<Money>>,
     until: Option<Date>,
@@ -1064,7 +1068,7 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
             let b = inputs.market.brokers.get(&a.account.id)?;
             let v = &b.net_value;
             let values = match v.keys().next_back() {
-                Some(last) => Some(Stated { first: v.keys().next().copied(), days: v.iter().peekable(), held: None, until: (a.account.status != AccountStatus::Open).then_some(*last) }),
+                Some(last) => Some(Stated { first: v.keys().next().copied(), last: *last, days: v.iter().peekable(), held: None, until: (a.account.status != AccountStatus::Open).then_some(*last) }),
                 // one whose value is never stated counts while it is open, where its
                 // broker states its cash
                 None if a.account.status == AccountStatus::Open && b.as_of.is_some() => None,
@@ -1139,18 +1143,20 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
             // a margin account's cash, and that of one whose value is never stated, as
             // the positions read as of that day states it, from its first stated value
             // to its last where it closed: what it borrowed, and what it holds where no
-            // value of it is stated (`cash_read_by_day`); a day one of them is not read
-            // yet waits on that read, said once for the day
+            // value of it is stated (`cash_read_by_day`); a day after its last stated
+            // value, that value's day's, as the value is; a day one of them is not
+            // read yet waits on that read, said once for the day
             let mut unread = false;
             for (at, a) in accounts.iter().enumerate() {
                 let outside_its_days = a.values.as_ref().is_some_and(|s| s.first.is_some_and(|f| day < f) || s.until.is_some_and(|u| day > u));
                 if is_card(a.kind) || outside_its_days || !cash_read_by_day(a.kind, a.values.is_none()) {
                     continue;
                 }
-                match inputs.market.brokers.get(&a.id).and_then(|b| b.days_held.get(&day)) {
+                let read = a.values.as_ref().map_or(day, |s| day.min(s.last));
+                match inputs.market.brokers.get(&a.id).and_then(|b| b.days_held.get(&read)) {
                     Some(d) => {
                         for (c, v) in &d.cash {
-                            balance(a.kind, a.values.is_none(), *c, &Ok(*v), day, &mut parts[at]);
+                            balance(a.kind, a.values.is_none(), *c, &Ok(*v), read, &mut parts[at]);
                         }
                     }
                     None => unread = true,
@@ -1243,10 +1249,10 @@ fn owed(f: &Filters, inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -
 /// asked only where the scope has net worth by day.
 pub type PastDays<'a> = &'a dyn Fn(&BTreeSet<AccountId>) -> std::sync::Arc<Vec<NetWorthDay>>;
 
-fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days: PastDays) -> Portfolio {
+fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], held_on: Date, past_days: PastDays) -> Portfolio {
     let rates = &inputs.facts.rates;
     let clock = &inputs.clock;
-    let idx: Vec<usize> = positions.iter().enumerate().filter(|(_, p)| position_matches(f, inputs, p)).map(|(i, _)| i).collect();
+    let idx: Vec<usize> = positions.iter().enumerate().filter(|(_, p)| position_matches(f, inputs, p, held_on)).map(|(i, _)| i).collect();
     let signed_market = |p: &PositionFig| -> Fig<Money> { p.market_cad.clone().map(|m| if p.direction == Direction::Short { m.neg() } else { m }) };
     let market: Vec<Fig<Money>> = idx.iter().map(|i| signed_market(&positions[*i])).collect();
     let cost: Vec<Fig<Money>> = idx.iter().map(|i| positions[*i].book_cad.clone().map(|m| m.abs())).collect();
@@ -1453,7 +1459,7 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days:
 /// available to borrow, which the broker states only now.
 pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate::engine::Past>, past_days: PastDays) -> Portfolio {
     let day = past.day;
-    let mut p = portfolio(f, inputs, &past.positions, past_days);
+    let mut p = portfolio(f, inputs, &past.positions, day, past_days);
     let accounts: Vec<AccountId> = inputs.ledger.accounts.keys().copied().filter(|a| f.accounts.is_empty() || f.accounts.contains(a)).collect();
     // each account's value that day: its last stated on or before it
     // each at the rate of the day it is that account's value for

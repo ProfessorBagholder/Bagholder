@@ -640,8 +640,9 @@ impl Engine {
             }
         }
         // each day the net worth history needs an account's cash of: a margin
-        // account's, and one whose value is never stated (`scope::cash_read_by_day`),
-        // from its first stated value to yesterday, or to its last where it closed
+        // account's, from its first stated value to its last (a day after it is its
+        // last's, as the value is), and one whose value is never stated
+        // (`scope::cash_read_by_day`), from the history's first day to yesterday
         let today = self.inputs.clock.today;
         // the history's first day, from which an account no value of is stated counts
         let first = brokers.values().filter_map(|b| b.net_value.keys().next().copied()).min();
@@ -656,7 +657,7 @@ impl Engine {
             }
             let open = info.account.status == bagholder_core::account::AccountStatus::Open;
             let (mut day, end) = match (b.net_value.keys().next().copied(), b.net_value.keys().next_back().copied()) {
-                (Some(f), Some(last)) => (f, if open { today } else { last.tomorrow().unwrap_or(today).min(today) }),
+                (Some(f), Some(last)) => (f, last.tomorrow().unwrap_or(today).min(today)),
                 // no value of it stated: counted while open where its cash is stated
                 _ => match first {
                     Some(f) if open && b.as_of.is_some() => (f, today),

@@ -7,20 +7,20 @@ use bagholder_core::instrument::InstrumentKind;
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::{AccountId, Dec, InstrumentId, Money};
 
-use crate::input::Inputs;
+use crate::stated::Sources;
 
 /// Whether `qty` of a coin, at `price` a unit in its own currency, is worth less
 /// than the smallest coin order the account's broker takes, the value converted
 /// at `day`'s rate where the two currencies differ. Not dust where any of it is
 /// unknown: an instrument that is not a coin, a broker with no smallest order,
 /// a price of nothing, a rate or product that cannot be worked out.
-pub fn is_dust(inputs: &Inputs, account: AccountId, instrument: InstrumentId, qty: Dec, price: Dec, day: Date) -> bool {
-    let Some(info) = inputs.ledger.instruments.get(&instrument).filter(|i| i.instrument.kind == InstrumentKind::Crypto) else { return false };
-    let Some(smallest) = inputs.ledger.accounts.get(&account).and_then(|a| a.coin_minimum) else { return false };
+pub fn is_dust(of: &Sources, account: AccountId, instrument: InstrumentId, qty: Dec, price: Dec, day: Date) -> bool {
+    let Some(info) = of.instruments.get(&instrument).filter(|i| i.instrument.kind == InstrumentKind::Crypto) else { return false };
+    let Some(smallest) = of.accounts.get(&account).and_then(|a| a.coin_minimum) else { return false };
     if !price.is_positive() {
         return false;
     }
     let Ok(value) = qty.abs().mul_to_fit(price) else { return false };
     let value = Money::new(value, info.instrument.currency);
-    crate::fx::convert(&inputs.facts.rates, &inputs.clock, value, smallest.currency, day).is_ok_and(|v| v < smallest.amount)
+    crate::fx::convert(of.rates, of.clock, value, smallest.currency, day).is_ok_and(|v| v < smallest.amount)
 }

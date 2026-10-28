@@ -208,6 +208,7 @@ pub fn failures(st: &app::State, sources: &[String]) -> String {
 }
 
 /// An instrument as the page names it: its bare ticker.
+#[cfg(test)]
 pub(crate) fn symbol(inputs: &bagholder_engine::input::Inputs, i: bagholder_core::InstrumentId) -> String {
     let s = crate::wire::build::shown(inputs, i).symbol;
     if s.is_empty() { "An instrument with no name on record".into() } else { crate::orders::bare_symbol(&s) }

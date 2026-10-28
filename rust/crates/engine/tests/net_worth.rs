@@ -362,6 +362,39 @@ fn a_cards_balance_owed_by_day_is_its_statements() {
     }
 }
 
+/// A margin account whose value is stated up to a day before yesterday (its
+/// daily history not read since): a day after its last stated value comes to
+/// that value, and what it owes to that day's positions read, as the value does;
+/// no read is asked for a day after it, and no day waits on one.
+#[test]
+fn a_margin_account_after_its_last_stated_value_owes_what_that_days_read_states() {
+    let mut held = json!({});
+    let mut d = day("2026-10-05");
+    while d <= day("2026-10-15") {
+        held[d.to_string()] = json!({"cash": {"CAD": "-400"}});
+        d = d.tomorrow().unwrap();
+    }
+    let c = json!({
+        "name": "a margin account read to a day before yesterday",
+        "today": "2026-10-20",
+        "now": "2026-10-20T22:00:00Z",
+        "accounts": [{"id": "A", "kind": "margin"}],
+        "instruments": [],
+        "brokers": {"A": {"cash": {"CAD": "-400"}, "net_value": {"2026-10-05": "1000", "2026-10-15": "1100"}, "now": "1100", "as_of": "2026-10-20T15:00:00Z", "buying_power": "0", "days_held": held}},
+        "transactions": []
+    });
+    let mut b = build(&c);
+    let e = engine(&mut b);
+    let days = e.scope(&Filters::default()).portfolio.net_worth_history;
+    let after: Vec<_> = days.iter().filter(|nw| nw.day > day("2026-10-15") && nw.day < day("2026-10-20")).collect();
+    assert_eq!(after.len(), 4);
+    for nw in after {
+        assert_eq!(nw.debts.clone().expect("no day waits").amount, Dec::from_int(400), "{}: the last read's debt", nw.day);
+    }
+    let asked = e.needs().holdings_on;
+    assert!(asked.iter().all(|d| *d <= day("2026-10-15")), "no read asked after the last stated value: {asked:?}");
+}
+
 /// Net worth by day before today is kept from one change to the next
 /// (`Engine::net_worth_past`), and what is kept is what a fresh working-out
 /// gives, under every account set, after each kind of change that moves it: a
