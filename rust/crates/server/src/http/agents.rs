@@ -185,8 +185,15 @@ pub fn open(app: &Arc<App>, rt: &tokio::runtime::Handle) {
                 return;
             }
             // and the tunnel the person chose, so every agent can reach it again after
-            // an update or a restart (brief 80 §5.1); their own proxy is theirs to run
-            let tunnelled = store(app).and_then(|a| setup(&a)).map(|s| s.is_some_and(|s| s.provider != Provider::Own));
+            // an update or a restart (brief 80 §5.1), where it was running when
+            // Bagholder stopped; their own proxy is theirs to run. A copy of the book
+            // started for some work (`BAGHOLDER_EXIT_WITH`, every scratch copy's
+            // rule) starts none: it would answer on the person's grants under
+            // their public name, a second replica of their tunnel
+            if std::env::var_os(crate::exit_with::VAR).is_some() {
+                return;
+            }
+            let tunnelled = store(app).and_then(|a| Ok(setup(&a)?.is_some_and(|s| s.provider != Provider::Own) && a.setting(agents::RUNNING).map_err(|e| e.to_string())?.as_deref() == Some("1")));
             match tunnelled {
                 Ok(true) => {
                     if let Err(e) = tunnel_up(app) {
@@ -213,7 +220,9 @@ async fn switch(State(state): State<AppState>, Required(asked): Required<SwitchA
             switch_on(&app, &rt)?;
         } else {
             app.agents.switch_off();
-            store(&app)?.set_setting(agents::ON, Some("0"), bagholder_core::jiff::Timestamp::now()).map_err(|e| e.to_string())?;
+            let (a, now) = (store(&app)?, bagholder_core::jiff::Timestamp::now());
+            a.set_setting(agents::ON, Some("0"), now).map_err(|e| e.to_string())?;
+            a.set_setting(agents::RUNNING, None, now).map_err(|e| e.to_string())?;
         }
         app.events.signal();
         Ok(())
@@ -257,7 +266,12 @@ async fn choose(State(state): State<AppState>, Required(asked): Required<Setup>)
 
 async fn start_tunnel(State(state): State<AppState>) -> Api<OkOr> {
     let app = state.app.clone();
-    let done = blocking(move || tunnel_up(&app)).await?;
+    let done = blocking(move || -> Result<(), String> {
+        tunnel_up(&app)?;
+        // running when Bagholder stops: it starts again with it
+        store(&app)?.set_setting(agents::RUNNING, Some("1"), bagholder_core::jiff::Timestamp::now()).map_err(|e| e.to_string())
+    })
+    .await?;
     Ok(Json(done.map_or_else(OkOr::err, |()| OkOr::ok())))
 }
 
@@ -315,13 +329,15 @@ fn check_while_coming_up(app: &Arc<App>, provider: Provider, checking: &Arc<std:
 
 async fn stop_tunnel(State(state): State<AppState>) -> Api<OkOr> {
     let app = state.app.clone();
-    blocking(move || {
+    let done = blocking(move || -> Result<(), String> {
         app.agents.tunnels().stop();
         app.agents.set_ready(None);
         app.events.signal();
+        // stopped by the person: it stays stopped when Bagholder starts again
+        store(&app)?.set_setting(agents::RUNNING, None, bagholder_core::jiff::Timestamp::now()).map_err(|e| e.to_string())
     })
     .await?;
-    Ok(Json(OkOr::ok()))
+    Ok(Json(done.map_or_else(OkOr::err, |()| OkOr::ok())))
 }
 
 /// Tailscale asked again, when the person has signed in or let Funnel on since.

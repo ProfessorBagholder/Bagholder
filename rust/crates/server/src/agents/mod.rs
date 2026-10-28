@@ -63,6 +63,10 @@ pub const ON: &str = "agents.on";
 pub const PORT: &str = "agents.port";
 pub const TUNNEL: &str = "agents.tunnel";
 pub const HOST: &str = "agents.host";
+/// Whether the tunnel was running when Bagholder last stopped: set when the person
+/// starts it, cleared when they stop it or switch Agents off. It starts again with
+/// Bagholder only then, so a tunnel the person stopped stays stopped.
+pub const RUNNING: &str = "agents.running";
 
 /// What the listener is given: the public name it answers for, the agent tables,
 /// the server to read, the clock, and what it fetches from elsewhere with.
