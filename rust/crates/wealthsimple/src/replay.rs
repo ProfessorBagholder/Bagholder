@@ -82,7 +82,9 @@ impl Replay {
             // the network: a list it lacks is a capture that does not read, said with
             // the file it is in
             let bad = |m: bagholder_sources::reply::Mismatch| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{name}: {m}"));
-            if let Some(rest) = name.strip_prefix("positions@").and_then(|n| n.strip_suffix(".json")) {
+            // a positions reply as recorded, or an edited one (`edited-positions@…`): a day
+            // the capture holds no reply of, its holdings unchanged since one it does
+            if let Some(rest) = name.strip_prefix("positions@").or_else(|| name.strip_prefix("edited-positions@")).and_then(|n| n.strip_suffix(".json")) {
                 let Some((account, day)) = rest.rsplit_once('@') else { continue };
                 let mut nodes = Vec::new();
                 for a in data.list("accounts").map_err(bad)? {
