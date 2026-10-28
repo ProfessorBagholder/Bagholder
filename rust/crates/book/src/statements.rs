@@ -37,6 +37,16 @@ pub struct AccountDay {
     pub net_deposits: Money,
 }
 
+/// What one positions read states an account held as of a day: each
+/// instrument's units and book value, and the cash in each currency.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeldOn {
+    pub units: BTreeMap<InstrumentId, Dec>,
+    /// Each instrument's book value, none where a line states none.
+    pub books: BTreeMap<InstrumentId, Option<Money>>,
+    pub cash: BTreeMap<Currency, Dec>,
+}
+
 /// What the broker last stated about one account.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stated {
@@ -524,8 +534,8 @@ impl Book {
     }
 
     /// The newest statement of an account's units as of `day`, its lines as they
-    /// were stored: none where none was.
-    pub fn units_on(&self, account: AccountId, as_of: jiff::civil::Date) -> Result<Option<Vec<UnitsLine>>> {
+    /// were stored and the cash stored with them: none where none was.
+    pub fn units_on(&self, account: AccountId, as_of: jiff::civil::Date) -> Result<Option<(Vec<UnitsLine>, BTreeMap<Currency, Dec>)>> {
         let id: Option<String> = self
             .conn()
             .query_row("SELECT id FROM statements WHERE account_id = ?1 AND kind = 'units' AND as_of_day = ?2 ORDER BY rowid DESC LIMIT 1", params![account.to_string(), day(as_of)], |r| r.get(0))
@@ -545,14 +555,62 @@ impl Book {
             let (i, q, b, bc, v, vc) = r?;
             out.push(UnitsLine { instrument: text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?, quantity: text::dec("statement_units", "quantity", &q)?, book_value: money(b, bc, "book_value")?, value: money(v, vc, "value")? });
         }
-        Ok(Some(out))
+        Ok(Some((out, self.statement_cash(&id)?)))
     }
 
-    /// Store a statement of units as of a day.
-    pub fn store_units(&self, account: AccountId, as_of: jiff::civil::Date, lines: &[UnitsLine], read: &ReadId, at: jiff::Timestamp) -> Result<()> {
+    /// Every day before `before` an account's units were stated as of, each from
+    /// the newest statement of that day: its units and book value of each
+    /// instrument (under the instrument the book reads it as, the units of
+    /// instruments read as one added up) and its cash (brief 79 §2.4).
+    pub fn units_days(&self, account: AccountId, before: jiff::civil::Date) -> Result<BTreeMap<jiff::civil::Date, HeldOn>> {
+        let a = account.to_string();
+        let newest = "s.account_id = ?1 AND s.kind = 'units' AND s.as_of_day < ?2 AND s.rowid = (SELECT max(n.rowid) FROM statements n WHERE n.account_id = s.account_id AND n.kind = 'units' AND n.as_of_day = s.as_of_day)";
+        let mut out: BTreeMap<jiff::civil::Date, HeldOn> = BTreeMap::new();
+        let mut st = self.conn().prepare(&format!("SELECT s.as_of_day FROM statements s WHERE {newest}"))?;
+        for d in st.query_map(params![a, day(before)], |r| r.get::<_, String>(0))? {
+            out.insert(text::date("statements", "as_of_day", &d?)?, HeldOn::default());
+        }
+        let mut heads: BTreeMap<InstrumentId, InstrumentId> = BTreeMap::new();
+        let mut st = self.conn().prepare(&format!("SELECT s.as_of_day, u.instrument_id, u.quantity, u.book_value, u.book_value_currency FROM statements s JOIN statement_units u ON u.statement_id = s.id WHERE {newest}"))?;
+        type Line = (String, String, String, Option<String>, Option<String>);
+        let rows: Vec<Line> = st.query_map(params![a, day(before)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
+        for (d, i, q, b, bc) in rows {
+            let held = out.entry(text::date("statements", "as_of_day", &d)?).or_default();
+            let i = text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?;
+            let head = match heads.get(&i) {
+                Some(h) => *h,
+                None => *heads.entry(i).or_insert(self.canonical(i)?),
+            };
+            let e = held.units.entry(head).or_insert(Dec::ZERO);
+            *e = e.checked_add(text::dec("statement_units", "quantity", &q)?).map_err(|e| crate::BookError::Refused(format!("a statement's units too large to add: {e}")))?;
+            // its book value, none once a line of it states none or another currency
+            let book = match (b, bc) {
+                (Some(b), Some(c)) => Some(Money::new(text::dec("statement_units", "book_value", &b)?, text::parsed("statement_units", "book_value_currency", &c, Currency::parse)?)),
+                _ => None,
+            };
+            let slot = held.books.entry(head).or_insert(book.map(|b| Money::zero(b.currency)));
+            *slot = match (*slot, book) {
+                (Some(x), Some(y)) if x.currency == y.currency => x.amount.checked_add(y.amount).ok().map(|v| Money::new(v, x.currency)),
+                _ => None,
+            };
+        }
+        let mut st = self.conn().prepare(&format!("SELECT s.as_of_day, c.currency, c.amount FROM statements s JOIN statement_cash c ON c.statement_id = s.id WHERE {newest}"))?;
+        let rows: Vec<(String, String, String)> = st.query_map(params![a, day(before)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        for (d, c, v) in rows {
+            out.entry(text::date("statements", "as_of_day", &d)?).or_default().cash.insert(text::currency("statement_cash", "currency", &c)?, text::dec("statement_cash", "amount", &v)?);
+        }
+        Ok(out)
+    }
+
+    /// Store a statement of units as of a day, with the cash in each currency the
+    /// same read states (a past day's cash is read from it, brief 79 §2.4).
+    pub fn store_units(&self, account: AccountId, as_of: jiff::civil::Date, lines: &[UnitsLine], cash: &BTreeMap<Currency, Dec>, read: &ReadId, at: jiff::Timestamp) -> Result<()> {
         self.atomically(|| {
             let id = new_uuid(at).to_string();
             self.conn().execute("INSERT INTO statements (id, account_id, kind, as_of_day, read_id) VALUES (?1, ?2, 'units', ?3, ?4)", params![id, account.to_string(), day(as_of), read.0])?;
+            for (c, a) in cash {
+                self.conn().execute("INSERT INTO statement_cash (statement_id, currency, amount) VALUES (?1, ?2, ?3)", params![id, c.to_string(), a.to_text()])?;
+            }
             for l in lines {
                 self.conn().execute(
                     "INSERT INTO statement_units (statement_id, instrument_id, quantity, book_value, book_value_currency, value, value_currency) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",

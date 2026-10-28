@@ -859,9 +859,9 @@ fn store_outside_days(book: &Book, adapter: &mut dyn BrokerAdapter, outside: &[b
 /// Each book account's holdings as of `day`, read in one request for every
 /// broker account behind them (`BrokerAdapter::positions`), and stored for each
 /// book account whose every id answered: each instrument's units and book value,
-/// the ids behind one book account added up. A day already stored is stored again
-/// only where its units or book value moved: the balances read them every five
-/// minutes. A holding no row names (a token migrated, a gift) is described by the
+/// the ids behind one book account added up, and its cash. A day already stored is
+/// stored again only where its units, book value or cash moved: the balances read
+/// them every five minutes. A holding no row names (a token migrated, a gift) is described by the
 /// broker first, so it is named and priced like any other. Each book account's
 /// cash, as the same read states it, beside.
 fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, accounts: &[(AccountId, Vec<String>)], day: jiff::civil::Date, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<BTreeMap<AccountId, BTreeMap<bagholder_core::Currency, Dec>>> {
@@ -937,13 +937,12 @@ fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Conn
         if !complete {
             continue;
         }
-        cash_of.insert(*id, cash);
         let lines: Vec<UnitsLine> = sum.into_iter().map(|(instrument, quantity)| UnitsLine { instrument, quantity, book_value: costed.get(&instrument).copied().flatten(), value: valued.get(&instrument).copied().flatten() }).collect();
-        if book.units_on(*id, day)?.is_some_and(|kept| same_holdings(&kept, &lines)) {
-            continue;
+        if !book.units_on(*id, day)?.is_some_and(|(kept, kept_cash)| kept_cash == cash && same_holdings(&kept, &lines)) {
+            let read = book.broker_read(connection, "units", now)?;
+            book.store_units(*id, day, &lines, &cash, &read, now)?;
         }
-        let read = book.broker_read(connection, "units", now)?;
-        book.store_units(*id, day, &lines, &read, now)?;
+        cash_of.insert(*id, cash);
     }
     Ok(cash_of)
 }

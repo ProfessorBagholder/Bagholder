@@ -842,7 +842,7 @@ fn a_statement_of_nothing_held_is_read_again_on_the_day_s_pull() {
     let id = resp_account(&book, "anon-resp-2");
     let c = connection(&book, now);
     let read = book.broker_read(c, "units", at(now)).unwrap();
-    book.store_units(id, "2025-11-18".parse().unwrap(), &[], &read, at(now)).unwrap();
+    book.store_units(id, "2025-11-18".parse().unwrap(), &[], &Default::default(), &read, at(now)).unwrap();
     let (_, asked) = once_with(&book, replies.path(), "2025-11-19T21:00:00Z", resp_rows);
     assert!(asked.iter().any(|a| a == "positions anon-resp-2 2025-11-18"), "{asked:?}");
 }

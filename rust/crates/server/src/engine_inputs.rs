@@ -351,12 +351,12 @@ pub(crate) mod tests {
         let i = book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), now).unwrap().unwrap();
         let read = book.broker_read(conn, "units", now).unwrap();
         let q = Dec::parse("0.0000005").unwrap();
-        book.store_units(a, "2026-09-26".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: None, value: None }], &read, now).unwrap();
+        book.store_units(a, "2026-09-26".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: None, value: None }], &Default::default(), &read, now).unwrap();
         let b = &brokers(&book).unwrap()[&a];
         assert_eq!(b.held[&i], q, "kept before its worth was, its units stand");
         assert!(b.held_value.is_empty() && b.held_book.is_empty());
         let (worth, cost) = (Money::new(Dec::parse("0.0000014").unwrap(), Currency::CAD), Money::new(Dec::parse("0.0000011").unwrap(), Currency::CAD));
-        book.store_units(a, "2026-09-27".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: Some(cost), value: Some(worth) }], &read, now).unwrap();
+        book.store_units(a, "2026-09-27".parse().unwrap(), &[UnitsLine { instrument: i, quantity: q, book_value: Some(cost), value: Some(worth) }], &Default::default(), &read, now).unwrap();
         let b = &brokers(&book).unwrap()[&a];
         assert_eq!((b.held[&i], b.held_value[&i], b.held_book[&i]), (q, worth, cost));
     }
