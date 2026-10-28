@@ -1,0 +1,12 @@
+# cargo-nextest (CI's `tests.yml` and the release's suites): each test in a process
+# of its own, as many at once as the runner has cores, and each with a temp folder
+# of its own that it must leave empty (`bin/one-test-leftovers.sh`), so a leftover
+# names the test that made it.
+experimental = ["wrapper-scripts"]
+
+[scripts.wrapper.leftovers]
+command = { command-line = "../bin/one-test-leftovers.sh", relative-to = "workspace-root" }
+
+[[profile.default.scripts]]
+filter = "all()"
+run-wrapper = "leftovers"

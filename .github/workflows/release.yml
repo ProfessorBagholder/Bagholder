@@ -1,16 +1,18 @@
 # Builds the archives a release carries and attaches each with its .sha256 to the
-# release the tag belongs to: bagholder-vX.Y.Z-rust-<target>.tar.gz (.zip on Windows),
-# one per platform, the file every installed copy's updater downloads: the server (with
-# the page built into it), its browser helper, the disclosures MCP server and the
-# SEDAR+ command.
+# release: bagholder-vX.Y.Z-rust-<target>.tar.gz (.zip on Windows), one per platform,
+# the file every installed copy's updater downloads: the server (with the page built
+# into it), its browser helper, the disclosures MCP server and the SEDAR+ command.
+#
+# A release is built once, by the run of the merge that makes it: a push to master
+# that changes the app's version, for which a draft release of that version is
+# written (its title and notes) before the merge. That run builds, tests on macOS
+# and Windows, attaches the archives, publishes the image, and publishes the draft
+# as the latest. Every other merge builds the same archives and attaches nothing,
+# so master's caches stay warm. A run by hand rebuilds a release already tagged.
 name: Release archives
 
 on:
   push:
-    tags: ["v*.*.*"]
-    # every merge builds the same archives, nothing attached or published, so the
-    # build a release tag makes starts from master's compiled dependencies and
-    # Windows' OpenSSL (a tag's run may read master's caches, never another tag's)
     branches: [master]
   workflow_dispatch:
     inputs:
@@ -23,7 +25,27 @@ permissions:
   packages: write
 
 jobs:
+  # The release this run makes, if any: the tag a run by hand names, or, on a merge
+  # that changes the app's version, that version's draft release.
+  release:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.which.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      # a version changed with no draft release written for it, or one that cannot
+      # be read, fails the run (bin/release-which.sh, held by its test in tests.yml)
+      - id: which
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          BEFORE: ${{ github.event.before }}
+          ASKED: ${{ github.event.inputs.tag }}
+        run: sh bin/release-which.sh
+
   rust:
+    needs: release
     strategy:
       fail-fast: false
       matrix:
@@ -34,19 +56,19 @@ jobs:
           - { os: windows-2022, target: x86_64-pc-windows-msvc }
     runs-on: ${{ matrix.os }}
     env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      TAG: ${{ needs.release.outputs.tag }}
     defaults:
       run:
         shell: bash
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ env.TAG }}
-      - name: The app's version is the tag's
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+          ref: ${{ github.event.inputs.tag || github.sha }}
+      - name: The app's version is the release's
+        if: needs.release.outputs.tag != ''
         run: |
           have="$(sed -n 's/^pub const APP_VERSION: &str = "\(.*\)";$/\1/p' rust/crates/server/src/app.rs)"
-          test "$have" = "${TAG#v}" || { echo "rust/crates/server/src/app.rs says $have, the tag says $TAG"; exit 1; }
+          test "$have" = "${TAG#v}" || { echo "rust/crates/server/src/app.rs says $have, the release is $TAG"; exit 1; }
       - name: Build tools (Linux)
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev pkg-config libssl-dev
@@ -93,7 +115,7 @@ jobs:
           hits=$(strings -a "$bin" | grep -av '[/\\]' | grep -aE '(^|[^A-Za-z0-9_])(demo|pull-broker)([^A-Za-z0-9_]|$)|9bagholder4demo|10demo_facts|11pull_broker|12from_records' || true)
           if [ -n "$hits" ]; then echo "$bin carries a developer's subcommand:"; echo "$hits" | sed -n 1,20p; exit 1; fi
       - name: Package
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        if: needs.release.outputs.tag != ''
         run: |
           name="bagholder-${TAG}-rust-${{ matrix.target }}"
           mkdir -p dist/pkg
@@ -107,54 +129,63 @@ jobs:
           fi
       # the Linux binaries, for the release's image (docker.yml), which is built from them
       - name: Keep the Linux binaries for the image
-        if: runner.os == 'Linux' && (github.ref_type == 'tag' || github.event_name == 'workflow_dispatch')
+        if: runner.os == 'Linux' && needs.release.outputs.tag != ''
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: bins-${{ matrix.target }}
           path: dist/pkg/*
           retention-days: 1
       - name: Attach to the release
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        if: needs.release.outputs.tag != ''
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: gh release upload "$TAG" dist/bagholder-* --clobber
 
   # The suites on macOS and Windows, run once, here, as a release's final step on the commit it is
-  # cut from: a pull request runs them on Linux alone (`tests.yml`). The release stays a
-  # prerelease, which no installed copy is offered, unless both pass. On master each compiles
-  # its suite and runs nothing, and only when master's cache lacks it, so a release's run starts
-  # from compiled dependencies (a tag reads master's caches).
+  # cut from: a pull request runs them on Linux alone (`tests.yml`). The release stays a draft,
+  # which no installed copy is offered, unless both pass. On a merge that makes no release each
+  # compiles its suite and runs nothing, and only when master's cache lacks it, so a release's run
+  # starts from compiled dependencies.
   suite-macos:
+    needs: release
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag || github.sha }}
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         id: cache
         with:
           workspaces: rust
       - name: The suite, compiled
-        if: github.ref_type == 'branch' && github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        if: needs.release.outputs.tag == '' && steps.cache.outputs.cache-hit != 'true'
         env:
           CI: "true"
         run: cargo test --workspace --locked --no-run
         working-directory: rust
-      # on a temp folder of its own: a test that leaves anything there fails it
+      # cargo-nextest runs each test in a process of its own, as many at once as the
+      # runner has cores (`tests.yml`)
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        if: needs.release.outputs.tag != ''
+        with:
+          tool: cargo-nextest@0.9.148
+      # on a temp folder of its own: a test that leaves anything there fails it;
+      # nextest runs no doc test, so they run apart
       - name: The Rust suite
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        if: needs.release.outputs.tag != ''
         env:
           CI: "true"
         run: |
-          cargo test --workspace --locked --no-run
-          ../bin/check-test-leftovers.sh cargo test --workspace --locked -- --skip capacity::tests
+          cargo nextest list --workspace --locked > /dev/null
+          ../bin/check-test-leftovers.sh cargo nextest run --workspace --locked --no-fail-fast -E 'not test(/^capacity::tests::/)'
+          ../bin/check-test-leftovers.sh cargo test --workspace --locked --doc
         working-directory: rust
       # the test a sandboxed local run cannot hold: the notification applet, built with
       # osacompile, which needs Apple Events (#[ignore]d with that reason)
       - name: The notification applet, on macOS
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        if: needs.release.outputs.tag != ''
         env:
           CI: "true"
         run: cargo test --locked -p bagholder-server -- --ignored --exact notify::tests::test_the_mac_applet_is_built_once_under_bagholders_name_and_icon
@@ -163,25 +194,26 @@ jobs:
   # Windows has no system time zone database, so the model reads the copy built into
   # jiff there: the model's tests (the zones and every shared case) run where that holds.
   suite-windows:
+    needs: release
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
-          ref: ${{ github.event.inputs.tag || github.ref }}
+          ref: ${{ github.event.inputs.tag || github.sha }}
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         id: cache
         with:
           workspaces: rust
       - name: The model's suite, compiled
-        if: github.ref_type == 'branch' && github.event_name == 'push' && steps.cache.outputs.cache-hit != 'true'
+        if: needs.release.outputs.tag == '' && steps.cache.outputs.cache-hit != 'true'
         env:
           CI: "true"
         run: cargo test --locked -p bagholder-model --no-run
         working-directory: rust
       # on a temp folder of its own: a test that leaves anything there fails it
       - name: The model's suite
-        if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+        if: needs.release.outputs.tag != ''
         env:
           CI: "true"
         shell: bash
@@ -192,24 +224,31 @@ jobs:
 
   # the release's image, made from the Linux archives' own binaries
   docker:
-    needs: rust
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+    needs: [release, rust]
+    if: needs.release.outputs.tag != ''
     uses: ./.github/workflows/docker.yml
     with:
       prebuilt: true
+      version: ${{ needs.release.outputs.tag }}
     secrets: inherit
 
-  # The release is created as a prerelease, which GitHub's latest release (the one
-  # every installed copy checks) leaves out; it becomes the latest only once every
-  # platform's archive and the image are there, so no copy is ever offered a
-  # release it cannot take.
+  # The release stays a draft (or, run by hand, a prerelease), which GitHub's latest
+  # release (the one every installed copy checks) leaves out; it becomes the latest
+  # only once every platform's archive and the image are there and both suites
+  # passed, so no copy is ever offered a release it cannot take. A draft is
+  # published on this run's own commit, which tags it.
   publish:
-    needs: [rust, docker, suite-macos, suite-windows]
-    if: github.ref_type == 'tag' || github.event_name == 'workflow_dispatch'
+    needs: [release, rust, docker, suite-macos, suite-windows]
+    if: needs.release.outputs.tag != ''
     runs-on: ubuntu-latest
     env:
-      TAG: ${{ github.event.inputs.tag || github.ref_name }}
+      TAG: ${{ needs.release.outputs.tag }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
       - name: Publish the release as the latest
-        run: gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
+        run: |
+          if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true" ]; then
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --draft=false --prerelease=false --latest
+          else
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --prerelease=false --latest
+          fi
