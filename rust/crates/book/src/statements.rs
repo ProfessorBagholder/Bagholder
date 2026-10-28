@@ -37,11 +37,23 @@ pub struct AccountDay {
     pub net_deposits: Money,
 }
 
+/// What one positions read states an account held as of a day: each
+/// instrument's units and book value, and the cash in each currency.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeldOn {
+    pub units: BTreeMap<InstrumentId, Dec>,
+    /// Each instrument's book value, none where a line states none.
+    pub books: BTreeMap<InstrumentId, Option<Money>>,
+    pub cash: BTreeMap<Currency, Dec>,
+}
+
 /// What the broker last stated about one account.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Stated {
     /// Each day's value and net deposits, from the newest read of the day.
     pub days: BTreeMap<jiff::civil::Date, (Money, Money)>,
+    /// Each day a positions read was asked as of, what it states (`units_days`).
+    pub days_held: BTreeMap<jiff::civil::Date, HeldOn>,
     /// The newest statement of cash, and when it was stated.
     pub cash: Option<(jiff::Timestamp, BTreeMap<Currency, Dec>)>,
     /// The newest statement of cash made at or before the last full read of the
@@ -58,8 +70,7 @@ pub struct Stated {
     /// states every line of it in one currency.
     pub unit_values: BTreeMap<InstrumentId, Money>,
     /// What that statement states each instrument's book value is, the same way:
-    /// the broker's own, kept to check the book's average cost against, never a
-    /// cost the book takes.
+    /// the holding's book value as the app shows it (brief 79).
     pub unit_books: BTreeMap<InstrumentId, Money>,
     /// When the account's activity was last read in full.
     pub activity_read_at: Option<jiff::Timestamp>,
@@ -76,7 +87,8 @@ pub struct Stated {
 pub struct UnitsLine {
     pub instrument: InstrumentId,
     pub quantity: Dec,
-    /// The broker's own book value, kept as its statement, never a cost.
+    /// The broker's book value: what the units cost, as the holding shows it
+    /// (brief 79).
     pub book_value: Option<Money>,
     /// What the broker states the position is worth.
     pub value: Option<Money>,
@@ -152,29 +164,6 @@ impl Book {
     pub fn last_read(&self, connection: ConnectionId, part: &str) -> Result<Option<jiff::Timestamp>> {
         let at: Option<i64> = self.conn().query_row("SELECT MAX(at_ns) FROM broker_reads WHERE connection_id = ?1 AND part = ?2", params![connection.to_string(), part], |r| r.get(0))?;
         at.map(|t| from_ns("broker_reads", "at_ns", t)).transpose()
-    }
-
-    /// Keep an account's statement for the month starting `month`, as the
-    /// broker issued it. A month is read once and kept: a second copy of the
-    /// same month is not stored.
-    pub fn keep_monthly_statement(&self, connection: ConnectionId, account_key: &str, month: jiff::civil::Date, payload: &str, read: &ReadId) -> Result<()> {
-        self.conn().execute(
-            "INSERT OR IGNORE INTO monthly_statements (connection_id, account_key, month, payload, read_id) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![connection.to_string(), account_key, month.to_string(), payload, read.0],
-        )?;
-        Ok(())
-    }
-
-    /// Every statement kept for one of the broker's accounts, by month, oldest first.
-    pub fn monthly_statements(&self, connection: ConnectionId, account_key: &str) -> Result<Vec<(jiff::civil::Date, String)>> {
-        let mut stmt = self.conn().prepare("SELECT month, payload FROM monthly_statements WHERE connection_id = ?1 AND account_key = ?2 ORDER BY month")?;
-        let rows = stmt.query_map(params![connection.to_string(), account_key], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
-        let mut out = Vec::new();
-        for r in rows {
-            let (m, p) = r?;
-            out.push((text::parsed("monthly_statements", "month", &m, |d: &str| d.parse::<jiff::civil::Date>())?, p));
-        }
-        Ok(out)
     }
 
     /// The links between a connection's accounts, as one read of the accounts
@@ -546,11 +535,84 @@ impl Book {
         })
     }
 
-    /// Store a statement of units as of a day.
-    pub fn store_units(&self, account: AccountId, as_of: jiff::civil::Date, lines: &[UnitsLine], read: &ReadId, at: jiff::Timestamp) -> Result<()> {
+    /// The newest statement of an account's units as of `day`, its lines as they
+    /// were stored and the cash stored with them: none where none was.
+    pub fn units_on(&self, account: AccountId, as_of: jiff::civil::Date) -> Result<Option<(Vec<UnitsLine>, BTreeMap<Currency, Dec>)>> {
+        let id: Option<String> = self
+            .conn()
+            .query_row("SELECT id FROM statements WHERE account_id = ?1 AND kind = 'units' AND as_of_day = ?2 ORDER BY rowid DESC LIMIT 1", params![account.to_string(), day(as_of)], |r| r.get(0))
+            .optional()?;
+        let Some(id) = id else { return Ok(None) };
+        let mut st = self.conn().prepare_cached("SELECT instrument_id, quantity, book_value, book_value_currency, value, value_currency FROM statement_units WHERE statement_id = ?1")?;
+        type Line = (String, String, Option<String>, Option<String>, Option<String>, Option<String>);
+        let rows = st.query_map(params![id], |r| -> rusqlite::Result<Line> { Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)) })?;
+        let money = |a: Option<String>, c: Option<String>, column: &'static str| -> Result<Option<Money>> {
+            Ok(match (a, c) {
+                (Some(a), Some(c)) => Some(Money::new(text::dec("statement_units", column, &a)?, text::parsed("statement_units", column, &c, Currency::parse)?)),
+                _ => None,
+            })
+        };
+        let mut out = Vec::new();
+        for r in rows {
+            let (i, q, b, bc, v, vc) = r?;
+            out.push(UnitsLine { instrument: text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?, quantity: text::dec("statement_units", "quantity", &q)?, book_value: money(b, bc, "book_value")?, value: money(v, vc, "value")? });
+        }
+        Ok(Some((out, self.statement_cash(&id)?)))
+    }
+
+    /// Every day from `from` and before `before` an account's units were stated
+    /// as of, each from the newest statement of that day: its units and book value
+    /// of each instrument (under the instrument the book reads it as, the units of
+    /// instruments read as one added up) and its cash (brief 79 §2.4).
+    pub fn units_days(&self, account: AccountId, from: jiff::civil::Date, before: jiff::civil::Date) -> Result<BTreeMap<jiff::civil::Date, HeldOn>> {
+        let a = account.to_string();
+        let newest = "s.account_id = ?1 AND s.kind = 'units' AND s.as_of_day >= ?3 AND s.as_of_day < ?2 AND s.rowid = (SELECT max(n.rowid) FROM statements n WHERE n.account_id = s.account_id AND n.kind = 'units' AND n.as_of_day = s.as_of_day)";
+        let mut out: BTreeMap<jiff::civil::Date, HeldOn> = BTreeMap::new();
+        let mut st = self.conn().prepare(&format!("SELECT s.as_of_day FROM statements s WHERE {newest}"))?;
+        for d in st.query_map(params![a, day(before), day(from)], |r| r.get::<_, String>(0))? {
+            out.insert(text::date("statements", "as_of_day", &d?)?, HeldOn::default());
+        }
+        let mut heads: BTreeMap<InstrumentId, InstrumentId> = BTreeMap::new();
+        let mut st = self.conn().prepare(&format!("SELECT s.as_of_day, u.instrument_id, u.quantity, u.book_value, u.book_value_currency FROM statements s JOIN statement_units u ON u.statement_id = s.id WHERE {newest}"))?;
+        type Line = (String, String, String, Option<String>, Option<String>);
+        let rows: Vec<Line> = st.query_map(params![a, day(before), day(from)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?.collect::<rusqlite::Result<_>>()?;
+        for (d, i, q, b, bc) in rows {
+            let held = out.entry(text::date("statements", "as_of_day", &d)?).or_default();
+            let i = text::parsed("statement_units", "instrument_id", &i, InstrumentId::parse)?;
+            let head = match heads.get(&i) {
+                Some(h) => *h,
+                None => *heads.entry(i).or_insert(self.canonical(i)?),
+            };
+            let e = held.units.entry(head).or_insert(Dec::ZERO);
+            *e = e.checked_add(text::dec("statement_units", "quantity", &q)?).map_err(|e| crate::BookError::Refused(format!("a statement's units too large to add: {e}")))?;
+            // its book value, none once a line of it states none or another currency
+            let book = match (b, bc) {
+                (Some(b), Some(c)) => Some(Money::new(text::dec("statement_units", "book_value", &b)?, text::parsed("statement_units", "book_value_currency", &c, Currency::parse)?)),
+                _ => None,
+            };
+            let slot = held.books.entry(head).or_insert(book.map(|b| Money::zero(b.currency)));
+            *slot = match (*slot, book) {
+                (Some(x), Some(y)) if x.currency == y.currency => x.amount.checked_add(y.amount).ok().map(|v| Money::new(v, x.currency)),
+                _ => None,
+            };
+        }
+        let mut st = self.conn().prepare(&format!("SELECT s.as_of_day, c.currency, c.amount FROM statements s JOIN statement_cash c ON c.statement_id = s.id WHERE {newest}"))?;
+        let rows: Vec<(String, String, String)> = st.query_map(params![a, day(before), day(from)], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<rusqlite::Result<_>>()?;
+        for (d, c, v) in rows {
+            out.entry(text::date("statements", "as_of_day", &d)?).or_default().cash.insert(text::currency("statement_cash", "currency", &c)?, text::dec("statement_cash", "amount", &v)?);
+        }
+        Ok(out)
+    }
+
+    /// Store a statement of units as of a day, with the cash in each currency the
+    /// same read states (a past day's cash is read from it, brief 79 §2.4).
+    pub fn store_units(&self, account: AccountId, as_of: jiff::civil::Date, lines: &[UnitsLine], cash: &BTreeMap<Currency, Dec>, read: &ReadId, at: jiff::Timestamp) -> Result<()> {
         self.atomically(|| {
             let id = new_uuid(at).to_string();
             self.conn().execute("INSERT INTO statements (id, account_id, kind, as_of_day, read_id) VALUES (?1, ?2, 'units', ?3, ?4)", params![id, account.to_string(), day(as_of), read.0])?;
+            for (c, a) in cash {
+                self.conn().execute("INSERT INTO statement_cash (statement_id, currency, amount) VALUES (?1, ?2, ?3)", params![id, c.to_string(), a.to_text()])?;
+            }
             for l in lines {
                 self.conn().execute(
                     "INSERT INTO statement_units (statement_id, instrument_id, quantity, book_value, book_value_currency, value, value_currency) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
@@ -631,7 +693,7 @@ impl Book {
 
     /// What the broker last stated about `account`, with every day of its history.
     pub fn stated(&self, account: AccountId) -> Result<Stated> {
-        Ok(Stated { days: self.stated_days(account)?, ..self.stated_latest(account)? })
+        Ok(Stated { days: self.stated_days(account)?, days_held: self.units_days(account, jiff::civil::Date::MIN, jiff::civil::Date::MAX)?, ..self.stated_latest(account)? })
     }
 
     /// Each day's value and net deposits of `account`, from the newest read of the day.

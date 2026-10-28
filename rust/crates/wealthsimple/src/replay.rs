@@ -33,12 +33,6 @@ pub struct Replay {
     /// The balances replies' accounts, each as Wealthsimple sent it.
     balances: Vec<Value>,
     history: BTreeMap<String, Vec<Value>>,
-    /// Each account's monthly statement by month, from `statement@<account>@<month>.json`:
-    /// the `monthlyStatement` node, or null where Wealthsimple answered none.
-    statements: BTreeMap<(String, String), Value>,
-    /// A capture taken before statements were read: a month it holds no
-    /// statement of answers as not issued, not as a reply it lacks.
-    before_statements: bool,
     /// What was asked, in order: what a pull would have sent.
     pub asked: Vec<String>,
     /// Each account's activity asked, and the day it was asked from (the whole
@@ -66,8 +60,6 @@ impl Replay {
             positions: BTreeMap::new(),
             balances: vec![],
             history: BTreeMap::new(),
-            statements: BTreeMap::new(),
-            before_statements: false,
             asked: vec![],
             asked_from: vec![],
             asked_balances: vec![],
@@ -90,10 +82,9 @@ impl Replay {
             // the network: a list it lacks is a capture that does not read, said with
             // the file it is in
             let bad = |m: bagholder_sources::reply::Mismatch| std::io::Error::new(std::io::ErrorKind::InvalidData, format!("{name}: {m}"));
-            if let Some(rest) = name.strip_prefix("statement@").and_then(|n| n.strip_suffix(".json")) {
-                let Some((account, month)) = rest.rsplit_once('@') else { continue };
-                r.statements.insert((account.to_string(), month.to_string()), data.field("monthlyStatement").map_err(bad)?.value().clone());
-            } else if let Some(rest) = name.strip_prefix("positions@").and_then(|n| n.strip_suffix(".json")) {
+            // a positions reply as recorded, or an edited one (`edited-positions@…`): a day
+            // the capture holds no reply of, its holdings unchanged since one it does
+            if let Some(rest) = name.strip_prefix("positions@").or_else(|| name.strip_prefix("edited-positions@")).and_then(|n| n.strip_suffix(".json")) {
                 let Some((account, day)) = rest.rsplit_once('@') else { continue };
                 let mut nodes = Vec::new();
                 for a in data.list("accounts").map_err(bad)? {
@@ -185,15 +176,6 @@ impl Replay {
     }
 }
 
-impl Replay {
-    /// This capture was taken before statements were read: every month it
-    /// holds no statement of answers as not issued.
-    pub fn taken_before_statements(mut self) -> Replay {
-        self.before_statements = true;
-        self
-    }
-}
-
 impl Source for Replay {
     fn accounts(&mut self) -> Answer<Vec<Value>> {
         self.asked.push("accounts".into());
@@ -232,6 +214,12 @@ impl Source for Replay {
         self.asked.push(format!("positions {account} {day}"));
         self.positions.get(&(account.to_string(), day.to_string())).cloned().ok_or_else(|| Failure::Refused(format!("no positions of {account} as of {day} in the capture")))
     }
+    fn positions_of(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
+        // one request for every account, as Wealthsimple's document is asked: each
+        // account asked, and the whole refused where the capture lacks one
+        let answers: Vec<(String, Answer<Value>)> = accounts.iter().map(|a| (a.clone(), self.positions(a, day))).collect();
+        answers.into_iter().map(|(a, r)| Ok((a, r?))).collect()
+    }
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {
         self.asked.push("balances".into());
         self.asked_balances.push(accounts.to_vec());
@@ -257,15 +245,6 @@ impl Source for Replay {
     fn history(&mut self, account: &str, _from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         self.asked.push(format!("history {account}"));
         Ok(self.history.get(account).cloned().unwrap_or_default())
-    }
-    fn statement(&mut self, account: &str, month: jiff::civil::Date, kind: &str) -> Answer<Option<Value>> {
-        self.asked.push(format!("statement {account} {month} {kind}"));
-        match self.statements.get(&(account.to_string(), month.to_string())) {
-            Some(Value::Null) => Ok(None),
-            Some(v) => Ok(Some(v.clone())),
-            None if self.before_statements => Ok(None),
-            None => Err(Failure::Refused(format!("no statement of {account} for {month} in the capture"))),
-        }
     }
     fn requests(&self) -> usize {
         self.asked.len()

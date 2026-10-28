@@ -46,7 +46,7 @@
     ],
     "expect": {
       "position_count": 1,
-      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["effect-conflict"]}],
+      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["book-unstated"]}],
       "unapplied": {"t2": ["effect-conflict"]},
       "beyond": []
     }
@@ -213,20 +213,14 @@
           "instrument": "C1",
           "direction": "short",
           "qty": "2",
-          "gaps": [
-            "leg-unstated",
-            "price-unknown"
-          ]
+          "gaps": ["book-unstated", "price-unknown"]
         },
         {
           "account": "A",
           "instrument": "C2",
           "direction": "long",
           "qty": "2",
-          "gaps": [
-            "leg-unstated",
-            "price-unknown"
-          ]
+          "gaps": ["book-unstated", "price-unknown"]
         }
       ],
       "trades": [
@@ -439,19 +433,13 @@
           "account": "A",
           "instrument": "C2",
           "qty": "1",
-          "gaps": [
-            "no-expiry-record",
-            "price-unknown"
-          ]
+          "gaps": ["book-unstated", "price-unknown"]
         },
         {
           "account": "A",
           "instrument": "P2",
           "qty": "1",
-          "gaps": [
-            "no-expiry-record",
-            "price-unknown"
-          ]
+          "gaps": ["book-unstated", "price-unknown"]
         }
       ],
       "kpi": {
@@ -596,7 +584,7 @@
     ],
     "expect": {
       "trades": [{"opened_by": "t2", "pnl": "100.00"}],
-      "positions": [{"account": "A", "instrument": "U", "qty": "100", "gaps": ["multiplier-unstated", "price-unknown"]}]
+      "positions": [{"account": "A", "instrument": "U", "qty": "100", "gaps": ["book-unstated", "price-unknown"]}]
     }
   },
   {
@@ -636,7 +624,7 @@
     ],
     "expect": {
       "position_count": 1,
-      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["effect-conflict"]}],
+      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["book-unstated"]}],
       "unapplied": {"t2": ["effect-conflict"]},
       "beyond": []
     }
@@ -686,7 +674,7 @@
     ],
     "expect": {
       "position_count": 2,
-      "positions": [{"account": "A", "instrument": "U", "direction": "long", "qty": "100", "gaps": ["effect-conflict"]}, {"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["effect-conflict"]}],
+      "positions": [{"account": "A", "instrument": "U", "direction": "long", "qty": "100", "gaps": ["book-unstated"]}, {"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["book-unstated"]}],
       "unapplied": {"t3": ["effect-conflict"]}
     }
   },
@@ -709,7 +697,7 @@
     ],
     "expect": {
       "position_count": 1,
-      "positions": [{"account": "A", "instrument": "C1", "direction": "short", "qty": "1", "gaps": ["effect-conflict"]}],
+      "positions": [{"account": "A", "instrument": "C1", "direction": "short", "qty": "1", "gaps": ["book-unstated"]}],
       "unapplied": {"t2": ["effect-conflict"]}
     }
   },
@@ -732,7 +720,7 @@
     ],
     "expect": {
       "position_count": 1,
-      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["effect-conflict"]}],
+      "positions": [{"account": "A", "instrument": "C1", "direction": "long", "qty": "1", "gaps": ["book-unstated"]}],
       "unapplied": {"t2": ["effect-conflict"]}
     }
   },
@@ -1647,7 +1635,7 @@
     ],
     "expect": {
       "position_count": 2,
-      "positions": [{"account": "A", "instrument": "U", "direction": "long", "qty": "100", "gaps": ["quantity-unstated"]}, {"account": "A", "instrument": "C1", "direction": "short", "qty": "1", "gaps": ["quantity-unstated"]}],
+      "positions": [{"account": "A", "instrument": "U", "direction": "long", "qty": "100", "gaps": ["book-unstated"]}, {"account": "A", "instrument": "C1", "direction": "short", "qty": "1", "gaps": ["book-unstated"]}],
       "unapplied": {"t3": ["quantity-unstated"]}
     }
   }

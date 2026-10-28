@@ -455,8 +455,9 @@ mod tests {
     }
 
     /// A past day's holdings a screen holds are priced by their closes on or before
-    /// that day: the needs name each one's closes from the day it was first held to
-    /// that day, the reader asks for them, and nothing is named once no screen holds it.
+    /// that day: the needs name each one's close of that day, the reader asks for
+    /// them, and nothing is named once no screen holds it. The day is one the pull
+    /// read the holdings of (yesterday's, brief 79 §2.4).
     #[test]
     fn a_past_days_holdings_ask_for_their_closes_while_a_screen_holds_them() {
         crate::tests_common::home(); // offline: the closes are asked for and nothing leaves the machine
@@ -470,7 +471,7 @@ mod tests {
         let f = app.figures.get().unwrap();
         let book = f.book().unwrap();
         let today = now.to_zoned(TimeZone::get("America/Toronto").unwrap()).date();
-        let day: bagholder_core::jiff::civil::Date = "2025-11-14".parse().unwrap();
+        let day: bagholder_core::jiff::civil::Date = "2025-11-18".parse().unwrap();
         let spans = |f: &crate::figures::Figures| -> Vec<(InstrumentId, bagholder_core::jiff::civil::Date)> {
             let n = f.read(|e| e.needs()).unwrap();
             crate::read_sources::needs_of(&book, &n, today).unwrap().closes.iter().filter(|c| c.to == day).map(|c| (c.listing.id, c.from)).collect()
@@ -480,9 +481,9 @@ mod tests {
         assert!(!held.positions.is_empty(), "the test book held something that day");
         assert_eq!(f.read(|e| e.past_built()), Some(true), "a past day worked out is said once");
         assert_eq!(f.read(|e| e.past_built()), Some(false));
-        let want: BTreeSet<(InstrumentId, bagholder_core::jiff::civil::Date)> = held.positions.iter().filter_map(|p| crate::read_sources::needs_of(&book, &bagholder_engine::needs::FactNeeds { spans: [(p.instrument, [(p.opened_on, day)].into())].into(), ..Default::default() }, today).unwrap().closes.first().map(|c| (c.listing.id, c.from))).collect();
+        let want: BTreeSet<(InstrumentId, bagholder_core::jiff::civil::Date)> = held.positions.iter().filter_map(|p| crate::read_sources::needs_of(&book, &bagholder_engine::needs::FactNeeds { spans: [(p.instrument, [(day, day)].into())].into(), ..Default::default() }, today).unwrap().closes.first().map(|c| (c.listing.id, c.from))).collect();
         assert!(!want.is_empty());
-        assert_eq!(spans(f).into_iter().collect::<BTreeSet<_>>(), want, "each holding's closes from its first day held to that day");
+        assert_eq!(spans(f).into_iter().collect::<BTreeSet<_>>(), want, "each holding's close of that day");
         let cache = f.cache().unwrap();
         let asked = || -> usize { want.iter().map(|(i, _)| cache.reads(&i.to_string(), bagholder_sources::contract::DataKind::DailyClose).unwrap().len()).sum() };
         let before = asked();

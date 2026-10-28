@@ -1,5 +1,7 @@
-//! The kinds of account Wealthsimple's `unifiedAccountType` names.
+//! The kinds of account Wealthsimple's `unifiedAccountType` names, and the reads
+//! Wealthsimple issues for each.
 
+use bagholder_broker::Reads;
 use bagholder_core::account::{AccountKind, AccountType, Registration};
 
 /// What Wealthsimple's `unifiedAccountType` words say an account is, in
@@ -35,5 +37,43 @@ pub fn account_type(words: &str) -> AccountType {
         "CREDIT_CARD" => known(CreditCard, Unregistered, false, false),
         "PORTFOLIO_LINE_OF_CREDIT" => known(LineOfCredit, Unregistered, false, false),
         _ => AccountType::Unrecognised(if words.is_empty() { "no type given".into() } else { words }),
+    }
+}
+
+/// The reads Wealthsimple issues for each kind of account, as a person's book had
+/// them answered (brief 79, amended 2026-10-28): a margin account its cash, its
+/// holdings, its history, what it can borrow and the rates it pays; an account of
+/// securities, coins or event contracts the same without borrowing; a spending
+/// account its cash and history (the positions read states nothing held in one);
+/// a card or a line of credit its balance (the card read) and history. A kind
+/// Bagholder does not know gets the accounts read and its activity alone.
+pub fn reads(t: &AccountType) -> Reads {
+    use AccountKind::*;
+    let AccountType::Known { kind, .. } = t else { return Reads::default() };
+    let securities = Reads { cash: true, positions: true, history: true, margin: false };
+    match kind {
+        Margin => Reads { margin: true, ..securities },
+        Cash | Crypto | EventContracts => securities,
+        Spending | CreditCard | LineOfCredit => Reads { positions: false, ..securities },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The table, kind by kind, as the owner's book had each read answered.
+    #[test]
+    fn each_kind_gets_the_reads_wealthsimple_issues_for_it() {
+        let r = |w: &str| reads(&account_type(w));
+        let all = |cash, positions, history, margin| Reads { cash, positions, history, margin };
+        assert_eq!(r("SELF_DIRECTED_NON_REGISTERED_MARGIN"), all(true, true, true, true));
+        for w in ["SELF_DIRECTED_TFSA", "SELF_DIRECTED_RRSP", "SELF_DIRECTED_NON_REGISTERED", "SELF_DIRECTED_LIRA", "MANAGED_TFSA", "SELF_DIRECTED_CRYPTO", "SELF_DIRECTED_NON_REGISTERED_PREDICTIONS"] {
+            assert_eq!(r(w), all(true, true, true, false), "{w}");
+        }
+        for w in ["CASH", "CASH_USD", "CREDIT_CARD", "PORTFOLIO_LINE_OF_CREDIT"] {
+            assert_eq!(r(w), all(true, false, true, false), "{w}: no holdings read");
+        }
+        assert_eq!(r("A_KIND_NOT_KNOWN"), Reads::default(), "the accounts read and the activity alone");
     }
 }

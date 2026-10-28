@@ -569,7 +569,7 @@ fn moved_trades_links(cx: &Cx, moved: &Moved) -> BTreeSet<String> {
         Entity::Trade(TradeKey::Trip(k)) => Some(k.clone()),
         _ => None,
     }).collect();
-    cx.engine.figures().positions.iter().filter(|p| trips.contains(&p.key)).map(build::position_id).collect()
+    cx.engine.figures().positions.iter().filter(|p| p.key.as_ref().is_some_and(|k| trips.contains(k))).map(build::position_id).collect()
 }
 
 // --- sorting as the page sorts ----------------------------------------------------

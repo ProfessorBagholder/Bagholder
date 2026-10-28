@@ -467,10 +467,7 @@ impl Movements {
 /// where there is exactly one: for a fill, the same account, day, instrument,
 /// side and quantity, and the price the file states (to the places it states
 /// it); for cash moved, the same account, currency and exact signed amount, on
-/// the same day. The broker's activity feed comes first, then a row booked from
-/// its statement (`docs/plans/statement-gaps.md`): a row of the feed takes the
-/// file row's place where one fits, else a statement row. A broker row that has
-/// taken a file row's place takes no other's. Only the movements a change touched
+/// the same day. A broker row that has taken a file row's place takes no other's. Only the movements a change touched
 /// since the last pass are looked at (`Movements`), each whole.
 pub fn link(f: &Figures, now: bagholder_core::jiff::Timestamp) -> Result<Linking, String> {
     let keys = f.links_pending();
@@ -523,13 +520,12 @@ fn link_keys(f: &Figures, now: bagholder_core::jiff::Timestamp, keys: &BTreeSet<
 }
 
 /// What a pass does with its candidates: each file row, in order, gives way to
-/// the one free broker record of the first tier that has any, a broker record
-/// taking one file row only; a row with more than one is ambiguous.
+/// the one free broker record among them, a broker record taking one file row
+/// only; a row with more than one is ambiguous.
 fn plan(found: Candidates, mut used: BTreeSet<RecordId>) -> Linking {
     let mut out = Linking::default();
-    for (row, tiers) in found {
-        // the first tier with a free candidate: the feed's, then the statement's
-        let free: Vec<RecordId> = tiers.into_iter().map(|t| t.into_iter().filter(|b| !used.contains(b)).collect::<Vec<_>>()).find(|t| !t.is_empty()).unwrap_or_default();
+    for (row, records) in found {
+        let free: Vec<RecordId> = records.into_iter().filter(|b| !used.contains(b)).collect();
         match free.as_slice() {
             [] => {}
             [one] => {
@@ -546,17 +542,15 @@ fn plan(found: Candidates, mut used: BTreeSet<RecordId>) -> Linking {
 
 /// Under each movement `keys` names: each live file row, in the order the
 /// whole pass took them (fills, then other movements, then cash moved, each in
-/// the ledger's order), and the broker records holding the same movement, the
-/// feed's before the statement's.
-type Candidates = Vec<(RecordId, Vec<Vec<RecordId>>)>;
+/// the ledger's order), and the broker records holding the same movement.
+type Candidates = Vec<(RecordId, Vec<RecordId>)>;
 
 fn candidates(e: &Engine, m: &Movements, keys: &BTreeSet<Movement>, taken: &dyn Fn(RecordId) -> Result<bool, String>) -> Result<Candidates, String> {
     let ledger = &e.inputs().ledger;
     let file = csv::source();
     let person = SourceName::person();
-    let statement = bagholder_wealthsimple::statement::source();
     let price = |t: &Transaction| bagholder_engine::ledger::fill_price(t, t.instrument.and_then(|i| ledger.instruments.get(&i))).ok();
-    let mut out: Vec<((u8, Option<&bagholder_engine::input::Place>), RecordId, Vec<Vec<RecordId>>)> = Vec::new();
+    let mut out: Vec<((u8, Option<&bagholder_engine::input::Place>), RecordId, Vec<RecordId>)> = Vec::new();
     let mut taken_seen: BTreeMap<RecordId, bool> = BTreeMap::new();
     for k in keys {
         let rows: Vec<&Transaction> = m.rows(k).filter_map(|id| ledger.transactions.get(id)).collect();
@@ -574,8 +568,8 @@ fn candidates(e: &Engine, m: &Movements, keys: &BTreeSet<Movement>, taken: &dyn 
                 broker.push(b);
             }
         }
-        let tier = |ok: &dyn Fn(&&Transaction) -> bool, from_statement: bool| -> Vec<RecordId> {
-            let mut r: Vec<RecordId> = broker.iter().filter(|b| ok(b) && (b.mapping.source == statement) == from_statement).map(|b| b.id.record).collect();
+        let holding = |ok: &dyn Fn(&&Transaction) -> bool| -> Vec<RecordId> {
+            let mut r: Vec<RecordId> = broker.iter().filter(|b| ok(b)).map(|b| b.id.record).collect();
             r.sort();
             r.dedup();
             r
@@ -590,21 +584,21 @@ fn candidates(e: &Engine, m: &Movements, keys: &BTreeSet<Movement>, taken: &dyn 
                     records.sort();
                     records.dedup();
                     if !records.is_empty() {
-                        out.push(((0, place), c.id.record, vec![records]));
+                        out.push(((0, place), c.id.record, records));
                     }
                 }
                 Movement::OnInstrument(..) => {
                     let same = |b: &&Transaction| b.trade_date == c.trade_date || Some(b.trade_date) == c.settle_date || b.settle_date == Some(c.trade_date);
-                    let tiers = vec![tier(&same, false), tier(&same, true)];
-                    if tiers.iter().any(|t| !t.is_empty()) {
-                        out.push(((1, place), c.id.record, tiers));
+                    let records = holding(&same);
+                    if !records.is_empty() {
+                        out.push(((1, place), c.id.record, records));
                     }
                 }
                 Movement::Cash(..) => {
                     let same = |b: &&Transaction| b.trade_date == c.trade_date || Some(b.trade_date) == c.settle_date;
-                    let tiers = vec![tier(&same, false), tier(&same, true)];
-                    if tiers.iter().any(|t| !t.is_empty()) {
-                        out.push(((2, place), c.id.record, tiers));
+                    let records = holding(&same);
+                    if !records.is_empty() {
+                        out.push(((2, place), c.id.record, records));
                     }
                 }
             }
@@ -630,8 +624,8 @@ pub(crate) fn whole_plan(f: &Figures) -> Linking {
 
 #[cfg(test)]
 /// Each file row that is a fill or moved cash, and the broker records holding
-/// the same movement, the feed's before the statement's.
-fn whole_candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTreeSet<RecordId>, taken: &BTreeSet<RecordId>) -> Vec<(RecordId, Vec<Vec<RecordId>>)> {
+/// the same movement.
+fn whole_candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTreeSet<RecordId>, taken: &BTreeSet<RecordId>) -> Candidates {
     let ledger = &e.inputs().ledger;
     let fill = |t: &Transaction| matches!(t.kind, Kind::Buy | Kind::Sell) && t.instrument.is_some() && t.quantity.is_some_and(|q| !q.is_zero());
     let price = |t: &Transaction| bagholder_engine::ledger::fill_price(t, t.instrument.and_then(|i| ledger.instruments.get(&i))).ok();
@@ -650,14 +644,13 @@ fn whole_candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTre
         records.sort();
         records.dedup();
         if !records.is_empty() {
-            out.push((c.id.record, vec![records]));
+            out.push((c.id.record, records));
         }
     }
-    let statement = bagholder_wealthsimple::statement::source();
     // every other movement on an instrument (a dividend, a distribution, an
     // interest payment on a holding, units in or out): the same account, kind,
-    // instrument, units and cash, on its trade or settle day, the feed's before
-    // the statement's (`docs/plans/stage-money.md`, part F: by movement identity)
+    // instrument, units and cash, on its trade or settle day
+    // (`docs/plans/stage-money.md`, part F: by movement identity)
     let movement = |t: &Transaction| t.instrument.is_some() && !fill(t) && t.kind != Kind::Unclassified && (t.cash.is_some_and(|c| !c.amount.is_zero()) || t.quantity.is_some_and(|q| !q.is_zero()));
     for c in ledger.transactions.iter().filter(|t| csv_rows.contains(&t.id.record) && movement(t)) {
         let same = |b: &&Transaction| {
@@ -671,30 +664,22 @@ fn whole_candidates(e: &Engine, csv_rows: &BTreeSet<RecordId>, not_broker: &BTre
                 && b.cash == c.cash
                 && (b.trade_date == c.trade_date || Some(b.trade_date) == c.settle_date || b.settle_date == Some(c.trade_date))
         };
-        let tier = |from_statement: bool| {
-            let mut r: Vec<RecordId> = ledger.transactions.iter().filter(same).filter(|b| (b.mapping.source == statement) == from_statement).map(|b| b.id.record).collect();
-            r.sort();
-            r.dedup();
-            r
-        };
-        let tiers = vec![tier(false), tier(true)];
-        if tiers.iter().any(|t| !t.is_empty()) {
-            out.push((c.id.record, tiers));
+        let mut records: Vec<RecordId> = ledger.transactions.iter().filter(same).map(|b| b.id.record).collect();
+        records.sort();
+        records.dedup();
+        if !records.is_empty() {
+            out.push((c.id.record, records));
         }
     }
     // cash moved with no instrument: a deposit, a withdrawal, a transfer, a tax
     let moved = |t: &Transaction| t.instrument.is_none() && t.cash.is_some_and(|c| !c.amount.is_zero());
     for c in ledger.transactions.iter().filter(|t| csv_rows.contains(&t.id.record) && moved(t)) {
         let same = |b: &&Transaction| !not_broker.contains(&b.id.record) && !taken.contains(&b.id.record) && moved(b) && b.account == c.account && b.cash == c.cash && (b.trade_date == c.trade_date || Some(b.trade_date) == c.settle_date);
-        let tier = |from_statement: bool| {
-            let mut r: Vec<RecordId> = ledger.transactions.iter().filter(same).filter(|b| (b.mapping.source == statement) == from_statement).map(|b| b.id.record).collect();
-            r.sort();
-            r.dedup();
-            r
-        };
-        let tiers = vec![tier(false), tier(true)];
-        if tiers.iter().any(|t| !t.is_empty()) {
-            out.push((c.id.record, tiers));
+        let mut records: Vec<RecordId> = ledger.transactions.iter().filter(same).map(|b| b.id.record).collect();
+        records.sort();
+        records.dedup();
+        if !records.is_empty() {
+            out.push((c.id.record, records));
         }
     }
     out
@@ -1041,64 +1026,14 @@ mod tests {
         assert_eq!(units_held(&f, fill.account, &fill.symbol), before);
     }
 
-    /// A movement of cash alone the broker reported: a deposit, fed. Its account,
-    /// record, day and cash.
-    fn feed_cash(f: &Figures) -> (AccountId, RecordId, bagholder_core::jiff::civil::Date, bagholder_core::Money) {
-        let book = f.book().unwrap();
-        let record = fed_deposit(f, "deposit-1", "2025-11-04", "250");
-        let account = book.account_by_ref(&bagholder_core::account::AccountRef::new(bagholder_core::Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap().unwrap();
-        (account, record, "2025-11-04".parse().unwrap(), bagholder_core::Money::new(Dec::parse("250").unwrap(), bagholder_core::Currency::CAD))
-    }
-
-    /// A row booked from the broker's statement for this movement, `n` among the month's.
-    fn statement_row(f: &Figures, day: bagholder_core::jiff::civil::Date, cash: bagholder_core::Money, n: usize) -> RecordId {
-        let book = f.book().unwrap();
-        let conn = book.connections().unwrap()[0].id;
-        let row = bagholder_broker::StatementRow { day, executed: None, code: "CONT".into(), description: "Contribution".into(), currency: cash.currency, cash: cash.amount, balance: cash.amount };
-        let month = day.first_of_month();
-        let key = bagholder_wealthsimple::statement::key("anon-tfsa-1", month, n);
-        let payload = bagholder_wealthsimple::statement::payload("anon-tfsa-1", month, n, &row).canonical();
-        let r = book.store(&bagholder_wealthsimple::statement::StatementMapping, &bagholder_book::records::Incoming { connection: Some(conn), source_key: &key, payload: &payload, refs: vec![] }, now()).unwrap().record;
-        f.record_changed(now()).unwrap();
-        r
-    }
-
     fn cash_file(day: bagholder_core::jiff::civil::Date, cash: bagholder_core::Money) -> String {
         let action = if cash.amount.is_negative() { "withdrawal" } else { "deposit" };
         format!("Date,Action,Symbol,Quantity,Price,Amount,Currency\n{day},{action},,,,{},{}\n", cash.amount.to_text(), cash.currency)
     }
 
-    #[test]
-    fn a_file_s_cash_row_gives_way_to_the_feed_s_row_before_a_statement_s() {
-        let (_h, f) = figures();
-        let (account, feed, day, cash) = feed_cash(&f);
-        let from_statement = statement_row(&f, day, cash, 0);
-        let r = import(&f, "statement.csv", &cash_file(day, cash), Some(account), now()).unwrap();
-        assert_eq!((r.added, r.linked), (1, 1), "{r:?}");
-        let file_row = f.book().unwrap().superseding(&csv::source()).unwrap();
-        assert_eq!(file_row, vec![feed], "the feed's row took its place, not the statement's ({from_statement})");
-    }
-
-    #[test]
-    fn a_file_s_cash_row_only_a_statement_row_holds_gives_way_to_it_and_two_hold_it_links_nothing() {
-        let (_h, f) = figures();
-        let (account, _, day, _) = feed_cash(&f);
-        let cash = bagholder_core::Money::new(Dec::parse("12.34").unwrap(), bagholder_core::Currency::CAD);
-        let from_statement = statement_row(&f, day, cash, 0);
-        let r = import(&f, "a.csv", &cash_file(day, cash), Some(account), now()).unwrap();
-        assert_eq!(r.linked, 1, "{r:?}");
-        assert_eq!(f.book().unwrap().superseding(&csv::source()).unwrap(), vec![from_statement]);
-        // two statement rows it could be: it gives way to neither and says so
-        let other = bagholder_core::Money::new(Dec::parse("56.78").unwrap(), bagholder_core::Currency::CAD);
-        statement_row(&f, day, other, 1);
-        statement_row(&f, day, other, 2);
-        let r = import(&f, "b.csv", &cash_file(day, other), Some(account), now()).unwrap();
-        assert_eq!((r.linked, r.ambiguous.len()), (0, 1), "{r:?}");
-    }
-
     /// Linking by the movements a change touched links and finds ambiguous what
     /// today's whole pass does (`link` asserts it on every call in a test build),
-    /// over random files, broker rows, statement rows and removals of cash moved
+    /// over random files, broker rows and removals of cash moved
     /// on two days in two amounts: an ambiguity a later file or a removal
     /// resolves, two identical broker rows, a file row arriving before its
     /// broker row and after (brief 26, 5 and 7).
@@ -1119,17 +1054,13 @@ mod tests {
             for step in 0..30 {
                 let day = days[next(3) as usize];
                 let cash = bagholder_core::Money::new(Dec::parse(amounts[next(2) as usize]).unwrap(), bagholder_core::Currency::CAD);
-                match next(4) {
+                match next(3) {
                     0 => {
                         // the broker's row, fed
                         broker.push(fed_deposit(&f, &format!("deposit-{seed}-{step}"), day, &cash.amount.to_text()));
                         link(&f, now()).unwrap();
                     }
                     1 => {
-                        statement_row(&f, day.parse().unwrap(), cash, step);
-                        link(&f, now()).unwrap();
-                    }
-                    2 => {
                         import(&f, &format!("file-{step}.csv"), &cash_file(day.parse().unwrap(), cash), Some(account), now()).unwrap();
                     }
                     _ => {

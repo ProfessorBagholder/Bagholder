@@ -111,10 +111,10 @@ fn a_removed_superseding_record_brings_nothing_back() {
     assert_eq!((problems[0].0, problems[0].1.code.as_str()), (b.record, "superseding-record-removed"));
 }
 
-/// A replacement taken back (2.10.9's statement fills, `docs/decisions.md`
-/// 2026-10-26): the record it replaced is live again with its own transactions,
-/// the trade and its note go back to it, the link is gone, and the replacement is
-/// removed, noted taken back, its revisions kept.
+/// A replacement taken back (a statement fill an earlier version booked, withdrawn
+/// by the pull, brief 79 §3.7): the record it replaced is live again with its own
+/// transactions, the trade and its note go back to it, the link is gone, and the
+/// replacement is removed, its revision kept.
 #[test]
 fn a_replacement_taken_back_gives_the_record_it_replaced_its_trade_and_note_back() {
     let f = Fixture::new();
@@ -131,7 +131,6 @@ fn a_replacement_taken_back_gives_the_record_it_replaced_its_trade_and_note_back
     // only the source the replaced record is of brings it back
     assert!(f.book.withdraw(row.record, &statement, t0()).is_err());
     f.book.withdraw(row.record, &feed, t0()).unwrap();
-    f.book.note_taken_back(row.record, "2.10.9", t0()).unwrap();
 
     assert_eq!(f.book.record(fill.record).unwrap().state, RecordState::Live);
     assert_eq!(f.book.record(row.record).unwrap().state, RecordState::Removed);
@@ -139,11 +138,8 @@ fn a_replacement_taken_back_gives_the_record_it_replaced_its_trade_and_note_back
     assert_eq!(f.book.journal(JournalSubject::Trade(trade)).unwrap().unwrap().thesis, "breakout");
     assert!(f.book.superseded_by(fill.record).unwrap().is_empty());
     assert!(f.book.replaced(row.record).unwrap().is_empty());
-    assert!(f.book.first_superseded_for("the broker's statement states the fill otherwise").unwrap().is_none());
     assert!(f.book.problems().unwrap().is_empty(), "nothing is said of it");
-    let revisions = f.book.revisions(row.record).unwrap();
-    assert_eq!(revisions.len(), 2, "what the statement said is kept");
-    assert!(revisions[1].2.contains("\"takenBack\":\"2.10.9\""), "{}", revisions[1].2);
+    assert_eq!(f.book.revisions(row.record).unwrap().len(), 1, "what the statement said is kept");
     // the feed's units and cash, once
     let held = positions(&f.book.transactions().unwrap()).unwrap();
     assert_eq!(held.values().copied().collect::<Vec<_>>(), vec![d("100")]);

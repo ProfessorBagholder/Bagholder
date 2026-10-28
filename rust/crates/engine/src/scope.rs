@@ -280,17 +280,19 @@ fn holding_instrument_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> 
 /// direction; the journal it shares with its trade; its result by the sign of
 /// its unrealized P&L; Price by its average cost, Hold by its days held, P&L by
 /// its unrealized P&L, Qty by its units; and the dates when it was held at some
-/// time in them, so a range ending today narrows nothing.
-pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig) -> bool {
+/// time in them, so a range ending today narrows nothing. `held_on` is the day it
+/// is held as of: today, or a past day's close, held then whenever the journal
+/// opened it (a past day's holding is the positions read of that day's).
+pub fn position_matches(f: &Filters, inputs: &Inputs, p: &PositionFig, held_on: Date) -> bool {
     let today = inputs.clock.today;
     holding_instrument_matches(f, inputs, p)
         && journal_matches(f, &p.journal, p.direction)
         && (f.outcomes.is_empty() || p.unrealized.as_ref().ok().and_then(sign_of).is_some_and(|o| f.outcomes.contains(&o)))
         && bound_keeps(f.price, p.avg.as_ref().ok().copied())
-        && bound_keeps(f.hold, p.held_days.as_ref().ok().map(|d| Dec::from_int(*d)))
+        && bound_keeps(f.hold, p.held_days.as_ref().and_then(|d| d.as_ref().ok()).map(|d| Dec::from_int(*d)))
         && bound_keeps(f.pnl, p.unrealized.as_ref().ok().map(|m| m.amount))
         && bound_keeps(f.qty, p.qty.as_ref().ok().copied())
-        && f.overlaps(today, p.opened_on, today)
+        && f.overlaps(today, p.opened_on.unwrap_or(held_on), held_on)
 }
 
 /// A sum of the stated members, and how many were left out. The sum is the
@@ -771,7 +773,7 @@ pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTr
 
 /// The holdings' part of a filter set.
 pub fn portfolio_in_scope(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days: PastDays) -> Portfolio {
-    portfolio(f, inputs, positions, past_days)
+    portfolio(f, inputs, positions, inputs.clock.today, past_days)
 }
 
 /// The cashflow's part of a filter set, over the holdings' part.
@@ -794,7 +796,7 @@ pub fn scope(
     past_days: PastDays,
 ) -> Scoped {
     let d = dashboard(f, inputs, trades, equity, benchmarks);
-    let portfolio = portfolio(f, inputs, positions, past_days);
+    let portfolio = portfolio(f, inputs, positions, inputs.clock.today, past_days);
     let cashflow = cashflow(f, inputs, trades, positions, cash_rows, rates, &portfolio);
     Scoped {
         trades: trades_in_scope(f, inputs, trades),
@@ -899,6 +901,8 @@ impl Held {
 /// last day counted where it stops (a closed account).
 struct Stated<'a> {
     first: Option<Date>,
+    /// The last day stated: a day after it comes to that day's statement.
+    last: Date,
     days: std::iter::Peekable<std::collections::btree_map::Iter<'a, Date, Money>>,
     held: Option<Fig<Money>>,
     until: Option<Date>,
@@ -917,9 +921,12 @@ impl Stated<'_> {
     }
 }
 
-/// Each account's cash per currency at each day's close, worked back from the
-/// cash its broker states now through the transactions after the day: what the
-/// broker states now less everything that moved since. A balance the book does
+/// A card's or a line of credit's balance per currency at each day's close,
+/// worked back from what its broker states now through its transactions after
+/// the day: what the broker states now less everything that moved since. The one
+/// past figure still worked back, for cards alone: no read of Wealthsimple's
+/// states a card's past balance (brief 79 §2.4; the Architect, 2026-10-27).
+/// Every other account's past cash is its positions read as of the day. A balance the book does
 /// not reach back to (an account opened, or a card carried, before the first
 /// transaction read) is held from the first day on, so every day is what the
 /// account's statements say. An account whose broker states no cash now is
@@ -994,6 +1001,20 @@ fn owed_of(kind: Option<AccountKind>, cash: Dec) -> Dec {
     }
 }
 
+/// Whether an account's cash on a past day is read from the positions read of
+/// that day (brief 79 §2.4): a margin account's, for what it borrowed, and one
+/// whose value is never stated, for what it holds, of the kinds the positions
+/// read is issued for (`wealthsimple::account_types::reads`). A card's balance is
+/// worked back instead; any other account's past day is its stated value alone,
+/// and it owes nothing then.
+pub fn cash_read_by_day(kind: Option<AccountKind>, unvalued: bool) -> bool {
+    match kind {
+        Some(AccountKind::Margin) => true,
+        Some(AccountKind::Cash | AccountKind::Crypto | AccountKind::EventContracts) => unvalued,
+        _ => false,
+    }
+}
+
 fn kind_of(a: &crate::input::AccountInfo) -> Option<AccountKind> {
     match &a.account.account_type {
         AccountType::Known { kind, .. } => Some(*kind),
@@ -1006,10 +1027,10 @@ fn kind_of(a: &crate::input::AccountInfo) -> Option<AccountKind> {
 /// broker's accounts counts its latest stated value on or before the day, at the
 /// rate of the day it was stated for, from its first stated day, and a closed
 /// account until its last; an open account whose value is never stated counts
-/// its cash. What each owes at the day's close (`owed_of`, from `CashByDay`, at
-/// the day's rate) is a debt, and added back to what the account holds: the same
-/// parts, by the same rule, as today's point (`portfolio`), so a day on which
-/// nothing moves ends where the next begins. Under every account, each thing held
+/// its cash. What each owes at the day's close (`owed_of`, at the day's rate) is a
+/// debt, and added back to what the account holds: a card's or a line of
+/// credit's balance worked back (`CashByDay`), and a margin account's cash as the
+/// positions read of that day states it (`cash_read_by_day`). Under every account, each thing held
 /// or owed outside counts its latest statement on or before the day
 /// (`Debts::history`, and its balance now from the day it was stated). Today is
 /// `now`: the figures the tiles show. A day with a part that cannot be stated (a
@@ -1044,10 +1065,13 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
         .values()
         .filter(|a| whole || in_scope.contains(&a.account.id))
         .filter_map(|a| {
-            let v = &inputs.market.brokers.get(&a.account.id)?.net_value;
+            let b = inputs.market.brokers.get(&a.account.id)?;
+            let v = &b.net_value;
             let values = match v.keys().next_back() {
-                Some(last) => Some(Stated { first: v.keys().next().copied(), days: v.iter().peekable(), held: None, until: (a.account.status != AccountStatus::Open).then_some(*last) }),
-                None if a.account.status == AccountStatus::Open => None,
+                Some(last) => Some(Stated { first: v.keys().next().copied(), last: *last, days: v.iter().peekable(), held: None, until: (a.account.status != AccountStatus::Open).then_some(*last) }),
+                // one whose value is never stated counts while it is open, where its
+                // broker states its cash
+                None if a.account.status == AccountStatus::Open && b.as_of.is_some() => None,
                 None => return None,
             };
             Some(Account { id: a.account.id, kind: kind_of(a), values })
@@ -1072,40 +1096,70 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
     let first = accounts.iter().filter_map(|a| a.values.as_ref()?.first).chain(held_out.iter().chain(&owed_out).filter_map(Held::first)).min();
     let mut out = Vec::new();
     if let Some(first) = first.filter(|d| *d < today) {
-        let ids: Vec<AccountId> = accounts.iter().map(|a| a.id).collect();
-        let mut cash = CashByDay::new(inputs, &ids);
+        // a card's or a line of credit's balance by day, worked back from what its
+        // statement states now through its own rows: the one past figure still
+        // worked back, as no read of Wealthsimple's states a card's past balance
+        // (the Architect's call, 2026-10-27; brief 79 §2.4)
+        let is_card = |k: Option<AccountKind>| matches!(k, Some(AccountKind::CreditCard | AccountKind::LineOfCredit));
+        let cards: Vec<AccountId> = accounts.iter().filter(|a| is_card(a.kind)).map(|a| a.id).collect();
+        let mut card_cash = CashByDay::new(inputs, &cards);
         // each account's debt and, never stated, what it holds, by its place in `accounts`
         let zero = || -> Fig<Money> { Ok(Money::zero(Currency::CAD)) };
         let mut parts: Vec<(Fig<Money>, Fig<Money>)> = accounts.iter().map(|_| (zero(), zero())).collect();
+        // what a balance at a day's close leaves owed, and holds where no value is stated
+        let balance = |kind: Option<AccountKind>, unvalued: bool, c: Currency, v: &Fig<Dec>, day: Date, (debt, held): &mut (Fig<Money>, Fig<Money>)| {
+            let in_cad = |d: Dec| crate::fx::to_cad(rates, clock, Money::new(d, c), day);
+            match v {
+                Ok(v) => {
+                    let o = owed_of(kind, *v);
+                    if !o.is_zero() {
+                        add_fig(debt, &in_cad(o));
+                    }
+                    if unvalued && !v.is_zero() {
+                        add_fig(held, &in_cad(*v));
+                    }
+                }
+                Err(g) => {
+                    add_fig(debt, &Err(g.clone()));
+                    add_fig(held, &Err(g.clone()));
+                }
+            }
+        };
         let mut day = first;
         while day < today {
             for p in parts.iter_mut() {
                 *p = (zero(), zero());
             }
-            // each balance of the day's close to its account: the balances are in
-            // the order of their accounts' ids, as `accounts` is
+            // each card's balance of the day's close to its account: the balances are
+            // in the order of their accounts' ids, as `accounts` is
             let mut at = 0;
-            for ((id, c), v) in cash.close(day) {
+            for ((id, c), v) in card_cash.close(day) {
                 while at < accounts.len() && accounts[at].id < *id {
                     at += 1;
                 }
                 let Some(a) = accounts.get(at).filter(|a| a.id == *id) else { continue };
-                let (debt, held) = &mut parts[at];
-                let in_cad = |d: Dec| crate::fx::to_cad(rates, clock, Money::new(d, *c), day);
-                match v {
-                    Ok(v) => {
-                        let o = owed_of(a.kind, *v);
-                        if !o.is_zero() {
-                            add_fig(debt, &in_cad(o));
-                        }
-                        if a.values.is_none() && !v.is_zero() {
-                            add_fig(held, &in_cad(*v));
+                balance(a.kind, a.values.is_none(), *c, v, day, &mut parts[at]);
+            }
+            // a margin account's cash, and that of one whose value is never stated, as
+            // the positions read as of that day states it, from its first stated value
+            // to its last where it closed: what it borrowed, and what it holds where no
+            // value of it is stated (`cash_read_by_day`); a day after its last stated
+            // value, that value's day's, as the value is; a day one of them is not
+            // read yet waits on that read, said once for the day
+            let mut unread = false;
+            for (at, a) in accounts.iter().enumerate() {
+                let outside_its_days = a.values.as_ref().is_some_and(|s| s.first.is_some_and(|f| day < f) || s.until.is_some_and(|u| day > u));
+                if is_card(a.kind) || outside_its_days || !cash_read_by_day(a.kind, a.values.is_none()) {
+                    continue;
+                }
+                let read = a.values.as_ref().map_or(day, |s| day.min(s.last));
+                match inputs.market.brokers.get(&a.id).and_then(|b| b.days_held.get(&read)) {
+                    Some(d) => {
+                        for (c, v) in &d.cash {
+                            balance(a.kind, a.values.is_none(), *c, &Ok(*v), read, &mut parts[at]);
                         }
                     }
-                    Err(g) => {
-                        add_fig(debt, &Err(g.clone()));
-                        add_fig(held, &Err(g.clone()));
-                    }
+                    None => unread = true,
                 }
             }
             let (mut assets, mut owed) = (zero(), zero());
@@ -1130,6 +1184,11 @@ pub fn net_worth_past(in_scope: &BTreeSet<AccountId>, inputs: &Inputs) -> Vec<Ne
                 if let Some(v) = h.on(day) {
                     add_fig(&mut owed, v);
                 }
+            }
+            if unread {
+                let waits: Fig<Money> = Err(Gaps::of(Gap::HoldingsUnread(day)));
+                add_fig(&mut assets, &waits);
+                add_fig(&mut owed, &waits);
             }
             out.push(NetWorthDay { day, assets, debts: owed });
             day = match day.tomorrow() {
@@ -1190,10 +1249,10 @@ fn owed(f: &Filters, inputs: &Inputs, accounts: &[&crate::input::AccountInfo]) -
 /// asked only where the scope has net worth by day.
 pub type PastDays<'a> = &'a dyn Fn(&BTreeSet<AccountId>) -> std::sync::Arc<Vec<NetWorthDay>>;
 
-fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days: PastDays) -> Portfolio {
+fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], held_on: Date, past_days: PastDays) -> Portfolio {
     let rates = &inputs.facts.rates;
     let clock = &inputs.clock;
-    let idx: Vec<usize> = positions.iter().enumerate().filter(|(_, p)| position_matches(f, inputs, p)).map(|(i, _)| i).collect();
+    let idx: Vec<usize> = positions.iter().enumerate().filter(|(_, p)| position_matches(f, inputs, p, held_on)).map(|(i, _)| i).collect();
     let signed_market = |p: &PositionFig| -> Fig<Money> { p.market_cad.clone().map(|m| if p.direction == Direction::Short { m.neg() } else { m }) };
     let market: Vec<Fig<Money>> = idx.iter().map(|i| signed_market(&positions[*i])).collect();
     let cost: Vec<Fig<Money>> = idx.iter().map(|i| positions[*i].book_cad.clone().map(|m| m.abs())).collect();
@@ -1400,16 +1459,29 @@ fn portfolio(f: &Filters, inputs: &Inputs, positions: &[PositionFig], past_days:
 /// available to borrow, which the broker states only now.
 pub fn portfolio_as_of(f: &Filters, inputs: &Inputs, past: std::sync::Arc<crate::engine::Past>, past_days: PastDays) -> Portfolio {
     let day = past.day;
-    let mut p = portfolio(f, inputs, &past.positions, past_days);
+    let mut p = portfolio(f, inputs, &past.positions, day, past_days);
     let accounts: Vec<AccountId> = inputs.ledger.accounts.keys().copied().filter(|a| f.accounts.is_empty() || f.accounts.contains(a)).collect();
     // each account's value that day: its last stated on or before it
     // each at the rate of the day it is that account's value for
     let navs: Vec<Fig<Money>> = accounts.iter().filter_map(|a| inputs.market.brokers.get(a)?.net_value.range(..=day).next_back().map(|(d, v)| crate::fx::to_cad(&inputs.facts.rates, &inputs.clock, *v, *d))).collect();
     p.net_value_accounts = navs.len();
     p.net_value = (!navs.is_empty()).then(|| fig_sum(&navs));
-    // the cash that day, worked back from what the broker states now
-    // (`CashByDay`), each currency's positive balance at that day's rate
-    let by = CashByDay::new(inputs, &accounts).close(day).to_vec();
+    // the cash that day as the positions read as of that day states it, each
+    // currency's positive balance at that day's rate (brief 79 §2.4): an account
+    // stated a value by then whose read is not read yet waits on it; a card holds
+    // no cash
+    let mut by: Vec<((AccountId, Currency), Fig<Dec>)> = Vec::new();
+    for a in &accounts {
+        let Some(b) = inputs.market.brokers.get(a) else { continue };
+        if matches!(inputs.ledger.accounts.get(a).map(|i| &i.account.account_type), Some(AccountType::Known { kind: AccountKind::CreditCard | AccountKind::LineOfCredit, .. })) {
+            continue;
+        }
+        match b.days_held.get(&day) {
+            Some(d) => by.extend(d.cash.iter().map(|(c, v)| ((*a, *c), Ok(*v)))),
+            None if b.net_value.range(..=day).next().is_some() => by.push(((*a, Currency::CAD), Err(Gaps::of(Gap::HoldingsUnread(day))))),
+            None => {}
+        }
+    }
     let mut cash = Ok(Money::zero(Currency::CAD));
     let (mut invested, mut chequing) = (Ok(Money::zero(Currency::CAD)), Ok(Money::zero(Currency::CAD)));
     for ((a, c), v) in by {
@@ -1589,10 +1661,11 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
             let annual: Fig<Money> = crate::gap::both(rate.annual_per_unit(), p.qty.clone(), |a, q| Ok(a.times(q)?));
             // a payout in another currency than the holding's is taken at the
             // latest rate, as any live figure is
-            let per_unit_annual = rate.annual_per_unit().and_then(|a| in_currency_live(inputs, a, p.currency));
-            let over = |a: Money, of: Dec, what: &str| money_ratio(a, Money::new(of, p.currency)).ok_or_else(|| Gaps::of(Gap::Arithmetic(format!("{} has no {what} to be a yield of", p.instrument))));
-            let yoc = crate::gap::both(per_unit_annual.clone(), p.avg.clone(), |a, avg| over(a, avg, "cost"));
-            let cy = crate::gap::both(per_unit_annual, p.mark.clone(), |a, m| over(a, m.price, "price"));
+            let per_unit_annual = |c: Currency| rate.annual_per_unit().and_then(|a| in_currency_live(inputs, a, c));
+            let over = |a: Money, of: Money, what: &str| money_ratio(a, of).ok_or_else(|| Gaps::of(Gap::Arithmetic(format!("{} has no {what} to be a yield of", p.instrument))));
+            // the cost in the currency the broker states it in, the price in the listing's
+            let yoc = crate::gap::both(per_unit_annual(p.book_currency), p.avg.clone(), |a, avg| over(a, Money::new(avg, p.book_currency), "cost"));
+            let cy = crate::gap::both(per_unit_annual(p.currency), p.mark.clone(), |a, m| over(a, Money::new(m.price, p.currency), "price"));
             IncomeHolding {
                 position: pi,
                 ytd: paid(&|r| r.day.year() == this_year),

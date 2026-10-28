@@ -1,9 +1,8 @@
 //! The figures every reading of the broker comes to, pinned (brief 77, §3): for
 //! the made-up Wealthsimple with every shape on, at twelve seeds, each account's
 //! cash in each currency, its units of each symbol and the units of each it bought
-//! and sold, and the header's lines about
-//! the broker, as the pull and the engine make them for a person's book. A change
-//! to the pull, a mapping or the statements walk that moves a figure moves it in
+//! and sold, as the pull and the engine make them for a person's book. A change
+//! to the pull or a mapping that moves a figure moves it in
 //! `tests/golden/figures.json` in the same PR, so that file's diff is every
 //! figure it moves. `BAGHOLDER_BLESS=1` writes the file; a missing file fails.
 
@@ -25,23 +24,20 @@ fn every_shape() -> Vec<Shape> {
 /// One seed's book, pulled whole and opened as the app opens it: its figures.
 /// `carried`: the broker read first by the mapping a version back, which read a
 /// conversion's side paid as unstated (`tests_common::PaidUnread`), as a
-/// person's book was read before rule set 16; the opening then derives it again,
-/// and says how many of the statements' bookings it withdrew.
-fn figures_through(seed: u64, carried: bool) -> (Value, usize) {
+/// person's book was read before rule set 16; the opening then derives it again.
+fn figures_through(seed: u64, carried: bool) -> Value {
     let today: bagholder_core::jiff::civil::Date = "2026-10-25".parse().unwrap();
     let now = today.to_zoned(bagholder_core::jiff::tz::TimeZone::UTC).unwrap().timestamp().checked_add(bagholder_core::jiff::SignedDuration::from_hours(20)).unwrap();
     let home = tempfile::tempdir().unwrap();
-    let statements = bagholder_book::mapping::Mapping::source(&bagholder_wealthsimple::statement::StatementMapping);
-    let (_, booked) = {
+    {
         let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
         // the zone the page states, as a person's first visit keeps it
         book.state_zone("America/Toronto", now).unwrap();
         let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
         let size = Size { accounts: 8, instruments: 16, trades: 60, months: 12, seed, deep: 0 };
         let ws = Wealthsimple::new(Generated::shaped(size, today, &every_shape()));
-        let report = if carried { pull(&book, &mut crate::tests_common::ReadBefore(ws), connection, today, now, &mut |_| {}) } else { pull(&book, &mut { ws }, connection, today, now, &mut |_| {}) }.unwrap();
-        (report, book.live_records(&statements).unwrap())
-    };
+        if carried { pull(&book, &mut crate::tests_common::ReadBefore(ws), connection, today, now, &mut |_| {}) } else { pull(&book, &mut { ws }, connection, today, now, &mut |_| {}) }.unwrap();
+    }
     let f = crate::figures::Figures::open(home.path(), now).unwrap();
     let value = f.read(|e| {
         let inputs = e.inputs();
@@ -74,25 +70,18 @@ fn figures_through(seed: u64, carried: bool) -> (Value, usize) {
                 (name, json!({"cash": text(cash), "units": text(units), "bought": text(bought), "sold": text(sold)}))
             })
             .collect();
-        let mut header = crate::status::broker_failures(e);
-        // the lines, not their order, which differs from one opening to the next
-        header.sort();
-        json!({"accounts": accounts, "header": header})
+        json!({"accounts": accounts})
     })
     .unwrap();
-    drop(f);
-    let live = Book::open_in(home.path(), "test", now).unwrap().0.live_records(&statements).unwrap();
-    (value, booked.iter().filter(|r| !live.contains(r)).count())
+    value
 }
 
-/// One seed's figures, and how many of the statements' bookings an opening
-/// withdraws in a book the version before read: that book, once opened, is the
-/// one the version makes.
+/// One seed's figures: a book the version before read, once opened, is the one
+/// the version makes.
 fn figures(seed: u64) -> Value {
-    let (mut direct, _) = figures_through(seed, false);
-    let (carried, withdrawn) = figures_through(seed, true);
+    let direct = figures_through(seed, false);
+    let carried = figures_through(seed, true);
     assert_eq!(carried, direct, "seed {seed}: the book the version before read, once opened, is not the one the version makes");
-    direct["withdrawn at opening, the book read a version before"] = json!(withdrawn);
     direct
 }
 

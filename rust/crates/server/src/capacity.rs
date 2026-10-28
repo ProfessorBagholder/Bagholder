@@ -1407,16 +1407,12 @@ mod tests {
             .map(Result::unwrap)
             .collect();
         assert!(unlinked.iter().all(|t| t == "ASSET_MOVEMENT"), "{unlinked:?}");
-        // every instrument is one the feed names, or a purchase the feed does not
-        // list, which a statement books, named as the broker describes the holding:
-        // the import names none
+        // every instrument is one the feed names: the import names none
         let unnamed: Vec<String> = c
             .prepare(
                 "SELECT i.kind || ' named by ' || coalesce(group_concat(DISTINCT r.source), 'no record') FROM instruments i
                    LEFT JOIN transactions t ON t.instrument_id = i.id LEFT JOIN source_records r ON r.id = t.record_id
                   WHERE NOT EXISTS (SELECT 1 FROM instrument_sightings s JOIN source_records q ON q.id = s.record_id WHERE s.instrument_id = i.id AND q.source = 'wealthsimple')
-                    AND NOT (EXISTS (SELECT 1 FROM transactions x JOIN source_records q ON q.id = x.record_id WHERE x.instrument_id = i.id AND q.source = 'wealthsimple-statement')
-                         AND (EXISTS (SELECT 1 FROM instruments_described d WHERE d.instrument_id = i.id) OR EXISTS (SELECT 1 FROM option_terms o WHERE o.instrument_id = i.id)))
                   GROUP BY i.id",
             )
             .unwrap()
@@ -1466,37 +1462,6 @@ mod tests {
             f.broker_changed(*a).unwrap();
         }
         oracle("a balances read");
-    }
-
-    /// The broker check's moment for a cash stated again unchanged is its last
-    /// (brief 22, 1): the broker states the book's cash plus ten at t1, the activity
-    /// is read in full at t2, the broker states the same again at t3. The cash
-    /// stated after the read confirms the difference: it is said, not pending.
-    #[test]
-    fn test_a_difference_the_broker_states_again_after_the_read_is_confirmed_through_a_folded_period() {
-        let _g = crate::tests_common::guard();
-        let home = tempfile::tempdir().unwrap();
-        build(home.path(), SMALL, 1).unwrap();
-        let f = crate::figures::Figures::open(home.path(), Timestamp::now()).unwrap();
-        let book = f.book().unwrap();
-        let (account, own) = f
-            .read(|e| e.figures().matched.cash.iter().find_map(|(a, c)| c.get(&Currency::CAD).and_then(|v| v.as_ref().ok()).map(|v| (*a, *v))))
-            .flatten()
-            .unwrap();
-        let connection = book.connections().unwrap()[0].id;
-        let stated = std::collections::BTreeMap::from([(Currency::CAD, own.checked_add(Dec::from_int(10)).unwrap())]);
-        let (t1, t2, t3): (Timestamp, Timestamp, Timestamp) = ("2026-10-09T10:00:00Z".parse().unwrap(), "2026-10-09T10:05:00Z".parse().unwrap(), "2026-10-09T10:10:00Z".parse().unwrap());
-        let r1 = book.broker_read(connection, "cash", t1).unwrap();
-        book.store_cash(account, t1, &stated, &r1).unwrap();
-        book.note_activity_read(account, t2, true).unwrap();
-        let r3 = book.broker_read(connection, "cash", t3).unwrap();
-        book.store_cash(account, t3, &stated, &r3).unwrap();
-        f.broker_changed(account).unwrap();
-        let cad = f
-            .read(|e| e.figures().checks.iter().find(|c| c.account == account).and_then(|c| c.differences.iter().find(|d| matches!(d, bagholder_engine::equity::Difference::Cash { currency: Currency::CAD, .. })).cloned()))
-            .flatten()
-            .expect("the difference of ten");
-        assert!(!cad.pending(), "stated again after the read: confirmed, {cad:?}");
     }
 
     /// Every operation is measured on a small book and sixteen times it (at these

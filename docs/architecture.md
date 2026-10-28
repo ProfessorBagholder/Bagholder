@@ -90,7 +90,7 @@ Both are SQLite in WAL mode, every multi-row change in one transaction. Broker c
 
 **Source records are kept as received**, with their source, the source's id, when they arrived and their revisions (a broker replacing its own row keeps the history). A row is marked removed only when its source reports the removal, never because it is missing from an incremental pull, and is counted again when its source states it again: what the source states now is what the book holds, whatever an earlier read made of it.
 
-**Transactions are Bagholder's own**, derived from source records by each source's mapping, deterministically, the mapping's version recorded: buy, sell, dividend, interest, fee, deposit, withdrawal, transfer, corporate event, in one vocabulary for every broker. When a mapping improves, transactions are derived again from the kept records; when that moves a past figure, the app says so ("figures corrected by the Wealthsimple mapping, version 7") rather than changing history silently.
+**Transactions are Bagholder's own**, derived from source records by each source's mapping, deterministically, the mapping's version recorded: buy, sell, dividend, interest, fee, deposit, withdrawal, transfer, corporate event, in one vocabulary for every broker. When a mapping improves, transactions are derived again from the kept records. Transactions make the journal: trades, round trips and their results. Every amount a holding or an account shows is the broker's as it states it (§8, Equity), so a mapping moves the journal and never a holding's units, book value or cash (owner, 2026-10-27; `docs/plans/every-amount-as-wealthsimple-states-it.md`).
 
 **Reconciliation is by execution and is explicit.** When an order fills, each execution is booked at once as a provisional record. When the broker's own rows arrive they are linked to it by the broker's order id or the app's own id (many to many: a partly filled order, several rows for one fill), and the provisional record gives way. Fuzzy matching is only for rows with no ids (a CSV), and a match with more than one candidate is never linked automatically.
 
@@ -118,7 +118,7 @@ Both are SQLite in WAL mode, every multi-row change in one transaction. Broker c
 The engine computes every figure in `SPEC.md`: round trips, positions, cash flows, distributions and their rates, **the equity series and returns**, drawdown, aggregates in CAD, the markets views, and per-month figures (the page does no money arithmetic at all).
 
 - **A pure function of the book and the cache.** No network, clock or disk inside it: today's date, the home zone and the zone rules are inputs. The same inputs always give the same figures.
-- **Equity is each account's value as its broker states it** (owner, 2026-09-24): Wealthsimple's daily net value and net deposits per account, summed across accounts, returns net of the flows. It is kept per account, so an account with no broker statement can be given a computed value later; that is not built. The broker check compares Bagholder's cash and units with the broker's, exactly.
+- **Equity is each account's value as its broker states it** (owner, 2026-09-24): Wealthsimple's daily net value and net deposits per account, summed across accounts, returns net of the flows. It is kept per account, so an account with no broker statement can be given a computed value later; that is not built. **Holdings and cash are the broker's too** (owner, 2026-10-27): each account's units, direction, book value and cash, now and on each past day, are its positions read as of that day (`bagholder_engine::stated`), valued at Bagholder's quote, the only figure of Bagholder's own; a past day is read once and kept. The journal links to a holding where it has a round trip open in it and gives it no amount. A card's or line of credit's balance on a past day is the one past figure worked back from today's and the later transactions. Nothing compares Bagholder's figures with the broker's.
 - **Recomputes only what a change touches** and reports what moved (§13).
 - **Held to `SPEC.md` by cases written from the spec.** Each case gives inputs and the figures the spec requires, worked out from the definitions, never generated from an implementation's output. Their independence comes from the process, since no person reviews them line by line: the expected figures and working of a new case are written by a separate agent given `SPEC.md`, the case format and the inputs, and not the engine's code; the building session implements against them, and a disagreement is settled against `SPEC.md`, a genuine ambiguity going to the owner as one question. There are cases for every definition, including corporate events, unknown rates and values, several currencies, several brokers and adjustments.
 - **One implementation**, in Rust, with a typed entry point (records in, figures and changes out) and no dependency on the server.
@@ -143,7 +143,7 @@ A broker is a source with more to it. Each broker adapter provides:
 
 - **Connection.** Signing in from the person's own device (the page, wherever it is open), keeping the session fresh, knowing when it has lapsed. The server never needs a screen of its own.
 - **The pull.** Accounts, balances, positions as the broker states them, its net value history, activity, turned into source records and reconciled.
-- **Monthly statements**, where the broker issues them (`statement`, `statement_rows`, `statement_mapping`, `statement_record`): an account's statement for a month, kept whole as it came and read once, from which the movements its activity feed leaves out are booked after the month reconciles (`bagholder_broker::statements`, `SPEC.md` §2, Movements the activity feed leaves out). A broker that issues none answers so.
+- **Positions as of a day**: each account's units, book value and cash as the broker states them on a day, asked as of today with the balances, as of yesterday at each pull, and for a past day a page shows, once (`statement_units`, `statement_cash`). Monthly statements are not read: records an earlier build booked from them are withdrawn by the first pull, and their tables are left unread.
 - **Capabilities**, declared: order types per instrument, whether it holds stop orders, whether it modifies in place and what, time-in-force rules, how long it keeps a resting order, **whether it rejects a duplicate client order id**, session rules.
 - **Execution**: place, modify, cancel, read one order back, list open orders; every request and reply recorded.
 
@@ -209,13 +209,13 @@ The person's AI assistants (Claude, or any other that speaks the Model Context P
 
 Every failure has an owner and a place it shows:
 
-- a source failing or changing shape: on the card or chart it feeds, and in the header's status while it persists;
-- a broker session lapsing, a pull or part of a pull failing: the header, naming what failed;
+- a market source failing or changing shape: the log, as it starts and as it ends; the figure keeps its last value where it is shown, and the header says nothing (the owner, 2026-10-28; brief 79 amended);
+- Wealthsimple not read at all (signed out, unreachable, the session refused): one plain sentence in the header ("Wealthsimple couldn't be reached."), and "Synced" stays at the last read; a part of a pull or of the balances read failing (one account's history, the holdings, buying power) is asked again at its own next turn and goes to the log, and "Synced" shows that read's last answer; no step name, account id or reason text reaches the page (`server/src/reading.rs`);
 - an order or bracket problem: the order, the Orders panel, a notification;
 - a figure that is waiting on a fact the app is still finding out (today's rate before the Bank publishes it, a payout frequency, a corporate event's value): the figure says so while the app works on it;
 - the app itself (a book it cannot open, a migration that failed): the page says so instead of loading.
 
-Nothing is logged only to a terminal, and nothing is caught and discarded.
+Nothing is logged only to a terminal, and nothing is caught and discarded. Each read of Wealthsimple is asked only of the kinds of account it issues it for (`wealthsimple/src/account_types.rs` `reads`): no read finds out what an account is by failing.
 
 ## 16. Running it
 

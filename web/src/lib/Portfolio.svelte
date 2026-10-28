@@ -148,10 +148,10 @@
               <tr class="tab" style="cursor:pointer" onclick={() => goSub('portfolio', r.id)}>
                 <td style="font-weight:500;font-variant-numeric:normal;white-space:nowrap;max-width:140px;overflow:hidden;text-overflow:ellipsis">{symText(r.symbol)}{#if r.short}{' '}<span class="muted" style="font-size:10px">SHORT</span>{/if}</td>
                 <td style="text-align:right">{px(r.avg)}</td><td style="text-align:right">{px(r.last)}</td>
-                <td style="text-align:right">{money0(r.cost, r.currency)}</td><td style="text-align:right">{money0(r.mv, r.currency)}</td>
+                <td style="text-align:right">{money0(r.cost, r.bookCurrency)}</td><td style="text-align:right">{money0(r.mv, r.currency)}</td>
                 <td style="text-align:right;white-space:nowrap;color:{r.dayChange == null ? 'var(--ink55)' : color(r.dayChange)}">{r.dayChange == null ? '—' : signedMoney(r.dayChange, r.currency)}</td>
                 <td style="text-align:right;color:{r.percentChange == null ? 'var(--ink55)' : color(r.percentChange)}">{r.percentChange == null ? '—' : pct(r.percentChange, 2)}</td>
-                <td style="text-align:right;padding-right:0;white-space:nowrap;font-weight:500;color:{color(r.unreal)}">{signedMoney(r.unreal, r.currency)} ({pct(r.unrealPct)})</td>
+                <td style="text-align:right;padding-right:0;white-space:nowrap;font-weight:500;color:{color(r.unreal)}">{signedMoney(r.unreal, r.bookCurrency)} ({pct(r.unrealPct)})</td>
               </tr>
             {/each}
           </tbody>

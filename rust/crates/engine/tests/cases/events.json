@@ -304,6 +304,6 @@
       {"id": "t2", "account": "A", "day": "2026-03-02", "at": "2026-03-02T11:00:00Z", "kind": "corporate-event", "instrument": "X"}
     ],
     "adjustments": [{"applies_to": "t2", "legs": [{"from": "X", "to": "X", "units_per_unit": "0.05", "cost": "50"}]}],
-    "expect": {"position_count": 1, "positions": [{"account": "A", "instrument": "X", "direction": "short", "qty": "100", "gaps": ["event-on-short"]}], "unapplied": {"t2": ["event-on-short"]}}
+    "expect": {"position_count": 1, "positions": [{"account": "A", "instrument": "X", "direction": "short", "qty": "100", "gaps": ["book-unstated"]}], "unapplied": {"t2": ["event-on-short"]}}
   }
 ]

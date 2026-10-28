@@ -15,13 +15,13 @@ use std::collections::{BTreeMap, BTreeSet};
 use bagholder_book::records::Incoming;
 use bagholder_book::statements::{AccountDay, UnitsLine};
 use bagholder_book::Book;
-use bagholder_core::account::{AccountKind, AccountRef, AccountStatus, AccountType};
+use bagholder_core::account::{AccountRef, AccountStatus};
 use bagholder_core::instrument::RefScheme;
 use bagholder_core::json;
 use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, ConnectionId, Dec, RecordId};
 
-use crate::{AccountStated, BookMoves, BrokerAdapter, Failure, Moved, MovedWhat, Row, Step};
+use crate::{AccountStated, BookMoves, BrokerAdapter, Failure, Moved, MovedWhat, Reads, Row, Step};
 
 /// What one pull did and what failed.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -45,9 +45,11 @@ pub struct Report {
     pub days_stored: usize,
     /// Days the broker stated again differently: kept beside the first.
     pub days_restated: usize,
-    /// What the monthly statements read and booked, and each month that does
-    /// not reconcile (`statements`).
-    pub statements: crate::statements::Done,
+    /// The records an earlier version booked from the monthly statements that
+    /// this pull withdrew, and those it left because they took the place of
+    /// another source's record (`withdraw_statement_records`).
+    pub statements_withdrawn: usize,
+    pub statements_left: usize,
     /// Each part that failed, and why.
     pub failures: Vec<(String, Failure)>,
     /// The book's accounts this pull read the broker's statements of (cash,
@@ -101,8 +103,7 @@ pub fn pull_restating(book: &Book, adapter: &mut dyn BrokerAdapter, connection: 
 }
 
 /// A pull of what moved since the last: the accounts, each account's activity
-/// from its last full read, the balances, and the statements where the cash
-/// disagrees. Not the holdings or the daily history, which are as of the last
+/// from its last full read, and the balances. Not the holdings or the daily history, which are as of the last
 /// full day and are read by the day's pull: for a movement seen during the day
 /// (the cash moving at the broker), the rows that moved, quickly.
 pub fn pull_activity(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, today: jiff::civil::Date, now: jiff::Timestamp, step: &mut dyn FnMut(Step)) -> Result<Report> {
@@ -360,129 +361,58 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     // the broker's (ids it links as one, `linked`): its statement is theirs added
     // up, every one of them read, as 2.9.0 read them.
     let mut keys_of: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
+    let mut reads_of: BTreeMap<AccountId, Reads> = BTreeMap::new();
     for a in stated.iter().filter(|a| a.open) {
         keys_of.entry(ids[&a.key]).or_default().push(a.key.clone());
+        reads_of.entry(ids[&a.key]).or_insert_with(|| adapter.reads(&a.account_type));
     }
-    let margin: BTreeSet<AccountId> = stated.iter().filter(|a| a.open && is_margin(&a.account_type)).map(|a| ids[&a.key]).collect();
+    let margin: BTreeSet<AccountId> = reads_of.iter().filter(|(_, r)| r.margin).map(|(a, _)| *a).collect();
     store_net_values(book, connection, &stated, &keys_of, now)?;
     step(Step::Balances);
-    store_balances(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
+    store_balances(book, adapter, connection, &issued(&keys_of, &reads_of, |r| r.cash), &margin, now, &mut report.failures)?;
     // each margin account's interest rates, with the day's pull alone: a rate
     // changes seldom, and the five-minute balances do not ask it again
     if daily {
         store_margin_rates(book, adapter, connection, &keys_of, &margin, now, &mut report.failures)?;
     }
-    // the movements the activity feed left out, for an account whose cash now
-    // disagrees with the broker's: read from its monthly statements, every
-    // account's, closed ones too
-    let mut statement_keys: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
-    let mut closed = BTreeSet::new();
-    for a in &stated {
-        statement_keys.entry(ids[&a.key]).or_default().push(a.key.clone());
-        if !a.open {
-            closed.insert(a.key.clone());
-        }
+    // what an earlier version booked from the monthly statements, withdrawn:
+    // the feed's records they took the place of are live again (brief 79 §3.7)
+    (report.statements_withdrawn, report.statements_left) = withdraw_statement_records(book, adapter, now)?;
+    // the holdings now, every account's in one read, as each pull and the
+    // balances read them (brief 79 §2.1)
+    step(Step::Holdings);
+    let held: Vec<(AccountId, Vec<String>)> = issued(&keys_of, &reads_of, |r| r.positions).into_iter().collect();
+    // a pull of the activity alone follows a balances read, which read them
+    if daily {
+        store_holdings(book, adapter, connection, &held, today, now, &mut report.failures)?;
     }
-    report.statements = crate::statements::run(book, adapter, connection, &statement_keys, &closed, today, now, step, &mut report.failures)?;
-    let (taken, given_back) = crate::statements::fills(book, adapter, connection, &statement_keys, now, &mut report.failures)?;
-    report.statements.fills = taken;
-    report.statements.withdrawn += given_back;
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let as_of = today.yesterday().map_err(|e| bagholder_book::BookError::Refused(e.to_string()))?;
-    // units already stated as of that day are not asked again (brief 07 §1),
+    // the day's pull: as each closed yesterday, which a past day reads (§2.4).
+    // Units already stated as of that day are not asked again (brief 07 §1),
     // unless one held goes by no name yet (its description is read with them),
-    // the statement kept predates the broker's stated worth of each, or it states
-    // nothing held: a statement of nothing is no read of the broker's to stand
-    // on, and is asked again (2.10.2 wrote one onto accounts it merged)
-    let mut holdings = Vec::new();
-    for (id, ks) in keys_of.iter().filter(|_| daily) {
-        let current = match book.stated(*id)?.units {
-            Some((d, lines)) if d == as_of && !lines.is_empty() && lines.keys().all(|i| book.stated(*id).map(|s| s.unit_values.contains_key(i)).unwrap_or(false)) => {
+    // or it states nothing held: a statement of nothing is no read of the
+    // broker's to stand on, and is asked again (2.10.2 wrote one onto accounts it
+    // merged)
+    let mut closed_yesterday = Vec::new();
+    for (id, ks) in held.iter().filter(|_| daily) {
+        // the day's own read, not the newest: today's is stored above
+        let current = match book.units_on(*id, as_of)? {
+            Some((lines, _)) if !lines.is_empty() => {
                 let mut named = true;
-                for i in lines.keys() {
-                    named &= book.current_name(*i)?.is_some() || book.option_terms(*i)?.is_some();
+                for l in &lines {
+                    named &= book.current_name(l.instrument)?.is_some() || book.option_terms(l.instrument)?.is_some();
                 }
                 named
             }
             _ => false,
         };
         if !current {
-            holdings.push((id, ks));
+            closed_yesterday.push((*id, ks.clone()));
         }
     }
-    let of = holdings.len();
-    for (n, (id, ks)) in holdings.into_iter().enumerate() {
-        let name = stated.iter().find(|a| ids[&a.key] == *id).map(|a| a.name()).unwrap_or_default();
-        step(Step::Holdings { account: name, n: n + 1, of });
-        let mut sum: BTreeMap<bagholder_core::InstrumentId, Dec> = BTreeMap::new();
-        let mut valued: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
-        let mut costed: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
-        let mut complete = true;
-        for k in ks {
-            match adapter.units(k, as_of) {
-                Ok(units) => {
-                    // a holding no row names (a token migrated, a gift): its
-                    // instrument, and the name it goes by, from the broker's own
-                    // description, read together, so the check shows it beside
-                    // what the book holds and it is priced like any other
-                    let mut unnamed = Vec::new();
-                    for u in &units {
-                        let named = match book.instrument_by_ref(&u.instrument)? {
-                            Some(i) => book.current_name(i)?.is_some() || book.option_terms(i)?.is_some(),
-                            None => false,
-                        };
-                        if !named {
-                            unnamed.push(u.instrument.clone());
-                        }
-                    }
-                    if !unnamed.is_empty() {
-                        for (r, draft) in adapter.instruments(&unnamed, as_of) {
-                            let why = match draft {
-                                Ok(d) => book.instrument_stated(&d, &adapter.mapping().source(), now)?.err().map(|p| Failure::Mismatch(format!("{}: {}", r.value, p.detail))),
-                                Err(f) => Some(f),
-                            };
-                            if let Some(f) = why {
-                                report.failed(format!("units:{k}"), f);
-                            }
-                        }
-                    }
-                    // each line kept on the instrument the broker's id names
-                    // itself, so a succession parted later leaves it there
-                    for u in units {
-                        match book.own_instrument(&u.instrument)? {
-                            Some(i) => {
-                                let e = sum.entry(i).or_insert(Dec::ZERO);
-                                *e = add(*e, u.quantity)?;
-                                // its value, none once one account's states none or another currency
-                                let v = valued.entry(i).or_insert(u.value.map(|v| bagholder_core::Money::zero(v.currency)));
-                                *v = match (*v, u.value) {
-                                    (Some(a), Some(b)) if a.currency == b.currency => Some(bagholder_core::Money::new(add(a.amount, b.amount)?, a.currency)),
-                                    _ => None,
-                                };
-                                // its book value the same way
-                                let c = costed.entry(i).or_insert(u.book_value.map(|v| bagholder_core::Money::zero(v.currency)));
-                                *c = match (*c, u.book_value) {
-                                    (Some(a), Some(b)) if a.currency == b.currency => Some(bagholder_core::Money::new(add(a.amount, b.amount)?, a.currency)),
-                                    _ => None,
-                                };
-                            }
-                            // a statement is kept only whole
-                            None => complete = false,
-                        }
-                    }
-                }
-                Err(f) => {
-                    complete = false;
-                    report.failed(format!("units:{k}"), f);
-                }
-            }
-        }
-        // a statement of units is stored only whole: every account behind it read
-        if complete {
-            let read = book.broker_read(connection, "units", now)?;
-            let lines: Vec<UnitsLine> = sum.into_iter().map(|(instrument, quantity)| UnitsLine { instrument, quantity, book_value: costed.get(&instrument).copied().flatten(), value: valued.get(&instrument).copied().flatten() }).collect();
-            book.store_units(*id, as_of, &lines, &read, now)?;
-        }
+    if !closed_yesterday.is_empty() {
+        store_holdings(book, adapter, connection, &closed_yesterday, as_of, now, &mut report.failures)?;
     }
     // an id the broker now states retired by a corporate action, and the id its
     // listing trades under now, over every row and holding read so far
@@ -498,7 +428,7 @@ fn pull_in(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionI
     let open: BTreeSet<AccountId> = stated.iter().filter(|a| a.open).map(|a| ids[&a.key]).collect();
     let mut last_of: BTreeMap<AccountId, Option<jiff::civil::Date>> = BTreeMap::new();
     let mut dated = Vec::new();
-    for a in stated.iter().filter(|_| daily) {
+    for a in stated.iter().filter(|a| daily && adapter.reads(&a.account_type).history) {
         let id = ids[&a.key];
         let last = match last_of.get(&id) {
             Some(l) => *l,
@@ -746,8 +676,9 @@ fn link_moves(book: &Book, stored: &[RecordId]) -> Result<usize> {
 
 /// Whether an account borrows: only a margin account's buying power is margin
 /// it can draw (a registered account's is its cash).
-fn is_margin(t: &AccountType) -> bool {
-    matches!(t, AccountType::Known { kind: AccountKind::Margin, .. })
+/// The accounts of `keys_of` whose kind the broker issues a read for (`reads`).
+fn issued(keys_of: &BTreeMap<AccountId, Vec<String>>, reads_of: &BTreeMap<AccountId, Reads>, read: impl Fn(&Reads) -> bool) -> BTreeMap<AccountId, Vec<String>> {
+    keys_of.iter().filter(|(a, _)| reads_of.get(a).is_some_and(&read)).map(|(a, k)| (*a, k.clone())).collect()
 }
 
 /// What a read of the balances stored, and what failed.
@@ -760,6 +691,10 @@ pub struct BalancesRead {
     /// when the activity was last read: a movement the book has not read yet (a
     /// distribution paid, interest, a deposit), so the activity is due.
     pub cash_moved: Vec<AccountId>,
+    /// The accounts whose cash, as the holdings read as of today states it,
+    /// differs from what the balances state: whether that read states a fill made
+    /// the same day is not recorded (brief 79 §2.1), so this is said in the log.
+    pub cash_differs: Vec<AccountId>,
 }
 
 /// The balances now, apart from a pull (`docs/plans/stage-3c-switch.md`, §3: every
@@ -777,23 +712,22 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
         Ok(s) => s,
         Err(f) => {
             failures.push(("accounts".into(), f));
-            return Ok(BalancesRead { accounts: vec![], failures, cash_moved: vec![] });
+            return Ok(BalancesRead { accounts: vec![], failures, cash_moved: vec![], cash_differs: vec![] });
         }
     };
     let mut keys_of: BTreeMap<AccountId, Vec<String>> = BTreeMap::new();
-    let mut margin = BTreeSet::new();
+    let mut reads_of: BTreeMap<AccountId, Reads> = BTreeMap::new();
     for a in stated.iter().filter(|a| a.open) {
         let Some(id) = book.account_by_ref(&AccountRef::new(broker.clone(), a.key.clone()))? else { continue };
         if book.account(id)?.connection != connection {
             continue;
         }
-        if is_margin(&a.account_type) {
-            margin.insert(id);
-        }
         keys_of.entry(id).or_default().push(a.key.clone());
+        reads_of.entry(id).or_insert_with(|| adapter.reads(&a.account_type));
     }
+    let margin: BTreeSet<AccountId> = reads_of.iter().filter(|(_, r)| r.margin).map(|(a, _)| *a).collect();
     accounts.extend(store_net_values(book, connection, &stated, &keys_of, now)?);
-    accounts.extend(store_balances(book, adapter, connection, &keys_of, &margin, now, &mut failures)?);
+    accounts.extend(store_balances(book, adapter, connection, &issued(&keys_of, &reads_of, |r| r.cash), &margin, now, &mut failures)?);
     let mut cash_moved = Vec::new();
     for a in &accounts {
         let stated = book.stated_latest(*a)?;
@@ -805,7 +739,21 @@ pub fn balances(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Connec
             }
         }
     }
-    Ok(BalancesRead { accounts: accounts.into_iter().collect(), failures, cash_moved })
+    // the holdings now, every account's in one read (brief 79 §2.1)
+    let held: Vec<(AccountId, Vec<String>)> = issued(&keys_of, &reads_of, |r| r.positions).into_iter().collect();
+    let today = adapter.day(now);
+    let held_cash = store_holdings(book, adapter, connection, &held, today, now, &mut failures)?;
+    let mut cash_differs = Vec::new();
+    for (a, cash) in &held_cash {
+        accounts.insert(*a);
+        if let Some((_, stated)) = book.stated_latest(*a)?.cash {
+            let held = |m: &BTreeMap<bagholder_core::Currency, Dec>| m.iter().filter(|(_, v)| !v.is_zero()).map(|(c, v)| (*c, *v)).collect::<BTreeMap<_, _>>();
+            if held(cash) != held(&stated) {
+                cash_differs.push(*a);
+            }
+        }
+    }
+    Ok(BalancesRead { accounts: accounts.into_iter().collect(), failures, cash_moved, cash_differs })
 }
 
 /// Each margin account's yearly interest rates; a failed read is its own failed part.
@@ -914,6 +862,124 @@ fn store_outside_days(book: &Book, adapter: &mut dyn BrokerAdapter, outside: &[b
     Ok(whole)
 }
 
+/// Each book account's holdings as of `day`, read in one request for every
+/// broker account behind them (`BrokerAdapter::positions`), and stored for each
+/// book account whose every id answered: each instrument's units and book value,
+/// the ids behind one book account added up, and its cash. A day already stored is
+/// stored again only where its units, book value or cash moved: the balances read
+/// them every five minutes. A holding no row names (a token migrated, a gift) is described by the
+/// broker first, so it is named and priced like any other. Each book account's
+/// cash, as the same read states it, beside.
+fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, accounts: &[(AccountId, Vec<String>)], day: jiff::civil::Date, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<BTreeMap<AccountId, BTreeMap<bagholder_core::Currency, Dec>>> {
+    let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
+    let keys: Vec<String> = accounts.iter().flat_map(|(_, k)| k.iter().cloned()).collect();
+    let read = match adapter.positions(&keys, day) {
+        Ok(r) => r,
+        Err(f) => {
+            failures.push(("holdings".into(), f));
+            return Ok(BTreeMap::new());
+        }
+    };
+    // a holding no row names: its instrument and name from the broker's description, read together
+    let mut unnamed = Vec::new();
+    for u in read.values().flat_map(|p| &p.units) {
+        let named = match book.instrument_by_ref(&u.instrument)? {
+            Some(i) => book.current_name(i)?.is_some() || book.option_terms(i)?.is_some(),
+            None => false,
+        };
+        if !named && !unnamed.contains(&u.instrument) {
+            unnamed.push(u.instrument.clone());
+        }
+    }
+    if !unnamed.is_empty() {
+        for (r, draft) in adapter.instruments(&unnamed, day) {
+            let why = match draft {
+                Ok(d) => book.instrument_stated(&d, &adapter.mapping().source(), now)?.err().map(|p| Failure::Mismatch(format!("{}: {}", r.value, p.detail))),
+                Err(f) => Some(f),
+            };
+            if let Some(f) = why {
+                failures.push((format!("units:{}", r.value), f));
+            }
+        }
+    }
+    let mut cash_of = BTreeMap::new();
+    for (id, ks) in accounts {
+        let mut sum: BTreeMap<bagholder_core::InstrumentId, Dec> = BTreeMap::new();
+        let mut valued: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
+        let mut costed: BTreeMap<bagholder_core::InstrumentId, Option<bagholder_core::Money>> = BTreeMap::new();
+        let mut cash: BTreeMap<bagholder_core::Currency, Dec> = BTreeMap::new();
+        let mut complete = true;
+        for k in ks {
+            let Some(p) = read.get(k) else {
+                complete = false;
+                failures.push((format!("units:{k}"), Failure::Mismatch(format!("{k}: its positions were asked for and not stated"))));
+                continue;
+            };
+            for (c, v) in &p.cash {
+                let e = cash.entry(*c).or_insert(Dec::ZERO);
+                *e = add(*e, *v)?;
+            }
+            // each line kept on the instrument the broker's id names itself, so a
+            // succession parted later leaves it there
+            for u in &p.units {
+                match book.own_instrument(&u.instrument)? {
+                    Some(i) => {
+                        let e = sum.entry(i).or_insert(Dec::ZERO);
+                        *e = add(*e, u.quantity)?;
+                        // its value and book value, none once one id's states none or another currency
+                        for (slot, m) in [(valued.entry(i).or_insert(u.value.map(|v| bagholder_core::Money::zero(v.currency))), u.value), (costed.entry(i).or_insert(u.book_value.map(|v| bagholder_core::Money::zero(v.currency))), u.book_value)] {
+                            *slot = match (*slot, m) {
+                                (Some(a), Some(b)) if a.currency == b.currency => Some(bagholder_core::Money::new(add(a.amount, b.amount)?, a.currency)),
+                                _ => None,
+                            };
+                        }
+                    }
+                    // a statement is kept only whole
+                    None => complete = false,
+                }
+            }
+        }
+        // a statement of units is stored only whole: every id behind it read
+        if !complete {
+            continue;
+        }
+        let lines: Vec<UnitsLine> = sum.into_iter().map(|(instrument, quantity)| UnitsLine { instrument, quantity, book_value: costed.get(&instrument).copied().flatten(), value: valued.get(&instrument).copied().flatten() }).collect();
+        if !book.units_on(*id, day)?.is_some_and(|(kept, kept_cash)| kept_cash == cash && same_holdings(&kept, &lines)) {
+            let read = book.broker_read(connection, "units", now)?;
+            book.store_units(*id, day, &lines, &cash, &read, now)?;
+        }
+        cash_of.insert(*id, cash);
+    }
+    Ok(cash_of)
+}
+
+/// Every account's holdings as of a past day, read in one request, for a past day
+/// a page shows or the net worth history needs (brief 79 §2.4): the broker's ids
+/// behind each of the connection's accounts, closed ones too, as the book knows
+/// them, with nothing else asked. The accounts stored, and what failed.
+pub fn holdings_as_of(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, day: jiff::civil::Date, now: jiff::Timestamp) -> Result<(Vec<AccountId>, Vec<(String, Failure)>)> {
+    let broker = adapter.broker();
+    let mut accounts = Vec::new();
+    // the accounts of a kind the positions read is issued for (`BrokerAdapter::reads`)
+    for a in book.accounts()?.into_iter().filter(|a| a.connection == connection && adapter.reads(&a.account_type).positions) {
+        let keys: Vec<String> = book.account_refs(a.id)?.into_iter().filter(|r| r.broker == broker).map(|r| r.value).collect();
+        if !keys.is_empty() {
+            accounts.push((a.id, keys));
+        }
+    }
+    let mut failures = Vec::new();
+    let stored = store_holdings(book, adapter, connection, &accounts, day, now, &mut failures)?;
+    Ok((stored.into_keys().collect(), failures))
+}
+
+/// Whether two statements of an account's holdings state the same units and
+/// book value of each instrument: what a holding shows (a worth moves with every
+/// price, and is not what a holding shows).
+fn same_holdings(a: &[UnitsLine], b: &[UnitsLine]) -> bool {
+    let of = |x: &[UnitsLine]| x.iter().map(|l| (l.instrument, (l.quantity, l.book_value))).collect::<BTreeMap<_, _>>();
+    of(a) == of(b)
+}
+
 /// The part of a connection's reads that is the outside accounts' balances by day.
 const OUTSIDE_DAYS: &str = "outside-days";
 
@@ -999,6 +1065,32 @@ fn store_balances(
         Err(f) => failures.push(("outside accounts".into(), f)),
     }
     Ok(stored.into_iter().collect())
+}
+
+
+/// What an earlier version booked from the monthly statements, withdrawn. The
+/// statements are no longer read (brief 79), so each live record of theirs is
+/// taken back, and each feed record one took the place of is live again with its
+/// trades (`Book::withdraw`). One that took the place of another source's record
+/// is left as it is. Once a pull has done it nothing of theirs is live, and it
+/// finds nothing. The withdrawn, and the left.
+pub fn withdraw_statement_records(book: &Book, adapter: &dyn BrokerAdapter, now: jiff::Timestamp) -> Result<(usize, usize)> {
+    let Some(source) = adapter.statement_mapping().map(|m| m.source()) else { return Ok((0, 0)) };
+    let feed = adapter.mapping();
+    let (mut withdrawn, mut left) = (0, 0);
+    for (id, _, _) in book.live_records_written(&source)? {
+        let mut another = false;
+        for r in book.replaced(id)? {
+            another |= book.record(r)?.source != feed.source();
+        }
+        if another {
+            left += 1;
+            continue;
+        }
+        book.withdraw(id, feed, now)?;
+        withdrawn += 1;
+    }
+    Ok((withdrawn, left))
 }
 
 #[cfg(test)]

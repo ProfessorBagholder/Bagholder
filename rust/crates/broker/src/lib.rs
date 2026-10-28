@@ -15,7 +15,6 @@ pub mod activity_types;
 pub mod codes;
 pub mod csv;
 pub mod pull;
-pub mod statements;
 
 /// Why a read did not answer.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -96,10 +95,19 @@ pub struct Units {
     /// The broker's own reference for the instrument.
     pub instrument: Reference,
     pub quantity: Dec,
-    /// The broker's book value, kept as its statement, never a cost.
+    /// The broker's book value: what the units cost, as the holding shows it
+    /// (brief 79), never a cost the journal takes.
     pub book_value: Option<Money>,
     /// What the broker states the position is worth now.
     pub value: Option<Money>,
+}
+
+/// One account's positions as of a day, as its broker states them: each
+/// holding's units, and the cash in each currency the same read states.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Positions {
+    pub units: Vec<Units>,
+    pub cash: BTreeMap<Currency, Dec>,
 }
 
 /// An account's value and net deposits on a day.
@@ -138,10 +146,8 @@ pub enum Step {
     Recording { done: usize, of: usize },
     /// Cash and what margin can borrow.
     Balances,
-    /// The monthly statements of an account whose cash disagrees.
-    Statements,
-    /// One account's holdings, `n` of `of`.
-    Holdings { account: String, n: usize, of: usize },
+    /// Every account's holdings, read together.
+    Holdings,
     /// One account's value by day, `n` of `of`.
     History { account: String, n: usize, of: usize },
 }
@@ -153,39 +159,18 @@ impl AccountStated {
     }
 }
 
-/// One row of a broker's monthly statement, as it states it.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct StatementRow {
-    /// The day the statement files it under (a trade's settlement).
-    pub day: jiff::civil::Date,
-    /// The day the row states it was executed, where it states one.
-    pub executed: Option<jiff::civil::Date>,
-    /// The broker's transaction code (`WD`, `TRFIN`, …).
-    pub code: String,
-    pub description: String,
-    pub currency: Currency,
-    /// The signed cash it moved.
-    pub cash: Dec,
-    /// The account's cash in that currency after it.
-    pub balance: Dec,
-}
-
-impl StatementRow {
-    /// The day the book files what it moved under: its execution where the
-    /// row states one (the feed dates a trade at execution), else its own.
-    pub fn book_day(&self) -> jiff::civil::Date {
-        self.executed.unwrap_or(self.day)
-    }
-}
-
-/// A month's statement of one account, as read.
-#[derive(Clone, Debug, PartialEq)]
-pub enum StatementRead {
-    /// Issued: the reply as it came, kept whole, and its rows.
-    Issued { payload: Value, rows: Vec<StatementRow> },
-    /// Not issued yet (the first days after a month ends): neither a failure
-    /// nor an empty month, and asked again once the broker could have issued it.
-    NotIssued,
+/// The reads beyond the accounts read and the activity that a broker issues for
+/// one kind of account (`BrokerAdapter::reads`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Reads {
+    /// Its cash now: the balances read, or a card's own read.
+    pub cash: bool,
+    /// Its holdings as of a day (the positions read).
+    pub positions: bool,
+    /// Its value and net deposits by day.
+    pub history: bool,
+    /// What it can borrow now, and the rates it pays on what it borrows.
+    pub margin: bool,
 }
 
 /// The book's own moves, for a record read against positions.
@@ -199,6 +184,14 @@ pub trait BrokerAdapter {
     fn broker(&self) -> Broker;
     fn mapping(&self) -> &dyn Mapping;
     fn accounts(&mut self) -> Answer<Vec<AccountStated>>;
+    /// The reads the broker issues for a kind of account (brief 79, amended
+    /// 2026-10-28): each read is asked only of the kinds it is issued for, never
+    /// to learn a kind by failing. Every kind gets the accounts read and its
+    /// activity; a broker that states nothing else gets nothing else.
+    fn reads(&self, account_type: &AccountType) -> Reads {
+        let _ = account_type;
+        Reads::default()
+    }
     /// An account's activity, from `from` (the whole of it when `None`).
     fn activity(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Activity>;
     /// The rows about to be recorded, so an adapter can read what they share
@@ -262,7 +255,6 @@ pub trait BrokerAdapter {
     /// Each account's cash per currency now: an account left out is one the
     /// broker did not state, and nothing is stored for it.
     fn cash(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, BTreeMap<Currency, Dec>>>;
-    /// An account's positions as of a day.
     /// What each margin account can borrow now, in CAD, or why the broker cannot say.
     fn buying_power(&mut self, accounts: &[String]) -> Answer<BTreeMap<String, Result<Dec, String>>>;
     /// A margin account's yearly interest rate on what it borrows, per currency,
@@ -270,13 +262,9 @@ pub trait BrokerAdapter {
     fn margin_rates(&mut self, _account: &str) -> Answer<Option<BTreeMap<Currency, Dec>>> {
         Ok(None)
     }
-    fn units(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Vec<Units>>;
-    /// An account's cash per currency at the end of a day, as its positions on
-    /// that day state it: none from a broker that states none.
-    fn cash_on(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Option<BTreeMap<Currency, Dec>>> {
-        let _ = (account, day);
-        Ok(None)
-    }
+    /// Each account's positions as of a day, read together: every account asked
+    /// for in as few requests as the broker takes.
+    fn positions(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>>;
     /// The person's accounts held outside the broker that the broker's own net
     /// worth feature states (`docs/plans/debts-held-outside-wealthsimple.md`):
     /// none from a broker that states none.
@@ -296,84 +284,9 @@ pub trait BrokerAdapter {
     /// An account's value and net deposits per day, from `from` (the whole of
     /// its history when `None`).
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<DayValue>>;
-    /// An account's statement for the calendar month starting `month`: the
-    /// movements the activity feed may leave out (`statements`). A broker
-    /// that issues none says so.
-    fn statement(&mut self, account: &str, month: jiff::civil::Date) -> Answer<StatementRead> {
-        let _ = month;
-        Err(Failure::Refused(format!("{} issues no monthly statement for {account}", self.broker())))
-    }
-    /// A kept statement's rows, read again from the reply as it came, for the
-    /// broker's account it is of.
-    fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>> {
-        let _ = (account, payload);
-        Err(Failure::Refused(format!("{} issues no monthly statement", self.broker())))
-    }
-    /// The mapping of a statement row booked into the book: a movement the
-    /// activity feed left out.
+    /// The mapping of the statement rows an earlier version booked into the
+    /// book, which the pull withdraws (`pull::withdraw_statement_records`).
     fn statement_mapping(&self) -> Option<&dyn Mapping> {
         None
-    }
-    /// A statement row booked into the book: the key its record is kept by and
-    /// the record, for one of the broker's accounts, the month and the row's
-    /// place among the month's rows.
-    fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)> {
-        let _ = (account, month, position, row);
-        None
-    }
-    /// A month's statement opening off where the statement before closed, with
-    /// no row for the difference, booked: the key and the record.
-    fn statement_gap_record(&self, gap: &crate::statements::Gap) -> Option<(String, Value)> {
-        let _ = gap;
-        None
-    }
-    /// The side paid of a conversion whose record states only the side
-    /// received, as the broker's stated cash shows it: the key and the record.
-    fn conversion_paid_record(&self, paid: &crate::statements::Paid) -> Option<(String, Value)> {
-        let _ = paid;
-        None
-    }
-    /// A side paid's record (`conversion_paid_record`) read back from its payload.
-    fn paid_of(&self, payload: &Value) -> Option<crate::statements::Paid> {
-        let _ = payload;
-        None
-    }
-    /// A fill as the statement states it, in the place of the feed's row for
-    /// it: the key and the record.
-    fn fill_record(&self, fill: &crate::statements::Fill) -> Option<(String, Value)> {
-        let _ = fill;
-        None
-    }
-}
-
-/// What reading the statements a book keeps needs of a broker, with nothing
-/// asked of it: a kept statement's rows, the record a row is booked as, and the
-/// mapping that derives those records, and the walk's side-paid records written
-/// and read back. Every adapter reads them this way; the server's gate on a new
-/// mapping version (`statements::restate_walk_records`) reads them with no
-/// adapter at all.
-pub trait StatementKeys {
-    fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>>;
-    fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)>;
-    fn statement_mapping(&self) -> Option<&dyn Mapping>;
-    fn conversion_paid_record(&self, paid: &crate::statements::Paid) -> Option<(String, Value)>;
-    fn paid_of(&self, payload: &Value) -> Option<crate::statements::Paid>;
-}
-
-impl<T: BrokerAdapter + ?Sized> StatementKeys for T {
-    fn statement_rows(&self, account: &str, payload: &Value) -> Answer<Vec<StatementRow>> {
-        BrokerAdapter::statement_rows(self, account, payload)
-    }
-    fn statement_record(&self, account: &str, month: jiff::civil::Date, position: usize, row: &StatementRow) -> Option<(String, Value)> {
-        BrokerAdapter::statement_record(self, account, month, position, row)
-    }
-    fn statement_mapping(&self) -> Option<&dyn Mapping> {
-        BrokerAdapter::statement_mapping(self)
-    }
-    fn conversion_paid_record(&self, paid: &crate::statements::Paid) -> Option<(String, Value)> {
-        BrokerAdapter::conversion_paid_record(self, paid)
-    }
-    fn paid_of(&self, payload: &Value) -> Option<crate::statements::Paid> {
-        BrokerAdapter::paid_of(self, payload)
     }
 }

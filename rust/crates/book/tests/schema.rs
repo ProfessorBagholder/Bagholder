@@ -629,7 +629,7 @@ fn migration_40_drops_only_a_closed_account_s_statements_of_nothing() {
     f.book.store_cash(closed, at("2026-01-02T00:00:00Z"), &cad("100"), &read).unwrap();
     // since 2.10.0: stated as holding nothing
     f.book.store_cash(closed, at("2026-10-23T00:00:00Z"), &std::collections::BTreeMap::new(), &read).unwrap();
-    f.book.store_units(closed, "2026-10-23".parse().unwrap(), &[], &read, at("2026-10-23T00:00:00Z")).unwrap();
+    f.book.store_units(closed, "2026-10-23".parse().unwrap(), &[], &Default::default(), &read, at("2026-10-23T00:00:00Z")).unwrap();
     // an open account's statement of no cash
     f.book.store_cash(open, at("2026-10-23T00:00:00Z"), &std::collections::BTreeMap::new(), &read).unwrap();
     let c = f.book.conn_for_tests();

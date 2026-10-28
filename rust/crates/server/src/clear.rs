@@ -293,11 +293,13 @@ mod tests {
             book.keep_outside_days("efe-1", day, day, &[owed], t).unwrap();
             book.answer_repayment("debit:omicron trust", Some("efe-1"), t).unwrap();
         }
-        // a month's statement kept from the broker
+        // a month's statement an earlier version kept from the broker
         {
             let conn = book.connections().unwrap()[0].id;
             let read = book.broker_read(conn, "statement:anon-tfsa-1", t).unwrap();
-            book.keep_monthly_statement(conn, "anon-tfsa-1", "2025-10-01".parse().unwrap(), "null", &read).unwrap();
+            book.conn_for_tests()
+                .execute("INSERT INTO monthly_statements (connection_id, account_key, month, payload, read_id) VALUES (?1, 'anon-tfsa-1', '2025-10-01', 'null', ?2)", rusqlite::params![conn.to_string(), read.0])
+                .unwrap();
         }
         // a succession the broker states: an id it retired by a corporate action,
         // and the id its listing trades under now

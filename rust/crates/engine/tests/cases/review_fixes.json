@@ -161,7 +161,7 @@
     "spec": "docs/plans/stage-2-engine.md, rates: a read that could not yet see a day's rate says nothing of that day",
     "working": [
       "a read at 10:00 Eastern on Tue 2026-01-06 covering through that day found no rate for it: the rate was not due yet",
-      "at 15:00 Eastern the day's rate is pending, not Monday's; at 17:00 with no later read it is missing, and a live mark is a failure too"
+      "at 15:00 Eastern the day's rate is pending, not Monday's; at 17:00 with no later read Monday's stands, for the day and a live mark (amended 2026-10-28: \"Show nothing\")"
     ],
     "today": "2026-01-06",
     "now": "2026-01-06T22:00:00Z",
@@ -169,8 +169,8 @@
     "covered": {"USD": [["2026-01-01", "2026-01-06", "2026-01-06T15:00:00Z"]]},
     "series": {"USD": [["2017-01-03", "2026-12-31"]]},
     "expect": {"rates": [
-      {"currency": "USD", "day": "2026-01-06", "value": {"gaps": ["rate-missing"]}},
-      {"currency": "USD", "day": "2026-01-06", "live": true, "value": {"gaps": ["rate-missing"]}},
+      {"currency": "USD", "day": "2026-01-06", "value": "1.41"},
+      {"currency": "USD", "day": "2026-01-06", "live": true, "value": "1.41"},
       {"currency": "USD", "day": "2026-01-02", "value": {"gaps": ["rate-missing"]}}
     ]}
   },

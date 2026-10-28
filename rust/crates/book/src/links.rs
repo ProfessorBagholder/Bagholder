@@ -183,13 +183,6 @@ impl Book {
         ids.map(|s| text::parsed("link_records", "record_id", &s?, RecordId::parse)).collect()
     }
 
-    /// When a supersession was made for `reason`, the earliest, among the links
-    /// that still stand.
-    pub fn first_superseded_for(&self, reason: &str) -> Result<Option<jiff::Timestamp>> {
-        let at: Option<String> = self.conn().query_row("SELECT min(created_at) FROM links WHERE kind = 'supersedes' AND reason = ?", [reason], |r| r.get(0))?;
-        at.map(|a| text::parsed("links", "created_at", &a, |s: &str| s.parse::<jiff::Timestamp>())).transpose()
-    }
-
     /// The transactions standing now for the record `source` knew by `key`: its
     /// own while it is live, else those of the live records that replaced it,
     /// each replacement followed to its end. None where no such record is kept,

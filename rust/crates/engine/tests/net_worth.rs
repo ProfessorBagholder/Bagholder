@@ -10,7 +10,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::{Currency, Dec, Money};
-use bagholder_engine::gap::Gap;
 use bagholder_engine::input::{Debt, Debts};
 use bagholder_engine::scope::{Filters, NetWorthDay};
 use bagholder_engine::Change;
@@ -26,9 +25,11 @@ fn cad(s: &str) -> Money {
 }
 
 /// Two open accounts stated on different days, one in US dollars; a closed
-/// account; a home stated twice and a line of credit stated once.
+/// account; a home stated twice and a line of credit stated once. Each account's
+/// positions read states its cash on each day from its first stated value (brief
+/// 79 §2.4): what it owes on each is that read's.
 fn case() -> Value {
-    json!({
+    let mut c = json!({
         "name": "net worth by day",
         "today": "2026-10-20",
         "now": "2026-10-20T22:00:00Z",
@@ -42,7 +43,15 @@ fn case() -> Value {
             "Z": {"net_value": {"2026-10-05": "500", "2026-10-08": "400"}}
         },
         "transactions": []
-    })
+    });
+    for (a, cash, from, to) in [("A", json!({"CAD": "1350"}), "2026-10-05", "2026-10-20"), ("B", json!({"USD": "120"}), "2026-10-06", "2026-10-20"), ("Z", json!({}), "2026-10-05", "2026-10-09")] {
+        let mut d = day(from);
+        while d < day(to) {
+            c["brokers"][a]["days_held"][d.to_string()] = json!({ "cash": cash });
+            d = d.tomorrow().unwrap();
+        }
+    }
+    c
 }
 
 fn outside() -> Debts {
@@ -127,21 +136,15 @@ fn todays_point_is_the_tiles() {
 /// account was stated for not stored) keeps its point, waiting on that rate, and
 /// so does every day that statement is held; the days around it are stated.
 #[test]
-fn a_day_waiting_on_a_rate_keeps_its_point_and_says_why() {
+fn a_day_whose_rate_is_not_read_keeps_its_point_at_the_last_published_rate() {
+    // the owner, 2026-10-28, on an old rate: "Show nothing" (brief 79 amended)
     let mut c = case();
     c["rates"]["USD"].as_object_mut().unwrap().remove("2026-10-13");
     let (_, e) = engine_of(&c);
     let days = e.scope(&Filters::default()).portfolio.net_worth_history;
     assert_eq!(days.len(), 16, "no day vanishes");
-    let gap = Gap::RateMissing { currency: Currency::USD, day: day("2026-10-13") };
     for n in &days {
-        let waiting = (day("2026-10-13")..=day("2026-10-19")).contains(&n.day);
-        assert_eq!(n.assets.is_err(), waiting, "{}", n.day);
-        if waiting {
-            assert!(n.assets.clone().unwrap_err().contains(&gap), "{}: {:?}", n.day, n.assets);
-            assert!(n.net().unwrap_err().contains(&gap));
-            assert_eq!(n.debts.clone().unwrap(), cad("5000"), "what is owed is still stated");
-        }
+        assert!(n.assets.is_ok() && n.net().is_ok(), "{}: nothing waits on a rate the Bank published before: {:?}", n.day, n.assets);
     }
 }
 
@@ -208,9 +211,13 @@ fn sum(xs: &[Dec]) -> Dec {
 /// today and no price or rate changes, yesterday's point and today's (the tiles)
 /// are the same, assets and debts both. Each generated book has a margin account
 /// holding a stock, with cash in two currencies; a cash account holding it too; a
-/// chequing account, a line of credit and a credit card, each stating a value or
-/// not, the card's balance owed or in credit; any account's cash may be below
-/// zero; every balance carried from before the first transaction. Today's net is
+/// chequing account, each stating its value (Wealthsimple states every one's:
+/// no holdings are read of a chequing account, so its past days are its stated
+/// values, brief 79 amended 2026-10-28), and a line of credit and a credit card,
+/// each stating a value or not, the card's balance owed or in credit; the margin
+/// account's cash may be below zero (another's below zero counts today alone:
+/// its past days are its stated values, brief 79 §2.4); every balance carried
+/// from before the first transaction. Today's net is
 /// also each account's holdings and cash, worked out here on its own.
 #[test]
 fn yesterday_meets_today_when_nothing_moves() {
@@ -225,7 +232,12 @@ fn yesterday_meets_today_when_nothing_moves() {
         for a in &ids[1..] {
             cash.insert(a, vec![("CAD", g.amount(500_000))]);
         }
-        let stated: BTreeMap<&str, bool> = ids.iter().map(|a| (*a, matches!(*a, "M" | "C") || g.coin())).collect();
+        let stated: BTreeMap<&str, bool> = ids.iter().map(|a| (*a, matches!(*a, "M" | "C" | "S") || g.coin())).collect();
+        for a in ["C", "S"].into_iter().filter(|a| stated[a]) {
+            for (_, v) in cash.get_mut(a).unwrap() {
+                *v = v.trim_start_matches('-').to_string();
+            }
+        }
         let usd = Dec::parse("1.40").unwrap();
         let p = Dec::parse(&price).unwrap();
         let held = |a: &str| -> Dec {
@@ -249,6 +261,11 @@ fn yesterday_meets_today_when_nothing_moves() {
             }
             if a == "M" {
                 b["buying_power"] = json!("0");
+            }
+            // yesterday's positions read of every account but the card and the line
+            // of credit, whose balances are worked back: nothing moves since
+            if !matches!(a, "L" | "K") {
+                b["days_held"] = json!({"2026-10-19": {"cash": cash[a].iter().map(|(c, v)| (c.to_string(), json!(v))).collect::<serde_json::Map<_, _>>()}});
             }
             brokers.insert(a.to_string(), b);
         }
@@ -290,7 +307,9 @@ fn yesterday_meets_today_when_nothing_moves() {
 
 /// A card's balance owed by day is its statements', from a balance carried in
 /// from before the first transaction read: worked back from what the broker
-/// states now, never summed up from nothing. Each generated card opens owing a
+/// states now, never summed up from nothing. It is the one past figure still
+/// worked back: no read of Wealthsimple's states a card's past balance (brief 79
+/// §2.4; the Architect, 2026-10-27); every other account's is its positions read. Each generated card opens owing a
 /// balance no transaction holds, then is charged and paid on some days; another
 /// account, stated from the first day, makes every day a point.
 #[test]
@@ -313,6 +332,13 @@ fn a_cards_balance_owed_by_day_is_its_statements() {
             statements.insert(d, balance);
             d = d.tomorrow().unwrap();
         }
+        // the other account's positions read of each day
+        let mut held_days = json!({});
+        let mut h = day("2026-10-01");
+        while h < day("2026-10-20") {
+            held_days[h.to_string()] = json!({"cash": {"CAD": "100"}});
+            h = h.tomorrow().unwrap();
+        }
         let c = json!({
             "name": "a card's balance by day",
             "today": "2026-10-20",
@@ -320,7 +346,7 @@ fn a_cards_balance_owed_by_day_is_its_statements() {
             "accounts": [{"id": "A"}, {"id": "K", "kind": "credit-card"}],
             "instruments": [],
             "brokers": {
-                "A": {"cash": {"CAD": "100"}, "net_value": {"2026-10-01": "100"}, "now": "100", "as_of": "2026-10-20T15:00:00Z"},
+                "A": {"cash": {"CAD": "100"}, "net_value": {"2026-10-01": "100"}, "now": "100", "as_of": "2026-10-20T15:00:00Z", "days_held": held_days.clone()},
                 "K": {"cash": {"CAD": balance.to_text()}, "as_of": "2026-10-20T15:00:00Z"}
             },
             "transactions": transactions,
@@ -334,6 +360,39 @@ fn a_cards_balance_owed_by_day_is_its_statements() {
         }
         assert_eq!(days.last().unwrap().debts.clone().unwrap().amount, balance.neg(), "book {n}: today");
     }
+}
+
+/// A margin account whose value is stated up to a day before yesterday (its
+/// daily history not read since): a day after its last stated value comes to
+/// that value, and what it owes to that day's positions read, as the value does;
+/// no read is asked for a day after it, and no day waits on one.
+#[test]
+fn a_margin_account_after_its_last_stated_value_owes_what_that_days_read_states() {
+    let mut held = json!({});
+    let mut d = day("2026-10-05");
+    while d <= day("2026-10-15") {
+        held[d.to_string()] = json!({"cash": {"CAD": "-400"}});
+        d = d.tomorrow().unwrap();
+    }
+    let c = json!({
+        "name": "a margin account read to a day before yesterday",
+        "today": "2026-10-20",
+        "now": "2026-10-20T22:00:00Z",
+        "accounts": [{"id": "A", "kind": "margin"}],
+        "instruments": [],
+        "brokers": {"A": {"cash": {"CAD": "-400"}, "net_value": {"2026-10-05": "1000", "2026-10-15": "1100"}, "now": "1100", "as_of": "2026-10-20T15:00:00Z", "buying_power": "0", "days_held": held}},
+        "transactions": []
+    });
+    let mut b = build(&c);
+    let e = engine(&mut b);
+    let days = e.scope(&Filters::default()).portfolio.net_worth_history;
+    let after: Vec<_> = days.iter().filter(|nw| nw.day > day("2026-10-15") && nw.day < day("2026-10-20")).collect();
+    assert_eq!(after.len(), 4);
+    for nw in after {
+        assert_eq!(nw.debts.clone().expect("no day waits").amount, Dec::from_int(400), "{}: the last read's debt", nw.day);
+    }
+    let asked = e.needs().holdings_on;
+    assert!(asked.iter().all(|d| *d <= day("2026-10-15")), "no read asked after the last stated value: {asked:?}");
 }
 
 /// Net worth by day before today is kept from one change to the next

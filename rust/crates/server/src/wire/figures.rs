@@ -100,8 +100,12 @@ pub struct Position {
     pub short: bool,
     pub qty: Fig<Dec>,
     pub avg: Fig<Dec>,
-    /// What the units held cost (long) or brought in (short).
+    /// What the units held cost (long) or brought in (short), as Wealthsimple
+    /// states it.
     pub cost: Fig<Dec>,
+    /// The currency of `avg`, `cost` and `unreal`: the one Wealthsimple states
+    /// the book value in (brief 79).
+    pub book_currency: String,
     /// The price marked at.
     pub last: Fig<Dec>,
     pub mv: Fig<Dec>,
@@ -110,8 +114,10 @@ pub struct Position {
     pub day_change: Fig<Option<Dec>>,
     /// The day's move of the price, as a fraction.
     pub percent_change: Option<f64>,
+    /// When the journal's first lot in it was opened; empty where it holds none.
     pub opened: String,
-    pub held: Fig<i64>,
+    /// Days held, from the journal's lots; none where it holds none.
+    pub held: Option<Fig<i64>>,
     pub grade: String,
     pub thesis: String,
     pub tags: Vec<String>,
@@ -487,6 +493,9 @@ pub struct CashflowHolding {
     pub qty: Fig<Dec>,
     pub avg: Fig<Dec>,
     pub cost: Fig<Dec>,
+    /// The currency of `avg` and `cost`: the one Wealthsimple states the book
+    /// value in (brief 79).
+    pub book_currency: String,
     pub mv: Fig<Dec>,
     /// Cash per unit of the latest distribution gone ex.
     pub per: Fig<Dec>,

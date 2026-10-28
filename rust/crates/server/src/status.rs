@@ -131,9 +131,11 @@ pub fn status(app: &Arc<App>) -> Status {
     let open_orders = orders::open_orders_count(app, None);
     let can_update = update::can_update(app, &upd);
     let off = update::updates_off();
+    // a market source failing is asked again at its next turn and goes to the log,
+    // as it starts and as it ends, never to the page (brief 79, amended 2026-10-28)
+    let market = app.figures.get().map(|f| f.source_failures(app.net.started()).unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default();
+    app.market_failing.lock().unwrap_or_else(|e| e.into_inner()).pass("the market sources", market.into_iter().map(|s| (s, String::new())));
     let mut sources: Vec<String> = vec![];
-    sources.extend(app.figures.get().map(|f| f.source_failures(app.net.started()).unwrap_or_else(|e| vec![format!("What the market sources answered could not be read: {e}")])).unwrap_or_default());
-    sources.extend(app.figures.get().and_then(|f| f.read(broker_failures)).unwrap_or_default());
     sources.extend(crate::feeds::feed_failures(app));
     sources.extend(orders::order_failures(app));
     let st = app.state.lock().unwrap();
@@ -144,7 +146,7 @@ pub fn status(app: &Arc<App>) -> Status {
         ok: true,
         connected,
         email,
-        last_sync: st.last_sync.clone(),
+        last_sync: synced(&st),
         activity_count: acts,
         account_count: accounts,
         capturing: st.capturing,
@@ -173,6 +175,21 @@ pub fn status(app: &Arc<App>) -> Status {
     }
 }
 
+/// The time the header's "Synced" states: the last pull that read Wealthsimple,
+/// unless a read whose figures are shown has failed at its turn since, then that
+/// read's last answer (brief 79, amended 2026-10-28, point 3): a part that keeps
+/// failing ages it without the page naming the part, and the reads made once a
+/// day never age it while they answer.
+pub fn synced(st: &app::State) -> String {
+    let last: Option<bagholder_core::jiff::Timestamp> = st.last_sync.parse().ok();
+    let failing = [(st.balances_failing.any(), st.balances_answered), (st.pull_failing.any(), st.pull_answered)];
+    let oldest = failing.iter().filter(|(any, _)| *any).map(|(_, at)| at.or(last)).min().flatten();
+    match oldest {
+        Some(at) if last.is_none_or(|l| at < l) => at.to_string(),
+        _ => st.last_sync.clone(),
+    }
+}
+
 /// The header's error line: every failure standing now, each from its own
 /// state and each gone when its own next success comes, said together as
 /// sentences in one line. Wealthsimple's (the pull, the session, the sign-in),
@@ -190,117 +207,11 @@ pub fn failures(st: &app::State, sources: &[String]) -> String {
     said.join(" ")
 }
 
-/// Where the book's units differ from what the broker states, and each sale or
-/// move that took out more units than the book held, one sentence each, said while
-/// the derivation finds it and gone with the next one that agrees. A holding's
-/// units are still the book's own (brief 79 reads them from Wealthsimple), so a
-/// difference is the one sign a figure shown is wrong: said until then. Where the
-/// book's cash differs from Wealthsimple's, a row of Wealthsimple's is not placed
-/// or a statement month does not reconcile, the header says nothing: the cash shown
-/// is Wealthsimple's, and none of those is a figure shown (the owner, 2026-10-27:
-/// "obviously you cannot account for every possible transaction that could happen
-/// in a checking account"). Figures are written exactly: a difference below the
-/// tables' rounding would read as two equal numbers.
-pub fn broker_failures(e: &bagholder_engine::Engine) -> Vec<String> {
-    use bagholder_engine::equity::Difference;
-    let inputs = e.inputs();
-    let figures = e.figures();
-    // in the order a reader looks them up, never by the ids' random order: by
-    // account name, then the holdings by what they say
-    let mut checks: Vec<_> = figures.checks.iter().map(|c| (crate::wire::build::account_name(inputs, c.account), c)).collect();
-    checks.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.account.cmp(&b.1.account)));
-    let mut out = vec![];
-    for (_, c) in checks {
-        let (broker, account) = (broker_label(inputs, c.account), in_account(inputs, c.account));
-        let mut held = vec![];
-        for d in c.differences.iter().filter(|d| !d.pending()) {
-            if let Difference::Units { instrument, own, broker: stated, .. } = d {
-                held.push(format!("{} in {account}: {broker} states {}, the book {}.", symbol(inputs, *instrument), units(*stated), own.as_ref().map(|o| format!("holds {}", exact(*o))).unwrap_or_else(|g| format!("cannot count its units ({})", g.words().join(", ")))));
-            }
-        }
-        held.sort();
-        out.extend(held);
-    }
-    let beyond = &figures.matched.beyond;
-    if !beyond.is_empty() {
-        let wanted: std::collections::BTreeSet<_> = beyond.iter().map(|b| &b.transaction).collect();
-        let txs: std::collections::BTreeMap<_, _> = inputs.ledger.transactions.iter().filter(|t| wanted.contains(&t.id)).map(|t| (&t.id, t)).collect();
-        for b in beyond {
-            let t = txs.get(&b.transaction);
-            let what = t.map(|t| kind_phrase(t.kind)).unwrap_or("A record");
-            let day = t.map(|t| format!(" on {}", t.trade_date)).unwrap_or_default();
-            out.push(format!("{what} of {} in {}{day} took {} more than the book held.", symbol(inputs, b.instrument), in_account(inputs, b.account), units(b.qty)));
-        }
-    }
-    out
-}
-
-/// The broker an account is held at, as its sentences name it.
-fn broker_label(inputs: &bagholder_engine::input::Inputs, a: bagholder_core::AccountId) -> String {
-    inputs.ledger.accounts.get(&a).map(|x| x.broker_label.clone()).filter(|l| !l.trim().is_empty()).unwrap_or_else(|| "The broker".into())
-}
-
-/// What took the units out, as a sentence opens with it.
-fn kind_phrase(k: bagholder_core::transaction::Kind) -> &'static str {
-    use bagholder_core::transaction::Kind;
-    match k {
-        Kind::Sell => "A sale",
-        Kind::Buy => "A buy",
-        Kind::TransferOut => "A transfer out",
-        Kind::TransferIn => "A transfer in",
-        Kind::OptionExpiry => "An expiry",
-        Kind::OptionAssignment => "An assignment",
-        Kind::OptionExercise => "An exercise",
-        Kind::Resolution => "A resolution",
-        Kind::CorporateEvent => "A corporate event",
-        Kind::StakingMove => "A staking move",
-        _ => "A record",
-    }
-}
-
-/// `the TFSA` for an account named by what it is, its own name for one the
-/// person named.
-fn in_account(inputs: &bagholder_engine::input::Inputs, a: bagholder_core::AccountId) -> String {
-    let name = crate::wire::build::account_name(inputs, a);
-    let named = inputs.ledger.accounts.get(&a).and_then(|x| x.account.nickname.as_deref()).is_some_and(|n| !n.trim().is_empty());
-    if named { name } else { format!("the {name}") }
-}
-
 /// An instrument as the page names it: its bare ticker.
+#[cfg(test)]
 pub(crate) fn symbol(inputs: &bagholder_engine::input::Inputs, i: bagholder_core::InstrumentId) -> String {
     let s = crate::wire::build::shown(inputs, i).symbol;
     if s.is_empty() { "An instrument with no name on record".into() } else { crate::orders::bare_symbol(&s) }
-}
-
-/// `1,000,000 units`, `1 unit`, `none`.
-fn units(q: bagholder_core::Dec) -> String {
-    if q.is_zero() {
-        "none".into()
-    } else if q == bagholder_core::Dec::ONE {
-        "1 unit".into()
-    } else {
-        format!("{} units", exact(q))
-    }
-}
-
-/// A quantity with thousands separators and every place it has.
-fn exact(v: bagholder_core::Dec) -> String {
-    format!("{}{}", if v.is_negative() { "\u{2212}" } else { "" }, grouped(v.abs().to_text()))
-}
-
-fn grouped(plain: String) -> String {
-    let (whole, frac) = plain.split_once('.').map(|(w, f)| (w.to_string(), Some(f.to_string()))).unwrap_or((plain, None));
-    let mut g = String::new();
-    for (n, ch) in whole.chars().enumerate() {
-        if n > 0 && (whole.len() - n) % 3 == 0 {
-            g.push(',');
-        }
-        g.push(ch);
-    }
-    match frac {
-        Some(f) => format!("{g}.{f}"),
-        None => g,
-    }
 }
 
 /// `s` ending as a sentence does.
@@ -399,61 +310,40 @@ mod tests {
 
     const FAILURES: [OutcomeKind; 4] = [OutcomeKind::Refused, OutcomeKind::Unreachable, OutcomeKind::Mismatch, OutcomeKind::Meaning];
 
+    /// A market source failing is asked again at its next turn and goes to the
+    /// log, never to the page (brief 79, amended 2026-10-28): whatever fails, and
+    /// however many fail together, the header says nothing of it.
     #[test]
-    fn test_a_failing_source_is_said_in_the_header_until_that_source_next_answers() {
+    fn test_a_failing_market_source_is_never_said_on_the_page() {
         let (_home, app) = fresh();
         assert_eq!(error(&app), "");
         for (source, _) in LABELS {
             for kind in FAILURES {
-                let said = health::failure(&record(&app, source, kind)).unwrap();
-                assert_eq!(error(&app), said);
-                // saying it does not carry something says nothing of the source
-                record(&app, source, OutcomeKind::NotCarried);
-                assert_eq!(error(&app), said);
-                record(&app, source, OutcomeKind::Answered);
-                assert_eq!(error(&app), "", "{source} answered");
+                assert!(health::failure(&record(&app, source, kind)).is_some(), "{source} failed");
+                record(&app, source, kind);
+                assert_eq!(error(&app), "", "{source}: nothing on the page");
             }
         }
-    }
-
-    #[test]
-    fn test_several_failing_sources_are_said_together_in_one_line() {
-        let (_home, app) = fresh();
-        let mut said = vec![];
         for (source, _) in LABELS {
-            said.push(health::failure(&record(&app, source, OutcomeKind::Unreachable)).unwrap());
-            let line = error(&app);
-            assert!(!line.contains('\n'));
-            for s in &said {
-                assert!(line.contains(s.as_str()), "{s:?} in {line:?}");
-            }
+            record(&app, source, OutcomeKind::Answered);
         }
-        // one answering takes only its own away
-        record(&app, LABELS[0].0, OutcomeKind::Answered);
-        let line = error(&app);
-        assert!(!line.contains(said[0].as_str()));
-        assert!(said[1..].iter().all(|s| line.contains(s.as_str())));
+        assert_eq!(error(&app), "");
     }
 
+    /// Wealthsimple's one sentence and a failed figures pass each stand until
+    /// their own next success; a market source failing beside them adds nothing.
     #[test]
-    fn test_wealthsimple_and_the_figures_and_the_sources_each_keep_their_own_failure() {
+    fn test_wealthsimple_and_the_figures_each_keep_their_own_failure() {
         let (_home, app) = fresh();
-        let source = health::failure(&record(&app, LABELS[0].0, OutcomeKind::Unreachable)).unwrap();
-        app.state.lock().unwrap().error = "Sync failed: the pull was refused".into();
-        app.state.lock().unwrap().portfolio_error = "Balances could not be read: refused".into();
+        record(&app, LABELS[0].0, OutcomeKind::Unreachable);
+        record(&app, LABELS[0].0, OutcomeKind::Unreachable);
+        app.state.lock().unwrap().error = crate::reading::UNREACHABLE.into();
         crate::due::settle(&app, Err("the book is locked".into()));
         let all = error(&app);
-        for part in ["Sync failed: the pull was refused.", "Balances could not be read: refused.", "The figures could not be brought up to date: the book is locked.", source.as_str()] {
-            assert!(all.contains(part), "{part:?} in {all:?}");
-        }
-        // Wealthsimple's next good pull clears its own, and only its own
+        assert_eq!(all, format!("{} The figures could not be brought up to date: the book is locked.", crate::reading::UNREACHABLE));
+        // Wealthsimple's next good read clears its own, and only its own
         app.state.lock().unwrap().error.clear();
-        let after = error(&app);
-        assert!(!after.contains("Sync failed") && after.contains("The figures could not") && after.contains(source.as_str()), "{after:?}");
-        // the source answering clears its own, and only its own
-        record(&app, LABELS[0].0, OutcomeKind::Answered);
-        let after = error(&app);
-        assert!(!after.contains(source.as_str()) && after.contains("The figures could not") && after.contains("Balances"), "{after:?}");
+        assert_eq!(error(&app), "The figures could not be brought up to date: the book is locked.");
     }
 
     #[test]
@@ -470,163 +360,4 @@ mod tests {
         crate::due::settle(&app, Ok(None));
         assert_eq!(*signals.borrow(), before);
     }
-
-    #[test]
-    fn test_a_source_failing_or_answering_is_sent_to_the_open_page() {
-        let home = tempfile::tempdir().unwrap();
-        crate::tests_common::pulled_book(home.path());
-        let app = app_on(home.path());
-        let now = Timestamp::now();
-        let f = crate::figures::Figures::open(home.path(), now).unwrap();
-        f.state_zone("America/Toronto", now).unwrap();
-        app.set_figures(f);
-        let mut feed = crate::events::Feed::open(app.clone());
-        assert!(app.events.watch(&app, feed.id(), [("status".to_string(), crate::events::Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
-        let first = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
-        // the recorded month is not the account's whole history: the broker check disagrees
-        let base = error(&app);
-        assert!(!base.is_empty() && first.contains(&format!("\"error\":{}", serde_json::to_string(&base).unwrap())), "only the broker check fails yet: {first}");
-        let mut signals = app.events.subscribe();
-        signals.mark_unchanged();
-        let said = health::failure(&record(&app, LABELS[0].0, OutcomeKind::Unreachable)).unwrap();
-        // the commit itself tells the bus: nothing polls for it
-        assert!(signals.has_changed().unwrap());
-        let sent = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
-        assert!(sent.contains(&said), "{sent}");
-        signals.mark_unchanged();
-        record(&app, LABELS[0].0, OutcomeKind::Answered);
-        assert!(signals.has_changed().unwrap());
-        let sent = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
-        assert!(sent.contains("\"error\"") && !sent.contains(&said), "{sent}");
-    }
-
-    /// An app on the recorded month's book, its figures built.
-    fn pulled() -> (tempfile::TempDir, Arc<App>) {
-        let home = tempfile::tempdir().unwrap();
-        crate::tests_common::pulled_book(home.path());
-        let app = app_on(home.path());
-        let now = Timestamp::now();
-        let f = crate::figures::Figures::open(home.path(), now).unwrap();
-        f.state_zone("America/Toronto", now).unwrap();
-        app.set_figures(f);
-        (home, app)
-    }
-
-    #[test]
-    fn test_where_the_book_and_the_broker_disagree_on_units_it_is_said_until_they_agree() {
-        use bagholder_book::statements::UnitsLine;
-        let (_home, app) = pulled();
-        let f = app.figures.get().unwrap();
-        let before = error(&app);
-        // an account the broker states units for, and one of them
-        let (account, as_of, held, instrument, symbol, name) = f
-            .read(|e| {
-                let i = e.inputs();
-                let (a, b) = i.market.brokers.iter().find(|(_, b)| !b.held.is_empty()).expect("the month states units");
-                // one the book has a name for, so its sentence is its own
-                let (inst, _) = b.held.iter().find(|(i, _)| !crate::wire::build::shown(e.inputs(), **i).symbol.is_empty()).unwrap();
-                (*a, b.held_as_of.unwrap(), b.held.clone(), *inst, super::symbol(i, *inst), super::in_account(i, *a))
-            })
-            .unwrap();
-        let book = f.book().unwrap();
-        let connection = book.accounts().unwrap().into_iter().find(|a| a.id == account).unwrap().connection;
-        let state = |units: &std::collections::BTreeMap<bagholder_core::InstrumentId, bagholder_core::Dec>| {
-            let now = Timestamp::now();
-            let read = book.broker_read(connection, "positions", now).unwrap();
-            let lines: Vec<UnitsLine> = units.iter().map(|(i, q)| UnitsLine { instrument: *i, quantity: *q, book_value: None, value: Some(bagholder_core::Money::new(*q, bagholder_core::Currency::CAD)) }).collect();
-            book.store_units(account, as_of, &lines, &read, now).unwrap();
-            book.note_activity_read(account, now, true).unwrap();
-            // as the reader of balances does: the figures moved, so the pages are told
-            let before = f.version();
-            f.broker_changed(account).unwrap();
-            if f.version() != before {
-                app.events.signal();
-            }
-        };
-        let mut more = held.clone();
-        let own = f.read(|e| e.figures().matched.units_on(account, instrument, as_of).unwrap()).unwrap();
-        let stated = own.checked_add(bagholder_core::Dec::parse("1000000").unwrap()).unwrap();
-        // a page open on the header
-        let mut feed = crate::events::Feed::open(app.clone());
-        assert!(app.events.watch(&app, feed.id(), [("status".to_string(), crate::events::Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
-        feed.step(&super::status);
-        let mut signals = app.events.subscribe();
-        signals.mark_unchanged();
-        more.insert(instrument, stated);
-        state(&more);
-        let said = format!("{symbol} in {name}: Wealthsimple states {} units, the book holds {}.", super::exact(stated), super::exact(own));
-        let line = error(&app);
-        assert!(line.contains(&said), "{said:?} in {line:?}");
-        // the open page is sent the header's error
-        assert!(signals.has_changed().unwrap());
-        let sent = serde_json::to_string(&feed.step(&super::status).into_iter().map(|(_, m)| m).collect::<Vec<_>>()).unwrap();
-        assert!(sent.contains(&said), "{sent}");
-        // the broker's next statement agrees: the sentence goes
-        more.insert(instrument, own);
-        state(&more);
-        let line = error(&app);
-        let this = format!("{symbol} in {name}: ");
-        assert!(!line.contains(&this), "{line:?}");
-        // and nothing else changed
-        let rest = |l: &str| l.split(". ").map(|s| s.trim_end_matches('.').to_string()).filter(|s| !s.starts_with(&this)).collect::<Vec<_>>();
-        assert_eq!(rest(&line), rest(&before));
-    }
-
-    /// Where the book's cash differs from what Wealthsimple states, the header says
-    /// nothing: the cash shown is Wealthsimple's (brief 79), and the book's own has
-    /// no reader but the check. Before 2.11.5 it said a sentence for each currency.
-    #[test]
-    fn test_where_the_book_and_the_broker_disagree_on_cash_the_header_says_nothing() {
-        use bagholder_engine::equity::Difference;
-        let (_home, app) = pulled();
-        let f = app.figures.get().unwrap();
-        let before = error(&app);
-        let account = f.read(|e| *e.inputs().market.brokers.keys().next().unwrap()).unwrap();
-        let book = f.book().unwrap();
-        let connection = book.accounts().unwrap().into_iter().find(|a| a.id == account).unwrap().connection;
-        let cash: std::collections::BTreeMap<bagholder_core::Currency, bagholder_core::Dec> = [(bagholder_core::Currency::CAD, bagholder_core::Dec::parse("123456.78").unwrap())].into();
-        // stated at the activity's full read, then confirmed by a later statement
-        let first = Timestamp::now();
-        book.store_cash(account, first, &cash, &book.broker_read(connection, "cash", first).unwrap()).unwrap();
-        book.note_activity_read(account, first, true).unwrap();
-        let later = first.checked_add(bagholder_core::jiff::SignedDuration::from_secs(1)).unwrap();
-        book.store_cash(account, later, &cash, &book.broker_read(connection, "cash", later).unwrap()).unwrap();
-        f.broker_changed(account).unwrap();
-        let differs = f.read(|e| e.figures().checks.iter().any(|c| c.account == account && c.differences.iter().any(|d| matches!(d, Difference::Cash { .. }) && !d.pending()))).unwrap();
-        assert!(differs, "the check finds the cash differing");
-        assert_eq!(error(&app), before, "the header says nothing of it");
-    }
-
-    #[test]
-    fn test_a_sale_of_more_than_the_book_held_is_said_until_the_book_holds_it() {
-        let (_home, app) = pulled();
-        let f = app.figures.get().unwrap();
-        let before = error(&app);
-        let trade = |day: &str, side: &str, quantity: &str| {
-            let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: "ZZQQ".into(), exchange: "NASDAQ".into(), currency: "USD".into(), day: day.into(), side: side.into(), quantity: quantity.into(), price: "2".into(), fee: String::new() };
-            crate::entries::enter(f, &req, Timestamp::now()).unwrap();
-        };
-        trade("2025-11-10", "buy", "1");
-        trade("2025-11-12", "sell", "3");
-        let said = "A sale of ZZQQ in Manual on 2025-11-12 took 2 units more than the book held.";
-        let line = error(&app);
-        assert!(line.contains(said), "{line:?}");
-        // the book is told of the units it sold: the sentence goes
-        trade("2025-11-11", "buy", "2");
-        assert_eq!(error(&app), before);
-    }
-
-    #[test]
-    fn test_figures_are_written_exactly() {
-        use bagholder_core::Dec;
-        let d = |s: &str| Dec::parse(s).unwrap();
-        assert_eq!(super::exact(d("1100000")), "1,100,000");
-        assert_eq!(super::exact(d("0.00000123")), "0.00000123");
-        assert_eq!(super::exact(d("-1234.5")), "\u{2212}1,234.5");
-        assert_eq!(super::units(d("0")), "none");
-        assert_eq!(super::units(d("1")), "1 unit");
-        assert_eq!(super::units(d("100000")), "100,000 units");
-    }
 }
-
-

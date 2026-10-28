@@ -158,8 +158,11 @@ pub fn run(app: Arc<App>) {
             Ok(next) => next,
             Err(e) => {
                 {
+                    // a pass fails whole on this machine (the book, the session file):
+                    // Wealthsimple's own failures are its parts'; told in plain words,
+                    // why in the log alone
                     let mut st = app.state.lock().unwrap();
-                    st.sync_problem.check(Some(format!("Wealthsimple could not be read: {e}")));
+                    st.sync_problem.check(Some(crate::reading::NOT_KEPT.to_string()));
                     st.error = st.sync_problem.said().unwrap_or_default();
                 }
                 log(&format!("bagholder: Wealthsimple could not be read: {e}"));
@@ -348,10 +351,54 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
         let balances = cash.and_then(|t| t.checked_add(BALANCES_EVERY).ok()).unwrap_or(now);
         next = Some(next.map_or(balances, |n| n.min(balances)));
     }
+    // a past day a page shows, or the net worth history needs, whose positions read
+    // is not read yet (brief 79 §2.4): the newest first, one a second, only while a
+    // page shows the holdings (the positions document carries the net worth
+    // history), and never while resting from a failure; a day a sale's units wait
+    // on while any page is open (amended 2026-10-28, point 5)
+    if open && !rest.resting(now) {
+        let watched = app.events.watched("positions");
+        let due = f.read(|e| {
+            let n = e.needs();
+            n.before_sales.last().copied().or_else(|| n.holdings_on.last().copied().filter(|_| watched))
+        });
+        if let Some(day) = due.flatten() {
+            match past_holdings_now(app, f, &book, conn, session_file(app), day, now)? {
+                Read::Lapsed => {
+                    crate::session::note_session_expired(app);
+                    return Ok(None);
+                }
+                Read::Failed => rest.failed(now),
+                Read::Done => {
+                    let soon = now.checked_add(SignedDuration::from_secs(1)).map_err(|e| e.to_string())?;
+                    next = Some(next.map_or(soon, |n| n.min(soon)));
+                }
+            }
+        }
+    }
     if let Some(u) = rest.until.filter(|u| *u > now) {
         next = Some(next.map_or(u, |n| n.max(u)));
     }
     Ok(next)
+}
+
+/// One past day's holdings read for every account in one request, and each
+/// account's past days read again into the figures.
+fn past_holdings_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: SessionFile, day: bagholder_core::jiff::civil::Date, now: Timestamp) -> Result<Read, String> {
+    let mut adapter = Wealthsimple::new(Client::new(&app.net, file));
+    let (stored, read_failures) = bagholder_broker::pull::holdings_as_of(book, &mut adapter, conn, day, now).map_err(|e| e.to_string())?;
+    for a in &stored {
+        f.holdings_read(*a)?;
+    }
+    let (failed, lapsed) = failures(&read_failures);
+    if lapsed {
+        return Ok(Read::Lapsed);
+    }
+    if !failed.is_empty() {
+        log(&format!("bagholder: the holdings as of {day} could not be read: {failed}"));
+        return Ok(Read::Failed);
+    }
+    Ok(Read::Done)
 }
 
 /// What the header says a pull is doing now (`SPEC.md` §4: the header shows the sync step).
@@ -362,8 +409,7 @@ fn step_text(s: &Step) -> String {
         // in whole percents, so a long pull changes the header a hundred times at most
         Step::Recording { done, of } => format!("Saving transactions… {}%", if *of == 0 { 100 } else { done * 100 / of }),
         Step::Balances => "Fetching balances…".into(),
-        Step::Statements => "Fetching statements…".into(),
-        Step::Holdings { account, n, of } => format!("Fetching holdings for {account} ({n} of {of})…"),
+        Step::Holdings => "Fetching holdings…".into(),
         Step::History { account, n, of } => format!("Fetching equity history for {account} ({n} of {of})…"),
     }
 }
@@ -434,14 +480,12 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
     }
     // what was stored is applied whatever else failed
     set_step(app, "Saving…");
-    // the rows and the statements read with them, applied in one write
+    // the rows and what the broker states with them, applied in one write
     let applied = f.pulled(now, &report.stated_for);
     end_steps(app);
     applied?;
-    // a mapping version refused before, tried again with what the broker states now
-    f.retry_refused(now)?;
-    if report.statements.read > 0 || report.statements.booked > 0 {
-        log(&format!("bagholder: statements: {} read, {} movements the activity feed left out booked, {} moves between accounts joined", report.statements.read, report.statements.booked, report.statements.joined));
+    if report.statements_withdrawn > 0 || report.statements_left > 0 {
+        log(&format!("bagholder: what earlier versions booked from the monthly statements: {} records withdrawn, {} left in place of another source's", report.statements_withdrawn, report.statements_left));
     }
     // a file's row the broker's own row now reports is linked to it
     let linking = crate::csv_import::link(f, now)?;
@@ -465,27 +509,21 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
         log(&format!("bagholder: a suspect read of {account}, nothing removed: {why}"));
     }
     let (failed, lapsed) = failures(&report.failures);
-    let suspect = report.suspect.iter().map(|(a, _)| format!("a suspect read of {a}, nothing removed")).collect::<Vec<_>>();
-    let said = [failed.clone()].into_iter().chain(suspect).filter(|s| !s.is_empty()).collect::<Vec<_>>().join("; ");
     if lapsed {
         return Ok(Read::Lapsed);
     }
     // Wealthsimple answered requests signed with the token held
     crate::session::heard(app, crate::session::Heard::Issued);
-    {
-        let mut st = app.state.lock().unwrap();
-        st.last_sync = now.to_string();
-        st.sync_problem.check((!said.is_empty()).then(|| format!("Sync failed: {said}")));
-        st.error = st.sync_problem.said().unwrap_or_default();
+    // the page is told only that Wealthsimple as a whole could not be read; a part
+    // failing is asked again at its next turn and goes to the log (`reading`)
+    let whole = crate::reading::after_pull(&mut app.state.lock().unwrap(), &report.failures, daily, now);
+    if !daily && !failed.is_empty() {
+        log(&format!("bagholder: a pull of the activity: could not be read: {failed}"));
     }
-    if !said.is_empty() {
-        log(&format!("bagholder: sync failed: {said}"));
-    }
+    sync_went(app, whole);
     if failed.is_empty() {
-        sync_went(app, None);
         Ok(Read::Done)
     } else {
-        sync_went(app, Some(&failed));
         Ok(Read::Failed)
     }
 }
@@ -494,7 +532,8 @@ fn pull_now(app: &Arc<App>, f: &Figures, book: &Book, conn: ConnectionId, file: 
 /// Notifications: `Sync failing`, once per run of failures).
 const SYNC_FAILS_TOLD: i64 = 3;
 
-/// A sync ended: a failure counts toward telling, a success starts the count over.
+/// A sync ended: Wealthsimple not read as a whole counts toward telling, in the
+/// page's own plain words; a sync that read it starts the count over.
 pub(crate) fn sync_went(app: &Arc<App>, failed: Option<&str>) {
     let Some(reason) = failed else {
         let mut st = app.state.lock().unwrap();
@@ -523,21 +562,35 @@ fn balances_now(app: &App, f: &Figures, book: &Book, conn: ConnectionId, file: S
     for a in &read.accounts {
         f.broker_changed(*a)?;
     }
+    say_cash_differs(app, book, &read.cash_differs, bagholder_broker::BrokerAdapter::day(&adapter, now))?;
     // the debts held outside, read with the balances
     f.debts_changed()?;
     let (failed, lapsed) = failures(&read.failures);
     if lapsed {
         return Ok((Read::Lapsed, false));
     }
-    let mut st = app.state.lock().unwrap();
-    st.balances_problem.check((!failed.is_empty()).then(|| format!("Balances could not be read: {failed}")));
-    st.portfolio_error = st.balances_problem.said().unwrap_or_default();
+    crate::reading::after_balances(&mut app.state.lock().unwrap(), &read.failures, now);
     if failed.is_empty() {
         Ok((Read::Done, !read.cash_moved.is_empty()))
     } else {
-        log(&format!("bagholder: balances could not be read: {failed}"));
         Ok((Read::Failed, false))
     }
+}
+
+/// Each account whose cash, as the holdings read as of today states it, differs
+/// from what the balances state, said in the log once a day by the account's kind
+/// alone, with no amount and no id (brief 79 §2.1): whether that read states a
+/// fill made the same day is not recorded, and this is how it is learned. Never
+/// said on a page.
+fn say_cash_differs(app: &App, book: &Book, accounts: &[bagholder_core::AccountId], day: bagholder_core::jiff::civil::Date) -> Result<(), String> {
+    for a in accounts {
+        if !app.holdings_cash_said.lock().unwrap().insert((*a, day)) {
+            continue;
+        }
+        let kind = bagholder_core::account::account_name(None, &book.account(*a).map_err(|e| e.to_string())?.account_type);
+        log(&format!("bagholder: holdings as of {day}: a {kind} account's cash differs"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]

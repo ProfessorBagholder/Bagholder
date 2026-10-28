@@ -174,16 +174,15 @@ impl Source for Routed<'_> {
         self.replay.margin_rates(account)
     }
     fn positions(&mut self, account: &str, day: jiff::civil::Date) -> Answer<Value> {
-        if self.op == Op::Positions { self.client.positions(account, day) } else { self.replay.positions(account, day) }
+        // the day's own read asks the network; today's, which every pull asks too,
+        // the capture answers (brief 79 §2.1)
+        if self.op == Op::Positions && day == as_of() { self.client.positions(account, day) } else { self.replay.positions(account, day) }
     }
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {
         if self.op == Op::Balances { self.client.balances(accounts) } else { self.replay.balances(accounts) }
     }
     fn history(&mut self, account: &str, from: Option<jiff::civil::Date>) -> Answer<Vec<Value>> {
         if self.op == Op::History { self.client.history(account, from) } else { self.replay.history(account, from) }
-    }
-    fn statement(&mut self, account: &str, month: jiff::civil::Date, kind: &str) -> Answer<Option<Value>> {
-        self.replay.statement(account, month, kind)
     }
     fn requests(&self) -> usize {
         self.replay.requests() + self.client.requests()
@@ -207,14 +206,39 @@ impl Pulled {
     fn account(&self) -> Option<AccountId> {
         self.book.account_by_ref(&AccountRef::new(Broker::named("wealthsimple"), "anon-tfsa-1")).unwrap()
     }
+    /// What the book states of the account, its units the read of the day the
+    /// network answered (`as_of`), not today's the capture answers beside it.
     fn stated(&self) -> bagholder_book::statements::Stated {
-        self.book.stated(self.account().expect("the account")).unwrap()
+        let account = self.account().expect("the account");
+        let mut s = self.book.stated(account).unwrap();
+        match self.book.units_on(account, as_of()).unwrap() {
+            Some((lines, _)) => {
+                s.units = Some((as_of(), lines.iter().map(|l| (l.instrument, l.quantity)).collect()));
+                s.unit_values = lines.iter().filter_map(|l| l.value.map(|v| (l.instrument, v))).collect();
+                s.unit_books = lines.iter().filter_map(|l| l.book_value.map(|v| (l.instrument, v))).collect();
+            }
+            None => {
+                s.units = None;
+                s.unit_values.clear();
+                s.unit_books.clear();
+            }
+        }
+        s
     }
     fn problems(&self) -> Vec<(String, String)> {
         self.book.problems().unwrap().into_iter().map(|(_, p)| (p.code, p.detail)).collect()
     }
+    /// The pull's failures, each once: the holdings read as of today and as of the
+    /// day before meet the same one twice.
     fn failures(&self) -> Vec<(String, String)> {
-        self.report.failures.iter().map(|(part, f)| (part.clone(), mismatch::<()>(Err(f.clone())))).collect()
+        let mut out: Vec<(String, String)> = Vec::new();
+        for (part, f) in &self.report.failures {
+            let one = (part.clone(), mismatch::<()>(Err(f.clone())));
+            if !out.contains(&one) {
+                out.push(one);
+            }
+        }
+        out
     }
 }
 
@@ -226,7 +250,7 @@ fn pulled(op: Op, bodies: &[String]) -> Pulled {
     let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
     let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
     let f = answering(bodies);
-    let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements(), client: f.client(), op });
+    let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap(), client: f.client(), op });
     let report = pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), now, &mut |_| {}).unwrap();
     drop(ws);
     Pulled { asked: f.asked(), _home: home, book, report }
@@ -442,7 +466,7 @@ fn balances_read_between_syncs_keep_what_each_account_is_worth_now() {
     let connection = p.book.accounts().unwrap()[0].connection;
     let later: jiff::Timestamp = "2025-11-19T20:05:00Z".parse().unwrap();
     let f = answering(&[body("wealthsimple-pull/edited-accounts-one.json").replace("198451.616214", "201007.25")]);
-    let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements(), client: f.client(), op: Op::Accounts });
+    let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap(), client: f.client(), op: Op::Accounts });
     let read = bagholder_broker::pull::balances(&p.book, &mut ws, connection, later).unwrap();
     drop(ws);
     assert!(read.failures.is_empty(), "{:?}", read.failures);
@@ -608,7 +632,7 @@ fn securities_answered_empty_leave_every_row_waiting_on_its_security_and_the_uni
     // each holding no row names is one whose security was not answered
     let failures = p.failures();
     assert_eq!(failures.len(), 19);
-    assert!(failures.iter().all(|(part, why)| part == "units:anon-tfsa-1" && why.contains("is not answered")), "{failures:?}");
+    assert!(failures.iter().all(|(part, why)| part.starts_with("units:sec-") && why.contains("is not answered")), "{failures:?}");
     assert_eq!(p.stated().units, None);
 }
 
@@ -616,7 +640,7 @@ fn securities_answered_empty_leave_every_row_waiting_on_its_security_and_the_uni
 fn securities_with_a_strike_of_another_type_leave_the_contract_out_and_the_units_unstated() {
     let p = pulled(Op::Securities, &[edited("wrong-shape-securities-strike-as-number.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, format!("units:{CONTRACT}"));
     assert!(why.contains(CONTRACT) && why.contains("strikePrice"), "{why}");
     assert_eq!(contract_in(&p), None);
     assert_eq!(p.stated().units, None);
@@ -627,7 +651,7 @@ fn securities_with_a_strike_of_another_type_leave_the_contract_out_and_the_units
 fn securities_with_a_contract_on_no_units_leave_the_contract_out_and_the_units_unstated() {
     let p = pulled(Op::Securities, &[edited("wrong-meaning-securities-multiplier-zero.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, format!("units:{CONTRACT}"));
     assert!(why.contains(CONTRACT) && why.contains("multiplier"), "{why}");
     assert_eq!(contract_in(&p), None);
     assert_eq!(p.stated().units, None);
@@ -968,7 +992,7 @@ fn positions_state_what_each_holding_is_worth_and_one_that_states_none_writes_no
     assert_eq!(s.unit_values.len(), units.len(), "every holding's worth, as Wealthsimple states it");
     let p = pulled(Op::Positions, &[edited("wrong-shape-positions-without-value.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, "holdings");
     assert!(why.contains("totalValue"), "{why}");
     assert_eq!(p.stated().units, None);
 }
@@ -991,7 +1015,7 @@ fn positions_state_each_holding_s_book_value_and_one_that_states_none_writes_no_
     strip_key(&mut v, "bookValue");
     let p = pulled(Op::Positions, &[v.canonical()]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, "holdings");
     assert!(why.contains("bookValue"), "{why}");
     assert_eq!(p.stated().units, None);
 }
@@ -1019,7 +1043,7 @@ fn positions_answered_empty_write_that_nothing_is_held() {
 fn positions_with_a_quantity_of_another_type_write_no_units() {
     let p = pulled(Op::Positions, &[edited("wrong-shape-positions-quantity-as-number.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, "holdings");
     assert!(why.contains("quantity"), "{why}");
     assert_eq!(p.stated().units, None);
 }
@@ -1028,7 +1052,7 @@ fn positions_with_a_quantity_of_another_type_write_no_units() {
 fn positions_with_a_long_of_negative_units_write_no_units() {
     let p = pulled(Op::Positions, &[edited("wrong-meaning-positions-long-negative.json")]);
     let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "units:anon-tfsa-1");
+    assert_eq!(part, "holdings");
     assert!(why.contains("quantity") && why.contains("-13000") && why.contains("LONG"), "{why}");
     assert_eq!(p.stated().units, None);
 }
@@ -1135,7 +1159,7 @@ fn balances_read_between_syncs_name_an_account_whose_cash_moved_since_its_activi
     let connection = p.book.accounts().unwrap()[0].connection;
     let read_at = |later: &str, answer: String| {
         let f = answering(&[answer]);
-        let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements(), client: f.client(), op: Op::Balances });
+        let mut ws = Wealthsimple::new(Routed { replay: Replay::read(&replies("wealthsimple-pull")).unwrap(), client: f.client(), op: Op::Balances });
         bagholder_broker::pull::balances(&p.book, &mut ws, connection, later.parse().unwrap()).unwrap()
     };
     let same = read_at("2025-11-19T20:05:00Z", body("wealthsimple-pull/edited-balances.json"));
@@ -1155,7 +1179,7 @@ fn a_pull_of_the_activity_alone_reads_no_holdings_or_history_and_leaves_the_days
         let home = tempfile::tempdir().unwrap();
         let (book, _) = Book::open_in(home.path(), "test", now).unwrap();
         let connection = book.add_connection(&Broker::named("wealthsimple"), "Wealthsimple", now).unwrap();
-        let mut ws = Wealthsimple::new(Replay::read(&replies("wealthsimple-pull")).unwrap().taken_before_statements());
+        let mut ws = Wealthsimple::new(Replay::read(&replies("wealthsimple-pull")).unwrap());
         let report = if whole {
             pull(&book, &mut ws, connection, "2025-11-19".parse().unwrap(), now, &mut |_| {}).unwrap()
         } else {

@@ -46,9 +46,12 @@ export type Trade = figures.Trade & {
   avg?: Fig<Dec>
   mv?: Fig<Dec>
   cost?: Fig<Dec>
+  /** A holding's: the currency of its cost, average and unrealized, the one Wealthsimple states its book value in. */
+  bookCurrency?: string
   last?: Fig<Dec> | null
   percentChange?: number | null
-  held?: Fig<number>
+  /** A holding's days held, none where the journal holds no lot of it. */
+  held?: Fig<number> | null
 }
 
 /**
