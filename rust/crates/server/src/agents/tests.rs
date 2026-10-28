@@ -1387,6 +1387,37 @@ fn each_described_route_answers_with_its_described_arguments() {
     assert_eq!(one.json()["trade"]["id"], first);
     let pos = h.ask("GET", "/api/agents/positions", &[("authorization", &auth)], vec![]);
     assert_eq!(pos.status, StatusCode::OK, "{}", pos.text());
+    // every route the description lists, described with every argument it takes and
+    // called with every parameter it lists, each a value of its own schema (brief
+    // 80's re-review, 9)
+    let described = api::description(&format!("https://{HOST}"));
+    for (path, _, _, schema) in api::routes() {
+        let params = described["paths"][path]["get"]["parameters"].as_array().unwrap().clone();
+        let named: Vec<&str> = params.iter().map(|p| p["name"].as_str().unwrap()).collect();
+        let takes: Vec<&str> = schema["properties"].as_object().map(|o| o.keys().map(String::as_str).collect()).unwrap_or_default();
+        assert_eq!(named, takes, "{path} describes every argument it takes");
+        let value = |p: &Value| -> String {
+            let name = p["name"].as_str().unwrap();
+            let types = &p["schema"]["type"];
+            let is = |t: &str| types == t || types.as_array().is_some_and(|a| a.contains(&json!(t)));
+            if p["content"].is_object() {
+                "%7B%7D".into()
+            } else if name == "id" {
+                first.clone()
+            } else if is("integer") {
+                "2".into()
+            } else {
+                match name {
+                    "sort" => "activity".into(),
+                    "dir" => "desc".into(),
+                    other => panic!("{path}: no value made for {other}"),
+                }
+            }
+        };
+        let query: Vec<String> = params.iter().map(|p| format!("{}={}", p["name"].as_str().unwrap(), value(p))).collect();
+        let called = h.ask("GET", &format!("{path}?{}", query.join("&")), &[("authorization", &auth)], vec![]);
+        assert_eq!(called.status, StatusCode::OK, "{path}?{}: {}", query.join("&"), called.text());
+    }
     // as the stdio tools answer
     let page = crate::agents::tools::trades_page(&crate::mcp::ReadOnly::own(&format!("http://127.0.0.1:{}", served.port)), crate::agents::tools::TradesArgs { size: Some(3), ..Default::default() }).unwrap();
     let mut via_api = trades.json();
