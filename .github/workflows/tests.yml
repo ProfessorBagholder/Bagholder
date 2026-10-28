@@ -228,7 +228,9 @@ jobs:
 
   # Known vulnerabilities in what the build depends on: an advisory fails the job
   # (cargo audit's own exit status); an unmaintained or yanked crate is printed and
-  # does not, as the project cannot always act on one. npm audit fails at any severity.
+  # does not, as the project cannot always act on one. npm audit fails at any severity
+  # on an advisory web/audit.toml does not list (each listed with why it cannot be
+  # reached and when it leaves), and on a listed one it no longer reports.
   audit:
     runs-on: ubuntu-latest
     steps:
@@ -239,8 +241,12 @@ jobs:
           cargo install cargo-audit --locked --version 0.22.2
           cargo audit
         working-directory: rust
-      - name: npm audit
-        run: npm audit
+      - name: npm audit, against the advisories it lets pass
+        run: |
+          node --test ../bin/npm-audit.test.mjs
+          # npm audit exits 1 whenever it reports anything: the list decides
+          npm audit --json > "$RUNNER_TEMP/npm-audit.json" || true
+          node ../bin/npm-audit.mjs "$RUNNER_TEMP/npm-audit.json" audit.toml
         working-directory: web
       # an action by a tag can change under the same name; by its commit it cannot
       # (GitHub, "Security hardening for GitHub Actions")
