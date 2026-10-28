@@ -117,6 +117,11 @@ allowed: Array<Connected>,
  */
 refused: Array<RefusedCount>, 
 /**
+ * Whether sign-in is paused: codes were typed wrong too often, on any request,
+ * and no code is taken until the person resumes it (brief 81 §2).
+ */
+codesPaused: boolean, 
+/**
  * What could not be read, in words.
  */
 error: string, };

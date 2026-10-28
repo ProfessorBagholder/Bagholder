@@ -1,11 +1,8 @@
 //! The secrets of the agents' address (`docs/plans/agents-from-anywhere.md`, §5):
 //! each token and key is 32 random bytes, kept only as its SHA-256 and compared
-//! on the hashes in constant time; a request's id is 128 random bits; the code
-//! shown on both pages is six letters with no lookalikes.
-
-/// The letters a code is made of: no two a person could read as each other
-/// (no B/8, I/1/L, O/0, S/5, Z/2).
-const LETTERS: &[u8] = b"ACDEFGHJKMNPQRTUVWXY";
+//! on the hashes in constant time; a request's id is 128 random bits; the code the
+//! person types on the sign-in page is six digits, held by its bounds
+//! (`oauth::enter_code`; brief 81 §2).
 
 fn random(n: usize) -> Vec<u8> {
     let mut b = vec![0u8; n];
@@ -39,16 +36,15 @@ pub fn request_id() -> String {
     random(16).iter().map(|b| format!("{b:02x}")).collect()
 }
 
-/// The six letters shown on both pages.
+/// The six digits shown in the person's panel alone, typed on the sign-in page.
 pub fn code() -> String {
-    // each byte taken only below the largest multiple of the alphabet's size, so
-    // every letter is as likely as any other
-    let limit = 256 - 256 % LETTERS.len();
+    // each byte taken only below the largest multiple of ten, so every digit is
+    // as likely as any other
     let mut out = String::new();
     while out.len() < 6 {
         for b in random(12) {
-            if (b as usize) < limit && out.len() < 6 {
-                out.push(LETTERS[b as usize % LETTERS.len()] as char);
+            if b < 250 && out.len() < 6 {
+                out.push(char::from(b'0' + b % 10));
             }
         }
     }
@@ -82,12 +78,18 @@ mod tests {
     }
 
     #[test]
-    fn a_code_is_six_letters_with_no_lookalikes() {
-        for _ in 0..200 {
+    fn a_code_is_six_digits_each_as_likely_as_any_other() {
+        let mut seen = [0u32; 10];
+        for _ in 0..2000 {
             let c = code();
             assert_eq!(c.len(), 6);
-            assert!(c.bytes().all(|b| LETTERS.contains(&b)), "{c}");
+            assert!(c.bytes().all(|b| b.is_ascii_digit()), "{c}");
+            for b in c.bytes() {
+                seen[(b - b'0') as usize] += 1;
+            }
         }
+        // 12,000 digits, 1,200 each expected: every digit within a wide band of it
+        assert!(seen.iter().all(|n| (900..1500).contains(n)), "{seen:?}");
         assert_eq!(request_id().len(), 32);
         assert_ne!(secret("x_"), secret("x_"));
     }

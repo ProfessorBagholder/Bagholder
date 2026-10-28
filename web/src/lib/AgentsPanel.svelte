@@ -107,7 +107,11 @@
   }
   const stop = () => act('stop', () => call('POST /api/agents/tunnel/stop'))
   const check = () => act('check', () => call('POST /api/agents/check'))
-  const answer = (id: string, allow: boolean) => act(id, () => call(allow ? 'POST /api/agents/requests/allow' : 'POST /api/agents/requests/deny', { body: { id } }))
+  /** a sign-in the person did not start, ended: one they did start is allowed by typing its code on its page */
+  const deny = (id: string) => act(id, () => call('POST /api/agents/requests/deny', { body: { id } }))
+  const resume = () => act('resume', () => call('POST /api/agents/codes/resume'))
+  /** six digits, as they are read aloud: two groups of three */
+  const grouped = (c: string) => c.slice(0, 3) + ' ' + c.slice(3)
   const cutOff = (id: string) => act(id, () => call('POST /api/agents/cut-off', { body: { id } }))
   async function makeKey(n: string, way: 'mcp' | 'api'): Promise<MadeKey | null> {
     busy = 'key'
@@ -175,13 +179,22 @@
     {#if error}<div class="status-err" style="font-size:12px;margin-top:10px">{error}</div>{/if}
     {#if st?.error}<div class="status-err" style="font-size:12px;margin-top:10px">{st.error}</div>{/if}
 
+    {#if st?.codesPaused}
+      <div class="card agent-paused" style="margin-top:14px;padding:12px 14px;border:1px solid var(--neg)">
+        <div style="font-size:12.5px">Sign-in is paused: codes were typed wrong on the sign-in page several times. If that wasn't you, someone else reached your address.</div>
+        <div style="display:flex;justify-content:flex-end;margin-top:10px">
+          <button class="btn btn-secondary" disabled={busy === 'resume'} onclick={resume}>Resume sign-in</button>
+        </div>
+      </div>
+    {/if}
     {#each st?.waiting ?? [] as w (w.id)}
       <div class="card agent-ask" style="margin-top:14px;padding:12px 14px;border:1px solid var(--accent)">
-        <div style="font-size:12.5px"><b>{w.who}</b>{#if w.name}{' '}<span class="muted">({w.checked ? w.name : '“' + w.name + '”, name given by the agent, not checked'})</span>{/if}{' '}is asking to read your trade history. It sends you back to <b>{w.redirectHost}</b>.</div>
-        <div style="font-size:12.5px;margin-top:6px">Allow only if you just started connecting this agent, and its page shows code <b style="font-family:ui-monospace,monospace;letter-spacing:.15em">{w.code}</b>.</div>
-        <div style="display:flex;gap:8px;justify-content:flex-end;margin-top:10px">
-          <button class="btn btn-secondary" disabled={busy === w.id} onclick={() => answer(w.id, false)}>Deny</button>
-          <button class="btn btn-primary" disabled={busy === w.id} onclick={() => answer(w.id, true)}>Allow</button>
+        <div style="font-size:12.5px"><b>{w.who}</b>{#if w.name}{' '}<span class="muted">({w.checked ? w.name : 'calls itself “' + w.name + '”: a name it gave, not checked'})</span>{/if}{' '}is signing in to read your trade history.</div>
+        <div style="font-size:12.5px;margin-top:8px">Type this code on its sign-in page:</div>
+        <div style="font:600 26px ui-monospace,monospace;letter-spacing:.15em;margin-top:4px">{grouped(w.code)}</div>
+        <div style="display:flex;gap:8px;align-items:center;margin-top:8px">
+          <span class="muted" style="font-size:11.5px">Not you? End it, and the agent is refused.</span>
+          <button class="btn btn-secondary" style="margin-left:auto" disabled={busy === w.id} onclick={() => deny(w.id)}>End it</button>
         </div>
       </div>
     {/each}
@@ -274,8 +287,7 @@
         <div style="padding:8px 0;border-top:1px solid rgba(var(--ink-rgb),.08)">
           <div style="display:flex;gap:10px;align-items:center;font-size:12.5px">
             <button style="background:none;border:0;padding:0;font:inherit;color:inherit;cursor:pointer;text-align:left;min-width:0" onclick={() => openLog(c.id)}><span style="font-weight:500">{c.name}</span> <span class="muted">· {way(c.way)}{c.who ? ' · ' + c.who : ''} · made {relTime(c.madeAt)}{c.lastUsedAt ? ' · last read ' + relTime(c.lastUsedAt) : ' · no reads yet'}</span></button>
-            {#if c.cutOffAt}<span class="muted" style="margin-left:auto;font-size:11.5px">Cut off</span>
-            {:else}<button class="btn btn-secondary" style="margin-left:auto;color:var(--neg)" disabled={busy === c.id} onclick={() => cutOff(c.id)}>Cut off</button>{/if}
+            <button class="btn btn-secondary" style="margin-left:auto;color:var(--neg)" disabled={busy === c.id} onclick={() => cutOff(c.id)}>Remove</button>
           </div>
           {#if logOf === c.id}
             <div class="scroll" style="max-height:160px;margin-top:6px;font-size:11.5px">

@@ -6,8 +6,9 @@
 //! tokens rotated on every use (RFC 9700 §4.14.2).
 //!
 //! Nothing reachable here grants anything by itself. The public page shows who is
-//! asking and a code, and waits; the person allows it on their own page, on the
-//! main listener (`approve`). Only then does the agent's page get its code.
+//! asking and asks for the code Bagholder shows the person on their own page, on
+//! the main listener (`approve`); typed right, the agent's page gets its code. The
+//! code's bounds are what make that safe (`enter_code`; brief 81 §2).
 
 use std::sync::Arc;
 
@@ -105,16 +106,52 @@ pub fn access(ctx: &Ctx, token: Option<&str>) -> Result<String, Response> {
 
 // ---- redirect URIs and clients ----
 
-/// A redirect URI an agent may be sent back to: https, to a public name or address,
-/// never this machine (brief 73, 3: a cloud agent never redirects here, and a local
-/// one uses stdio). Its host is a DNS name of letters, digits and hyphens with a dot
-/// and a last label a browser does not read as a number (the WHATWG URL standard's
-/// "ends in a number": all digits, or `0x` followed by hex digits or by nothing;
-/// `fetch::dns_name`), or a public IP address written as it is canonically: every
-/// other spelling (a number, `127.1`, `0x7f.1`, `127.0x`, a trailing dot, a percent
-/// escape, a backslash a browser ends the host at) is refused, as a browser may
-/// read it as this machine.
+/// A desktop app's loopback redirect (RFC 8252 §7.3; the MCP specification's
+/// "All redirect URIs MUST be either localhost or use HTTPS"; brief 81 §1):
+/// `http://localhost`, `http://127.0.0.1` or `http://[::1]`, written exactly so,
+/// with any port, then a path. Every other spelling of this machine (a name under
+/// `localhost`, another address, a number form, a trailing dot, a percent escape,
+/// a backslash, a user part) is none. Its host, and the URI without its port, which
+/// is what an exact match compares (the port may vary, §7.3).
+pub fn loopback(uri: &str) -> Option<(&'static str, String)> {
+    let rest = uri.strip_prefix("http://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    if uri.contains('#') || uri.contains('\\') || authority.contains('@') || authority.contains('%') {
+        return None;
+    }
+    let (host, port) = [("[::1]", "[::1]"), ("localhost", "localhost"), ("127.0.0.1", "127.0.0.1")].into_iter().find_map(|(name, h)| authority.strip_prefix(name).map(|p| (h, p)))?;
+    match port.strip_prefix(':') {
+        None if port.is_empty() => {}
+        Some(p) if (1..=5).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u16>().is_ok_and(|n| n > 0) => {}
+        _ => return None,
+    }
+    Some((host, format!("http://{host}{tail}")))
+}
+
+/// Whether `asked` is the registered `uri`: exactly, character for character, or,
+/// both loopback, the same but for the port (RFC 8252 §7.3).
+pub fn same_redirect(uri: &str, asked: &str) -> bool {
+    uri == asked || matches!((loopback(uri), loopback(asked)), (Some((_, a)), Some((_, b))) if a == b)
+}
+
+/// The host a redirect sends the person back to, as both pages show it.
+pub fn redirect_shown(uri: &str) -> String {
+    loopback(uri).map(|(h, _)| h.to_string()).or_else(|| fetch::https_host(uri).ok().map(|h| h.0)).unwrap_or_else(|| uri.to_string())
+}
+
+/// A redirect URI an agent may be sent back to: a desktop app's loopback
+/// (`loopback`), or https to a public name or address. That host is a DNS name of
+/// letters, digits and hyphens with a dot and a last label a browser does not read
+/// as a number (the WHATWG URL standard's "ends in a number": all digits, or `0x`
+/// followed by hex digits or by nothing; `fetch::dns_name`), or a public IP address
+/// written as it is canonically: every other spelling (a number, `127.1`, `0x7f.1`,
+/// `127.0x`, a trailing dot, a percent escape, a backslash a browser ends the host
+/// at) is refused, as a browser may read it as this machine.
 pub fn redirect_ok(uri: &str) -> Result<(), String> {
+    if loopback(uri).is_some() {
+        return Ok(());
+    }
     let (host, _) = fetch::https_host(uri)?;
     if uri.contains('#') {
         return Err(format!("{uri} carries a fragment"));
@@ -177,6 +214,9 @@ pub async fn register(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> R
     .await
 }
 
+/// Who a client is, shown, whose redirect is this computer's loopback.
+pub const LOCAL_APP: &str = "An app on your computer";
+
 /// Who is asking, as both pages show it (brief 73, 4).
 struct Asking {
     client: Client,
@@ -203,12 +243,20 @@ fn asking(ctx: &Ctx, client_id: &str, redirect_uri: &str) -> Result<Asking, Stri
     } else {
         store.client(client_id).map_err(|e| e.to_string())?.filter(|c| !c.metadata).ok_or_else(|| format!("no client {client_id} is registered here"))?
     };
-    // exactly, character for character: no prefix, no pattern
-    if !client.redirect_uris.iter().any(|u| u == redirect_uri) {
+    // exactly, character for character, but a loopback's port: no prefix, no pattern
+    if !client.redirect_uris.iter().any(|u| same_redirect(u, redirect_uri)) {
         return Err(format!("{redirect_uri} is not a redirect URI of this client"));
     }
-    let redirect_host = fetch::https_host(redirect_uri)?.0;
-    let who = if client.metadata { fetch::https_host(client_id)?.0 } else { redirect_host.clone() };
+    let redirect_host = redirect_shown(redirect_uri);
+    // an app on the person's own computer names itself, unchecked: any app can
+    // claim any name (the specification's "Localhost Redirect URI Risks")
+    let who = if client.metadata {
+        fetch::https_host(client_id)?.0
+    } else if loopback(redirect_uri).is_some() {
+        LOCAL_APP.to_string()
+    } else {
+        redirect_host.clone()
+    };
     Ok(Asking { client, who, redirect_host })
 }
 
@@ -284,33 +332,52 @@ pub async fn authorize(State(ctx): State<Arc<Ctx>>, Query(q): Query<AuthorizeQue
             }
             Err(e) => return unavailable(e),
         }
-        let mut r = Html(waiting_page(&asking, &code, &id)).into_response();
+        let mut r = Html(waiting_page(&asking, &id)).into_response();
         page_headers(r.headers_mut());
         r
     })
     .await
 }
 
-fn waiting_page(a: &Asking, code: &str, id: &str) -> String {
+fn waiting_page(a: &Asking, id: &str) -> String {
+    // a name the agent gave itself is said to be so: any app can claim any name
     let name = if a.client.metadata {
-        if a.client.name.is_empty() { String::new() } else { format!(" <span style='opacity:.7'>({})</span>", escape(&a.client.name)) }
+        if a.client.name.is_empty() { String::new() } else { format!(" <span class=dim>({})</span>", escape(&a.client.name)) }
     } else {
-        format!(" <span style='opacity:.7'>(“{}”, name given by the agent, not checked)</span>", escape(&a.client.name))
+        format!(" <span class=dim>(calls itself “{}”: a name it gave, not checked)</span>", escape(&a.client.name))
     };
     #[expect(clippy::disallowed_methods, reason = "a string always serializes")]
     let id_json = serde_json::to_string(id).unwrap_or_default();
     format!(
         "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title>\
-<body style='font:16px system-ui;margin:40px auto;max-width:520px;padding:0 16px'>\
-<h1 style='font-size:20px'>Approve this in Bagholder on your computer</h1>\
-<p><b>{who}</b>{name} is asking to read your trade history. It sends you back to <b>{back}</b>.</p>\
-<p>Its code is</p><p style='font:600 32px ui-monospace,monospace;letter-spacing:.2em'>{code}</p>\
-<p id=s style='opacity:.7'>Waiting for your answer in Bagholder…</p>\
-<script>(function(){{var id={id};function ask(){{fetch('/oauth/authorize/status?request='+id).then(function(r){{return r.json()}}).then(function(j){{if(j.redirect){{location.replace(j.redirect)}}else if(j.state==='waiting'){{setTimeout(ask,2000)}}else{{document.getElementById('s').textContent='This sign-in has ended. Start again from your agent.'}}}}).catch(function(){{setTimeout(ask,4000)}})}}ask()}})()</script>",
+<style>:root{{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#14161c;--dim:#5b6270;--line:#d9dde4;--accent:#1f8f5f;--on:#fff;--err:#b4232a}}\
+@media (prefers-color-scheme:dark){{:root{{--bg:#0f1117;--card:#171a22;--ink:#e6e8ee;--dim:#9aa1ad;--line:#2a2f3a;--accent:#5fd39a;--on:#0f1117;--err:#f08a8a}}}}\
+body{{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}}\
+main{{max-width:440px;margin:48px auto;padding:28px;background:var(--card);border:1px solid var(--line);border-radius:12px}}\
+.dim{{color:var(--dim)}}h1{{font-size:20px;margin:6px 0 10px}}label{{display:block;font-size:14px;margin:18px 0 6px}}\
+input{{box-sizing:border-box;width:100%;padding:12px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 24px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.25em}}\
+button{{margin-top:14px;width:100%;padding:12px;border:0;border-radius:8px;background:var(--accent);color:var(--on);font:600 15px system-ui,sans-serif;cursor:pointer}}\
+button:disabled{{opacity:.5;cursor:default}}#s{{min-height:24px;margin:12px 0 0;font-size:14px}}.err{{color:var(--err)}}</style>\
+<main><div class=dim style='font-size:13px'>Bagholder</div>\
+<h1>Allow this agent to read your trade history?</h1>\
+<p><b>{who}</b>{name} is asking. It can only read: your trades, holdings, lists and executions. It sends you back to <b>{back}</b>.</p>\
+<form id=f><label for=c>The code Bagholder shows on your computer</label>\
+<input id=c inputmode=numeric autocomplete=one-time-code maxlength=7 placeholder='000 000' autofocus>\
+<button id=b>Allow</button></form><p id=s class=dim></p></main>\
+<script>(function(){{var id={id},s=document.getElementById('s'),b=document.getElementById('b'),c=document.getElementById('c');\
+function say(t,e){{s.textContent=t;s.className=e?'err':'dim'}}\
+function over(t){{say(t,true);b.disabled=true;c.disabled=true}}\
+function ask(){{fetch('/oauth/authorize/status?request='+id).then(function(r){{return r.json()}}).then(function(j){{if(j.redirect){{location.replace(j.redirect)}}else if(j.state==='waiting'){{setTimeout(ask,2000)}}else{{over('This sign-in has ended. Start again from your agent.')}}}}).catch(function(){{setTimeout(ask,4000)}})}}\
+document.getElementById('f').addEventListener('submit',function(e){{e.preventDefault();var v=c.value.replace(/\\D/g,'');if(v.length!==6){{say('The code is six digits.',true);return}}b.disabled=true;say('Checking…');\
+fetch('/oauth/authorize/code',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({{request:id,code:v}})}}).then(function(r){{return r.json()}}).then(function(j){{\
+if(j.state==='allowed'){{say('Allowed. Taking you back to your agent…');ask()}}\
+else if(j.state==='wrong'){{b.disabled=false;c.value='';say(j.left===1?'That code doesn\\u2019t match. One try left.':'That code doesn\\u2019t match. '+j.left+' tries left.',true)}}\
+else if(j.state==='paused'){{over('Sign-in is paused because codes were entered wrong. Resume it in Bagholder on your computer, then start again from your agent.')}}\
+else{{over('This sign-in has ended. Start again from your agent.')}}}}).catch(function(){{b.disabled=false;say('Bagholder didn\\u2019t answer. Try again.',true)}})}});\
+ask()}})()</script>",
         who = escape(&a.who),
         back = escape(&a.redirect_host),
         name = name,
-        code = escape(code),
         id = id_json,
     )
 }
@@ -382,6 +449,78 @@ pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -
                 }
             }
         }
+    })
+    .await
+}
+
+#[derive(Deserialize)]
+pub struct Entered {
+    request: Option<String>,
+    code: Option<String>,
+}
+
+/// `/oauth/authorize/code`: the code the person typed on the sign-in page (brief
+/// 81 §2), counted against the allowance before sign-in as every call here is.
+/// The code is shown only in the person's own panel, on the page's listener, which
+/// no tunnel reaches. Typed right, the request is allowed, and the page's next poll
+/// takes the agent back with its code. Its bounds: a request ends after
+/// `CODE_TRIES` wrong entries; after `WRONG_CODES_PAUSE` wrong entries in all, on
+/// every request, no code is taken until the person resumes sign-in in their
+/// panel. A stranger who reaches the address therefore gets at most
+/// `WRONG_CODES_PAUSE` guesses at six digits before the person sees it: 5 in a
+/// million. A code also ends with its request, `REQUEST_LIFE` after it was shown.
+pub async fn enter_code(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Response {
+    blocking(move || {
+        let state = |s: &str| axum::Json(json!({ "state": s })).into_response();
+        let entered: Entered = serde_json::from_slice(&body).unwrap_or(Entered { request: None, code: None });
+        let Some(id) = entered.request.filter(|i| i.len() == 32 && i.bytes().all(|b| b.is_ascii_hexdigit())) else { return state("ended") };
+        let code = entered.code.unwrap_or_default();
+        let now = ctx.now();
+        let store = match ctx.store() {
+            Ok(s) => s,
+            Err(e) => return unavailable(e),
+        };
+        match super::wrong_codes(&store) {
+            Ok(n) if n >= super::WRONG_CODES_PAUSE => return state("paused"),
+            Ok(_) => {}
+            Err(e) => return unavailable(e),
+        }
+        let r = match store.request(&id) {
+            Ok(Some(r)) if r.answer.is_none() && !ended(&r, now) => r,
+            Ok(_) => return state("ended"),
+            Err(e) => return unavailable(e),
+        };
+        if secret::same(code.as_bytes(), r.code.as_bytes()) {
+            ctx.tries.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            return match super::approve::answer(&store, &id, true, now) {
+                Ok(()) => state("allowed"),
+                Err(e) => unavailable(e),
+            };
+        }
+        let wrong = match super::wrong_codes(&store).and_then(|n| {
+            store.set_setting(super::WRONG_CODES, Some(&(n + 1).to_string()), now).map_err(|e| e.to_string())?;
+            Ok(n + 1)
+        }) {
+            Ok(n) => n,
+            Err(e) => return unavailable(e),
+        };
+        let tries = {
+            let mut t = ctx.tries.lock().unwrap_or_else(|e| e.into_inner());
+            let n = t.entry(id.clone()).or_insert(0);
+            *n += 1;
+            *n
+        };
+        if tries >= super::CODE_TRIES {
+            ctx.tries.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
+            if let Err(e) = super::approve::answer(&store, &id, false, now) {
+                return unavailable(e);
+            }
+            return state(if wrong >= super::WRONG_CODES_PAUSE { "paused" } else { "ended" });
+        }
+        if wrong >= super::WRONG_CODES_PAUSE {
+            return state("paused");
+        }
+        axum::Json(json!({ "state": "wrong", "left": super::CODE_TRIES - tries })).into_response()
     })
     .await
 }

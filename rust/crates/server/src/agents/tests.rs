@@ -78,6 +78,7 @@ fn harness_with(outside: Outside, read: Arc<dyn Fn() -> Result<crate::mcp::ReadO
         limits: Default::default(),
         check: Default::default(),
         one_check: Default::default(),
+        tries: Default::default(),
     };
     let rt = tokio::runtime::Builder::new_multi_thread().worker_threads(2).enable_all().build().unwrap();
     let ctx = Arc::new(ctx);
@@ -182,6 +183,11 @@ impl Harness {
         let id = text.split("var id=\"").nth(1).and_then(|r| r.split('"').next()).expect("the request's id").to_string();
         let code = self.store().waiting(bagholder_core::jiff::Timestamp::MIN).unwrap().into_iter().find(|r| r.id == id).expect("a waiting request").code;
         (id, code)
+    }
+
+    /// The code typed on the sign-in page of request `id`: what the page is told.
+    fn enter(&self, id: &str, code: &str) -> Value {
+        self.ask("POST", "/oauth/authorize/code", &[("content-type", "application/json")], json!({ "request": id, "code": code }).to_string().into_bytes()).json()
     }
 
     /// The whole sign-in, allowed on the computer: the tokens, and the grant.
@@ -577,7 +583,7 @@ fn the_public_page_alone_grants_nothing() {
 fn allow_and_deny_are_unreachable_through_the_agents_listener() {
     let h = harness();
     let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
-    for p in ["/api/agents/requests/allow", "/api/agents/requests/deny", "/api/agents/keys", "/api/agents/cut-off", "/api/agents/switch"] {
+    for p in ["/api/agents/requests/deny", "/api/agents/codes/resume", "/api/agents/keys", "/api/agents/cut-off", "/api/agents/switch"] {
         assert_eq!(h.ask("POST", p, &[("content-type", "application/json")], json!({ "id": id }).to_string().into_bytes()).status, StatusCode::NOT_FOUND, "{p}");
         assert!(crate::http::route_table().iter().any(|e| e.path == p && e.method == "post"), "{p} is the page's");
     }
@@ -716,14 +722,16 @@ fn a_redirect_not_exactly_registered_is_refused_never_redirected() {
     assert_eq!(h.authorize(&client, "https://agent.example/cb", &[]).status, StatusCode::OK);
 }
 
-/// A redirect to this machine, or to a host a browser may read as it, is refused at
-/// registration and at authorization (brief 73, 3; brief 80 §3.1). The metadata
+/// A redirect to this machine in any spelling but a desktop app's loopback, or to a
+/// host a browser may read as this machine, is refused at registration and at
+/// authorization (brief 80 §3.1; brief 81 §1). The metadata
 /// document lists every one of them, so authorization reaches the redirect check
 /// itself rather than the exact match (brief 80 §3.2).
 #[test]
 fn a_redirect_that_is_not_a_public_host_is_refused_everywhere() {
     let refused = [
-        "http://localhost/cb", "http://localhost:33418/cb", "http://foo.localhost/cb", "http://127.0.0.2/cb", "http://[::1]/cb",
+        "http://foo.localhost/cb", "http://127.0.0.2/cb", "http://127.1/cb", "http://LOCALHOST/cb", "http://localhost./cb", "http://localhost:0/cb",
+        "http://localhost:99999/cb", "http://user@localhost/cb", "http://%6Cocalhost/cb", "http://localhost/cb#x", "http://[0:0:0:0:0:0:0:1]/cb",
         "https://localhost/cb", "https://127.0.0.1/cb", "https://[::1]/cb", "https://app.localhost/cb",
         "https://2130706433/cb", "https://127.1/cb", "https://0x7f.1/cb", "https://localhost./cb", "https://0.0.0.0/cb",
         "https://0x7f.0x1/cb", "https://0x7f.0.0.0x1/cb", "https://0X7F.0X1/cb", "https://127.0x/cb",
@@ -776,6 +784,73 @@ fn a_metadata_document_on_a_private_address_is_never_fetched() {
     assert!(docs.asked.lock().unwrap().is_empty(), "nothing fetched");
 }
 
+/// A desktop app's loopback redirect is taken, as RFC 8252 §7.3 and the MCP
+/// specification have it: `localhost`, `127.0.0.1` or `[::1]` written so, with any
+/// port, matched exactly but for the port; the app is named as it named itself,
+/// unchecked (brief 81 §1).
+#[test]
+fn a_desktop_app_s_loopback_redirect_is_taken_and_matched_but_for_its_port() {
+    for ok in ["http://localhost/callback", "http://localhost:33418/callback", "http://127.0.0.1:51004/cb?x=1", "http://[::1]:8080/cb", "http://localhost"] {
+        assert!(oauth::redirect_ok(ok).is_ok(), "{ok}");
+    }
+    assert!(oauth::same_redirect("http://127.0.0.1:43210/callback", "http://127.0.0.1:51123/callback"));
+    assert!(!oauth::same_redirect("http://127.0.0.1:43210/callback", "http://127.0.0.1:43210/other"));
+    assert!(!oauth::same_redirect("http://127.0.0.1/callback", "http://localhost/callback"), "another host");
+    assert!(!oauth::same_redirect("https://agent.example/cb", "https://agent.example:8443/cb"), "an https redirect's port is exact");
+    let h = harness();
+    let client = h.register("http://127.0.0.1:43210/callback").json()["client_id"].as_str().unwrap().to_string();
+    let page = h.authorize(&client, "http://127.0.0.1:51123/callback", &[]).text();
+    assert!(page.contains(oauth::LOCAL_APP) && page.contains("calls itself “Totally Claude”: a name it gave, not checked"), "{page}");
+    assert_eq!(h.authorize(&client, "http://127.0.0.1:51123/elsewhere", &[]).status, StatusCode::BAD_REQUEST, "another path");
+}
+
+/// A desktop app signs in end to end (brief 81 §1): registered with a loopback
+/// redirect, sent to the sign-in page, the code the panel shows typed there, sent
+/// back to its loopback with a code, the code exchanged with its verifier, and an
+/// MCP read made with the token.
+#[test]
+fn a_desktop_app_signs_in_end_to_end_with_the_typed_code() {
+    let h = harness();
+    let client = h.register("http://127.0.0.1:43210/callback").json()["client_id"].as_str().unwrap().to_string();
+    let (id, code) = h.waiting(&h.authorize(&client, "http://127.0.0.1:51123/callback", &[]));
+    let typed = h.enter(&id, &code);
+    assert_eq!(typed["state"], "allowed", "{typed}");
+    let s = h.get(&format!("/oauth/authorize/status?request={id}")).json();
+    let redirect = s["redirect"].as_str().unwrap_or_default().to_string();
+    assert!(redirect.starts_with("http://127.0.0.1:51123/callback?code="), "{s}");
+    let grant_code = redirect.split("code=").nth(1).unwrap().split('&').next().unwrap().to_string();
+    let t = h.form("/oauth/token", &[("grant_type", "authorization_code"), ("code", &grant_code), ("redirect_uri", "http://127.0.0.1:51123/callback"), ("client_id", &client), ("code_verifier", VERIFIER), ("resource", &format!("https://{HOST}/mcp"))]);
+    assert_eq!(t.status, StatusCode::OK, "{}", t.text());
+    let token = t.json()["access_token"].as_str().unwrap().to_string();
+    h.mcp_session("/mcp", &token);
+}
+
+/// The typed code's bounds (brief 81 §2): a wrong code is refused and counted, the
+/// third wrong entry ends its request, five wrong entries in all pause sign-in for
+/// everyone, a right code is then refused too, and once the person resumes, the
+/// next right code goes through. A code ends with its request after ten minutes.
+#[test]
+fn a_typed_code_is_bounded_per_request_and_wrong_codes_pause_sign_in() {
+    let h = harness();
+    let wrong = |c: &str| if c == "000000" { "111111".to_string() } else { "000000".to_string() };
+    let (a, code_a) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    assert_eq!(h.enter(&a, &wrong(&code_a)), json!({ "state": "wrong", "left": 2 }));
+    assert_eq!(h.enter(&a, &wrong(&code_a)), json!({ "state": "wrong", "left": 1 }));
+    assert_eq!(h.enter(&a, &wrong(&code_a))["state"], "ended", "the third wrong entry ends it");
+    assert_eq!(h.enter(&a, &code_a)["state"], "ended", "an ended request takes no code, right or not");
+    let (b, code_b) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    assert_eq!(h.enter(&b, &wrong(&code_b))["state"], "wrong", "the fourth wrong entry in all");
+    assert_eq!(h.enter(&b, &wrong(&code_b))["state"], "paused", "the fifth pauses sign-in");
+    assert_eq!(h.enter(&b, &code_b)["state"], "paused", "paused: even the right code is refused");
+    assert!(h.store().request(&b).unwrap().unwrap().answer.is_none(), "still waiting, not allowed");
+    h.store().set_setting(crate::agents::WRONG_CODES, None, h.ctx.now()).unwrap();
+    assert_eq!(h.enter(&b, &code_b)["state"], "allowed", "resumed: the right code goes through");
+    // ten minutes on, a code is refused with its request
+    let (c, code_c) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    *h.clock.lock().unwrap() = h.ctx.now() + crate::agents::REQUEST_LIFE + bagholder_core::jiff::SignedDuration::from_secs(1);
+    assert_eq!(h.enter(&c, &code_c)["state"], "ended", "expired");
+}
+
 /// Who is asking, as the pages show it (brief 73, 4).
 #[test]
 fn the_pages_say_who_is_really_asking() {
@@ -784,7 +859,7 @@ fn the_pages_say_who_is_really_asking() {
     assert!(page.contains("<b>agent.example</b>") && page.contains("Agent Example"), "{page}");
     let client = h.register("https://claude.example/cb").json()["client_id"].as_str().unwrap().to_string();
     let page = h.authorize(&client, "https://claude.example/cb", &[]).text();
-    assert!(page.contains("<b>claude.example</b>") && page.contains("Totally Claude") && page.contains("name given by the agent, not checked"), "{page}");
+    assert!(page.contains("<b>claude.example</b>") && page.contains("Totally Claude") && page.contains("a name it gave, not checked"), "{page}");
     let waiting = approve::waiting(&h.store(), h.ctx.now()).unwrap();
     assert_eq!(waiting.iter().map(|w| (w.who.as_str(), w.checked)).collect::<Vec<_>>(), vec![("agent.example", true), ("claude.example", false)]);
 }
@@ -1228,6 +1303,7 @@ fn switching_off_closes_the_listener_and_refuses_every_agent_at_once() {
         limits: Default::default(),
         check: Default::default(),
         one_check: Default::default(),
+        tries: Default::default(),
     };
     let port = agents.switch_on(h.rt.handle(), 0, ctx).unwrap();
     let answers = |p: u16| std::net::TcpStream::connect_timeout(&SocketAddr::from(([127, 0, 0, 1], p)), std::time::Duration::from_secs(2)).is_ok();

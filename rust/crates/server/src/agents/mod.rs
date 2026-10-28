@@ -43,6 +43,18 @@ pub const READS_PER_MINUTE: u32 = 60;
 pub const READS_BURST: u32 = 10;
 /// How long a sign-in waits on the person.
 pub const REQUEST_LIFE: SignedDuration = SignedDuration::from_mins(10);
+/// Wrong entries of one request's code before the request ends (brief 81 §2).
+pub const CODE_TRIES: u8 = 3;
+/// Wrong code entries in all, on every request, before no code is taken until the
+/// person resumes sign-in in their panel (brief 81 §2).
+pub const WRONG_CODES_PAUSE: u32 = 5;
+/// The wrong code entries counted since the person last resumed sign-in.
+pub const WRONG_CODES: &str = "agents.wrong_codes";
+
+/// The wrong code entries counted, kept in the book so a restart never forgets them.
+pub fn wrong_codes(store: &AgentsBook) -> Result<u32, String> {
+    Ok(store.setting(WRONG_CODES).map_err(|e| e.to_string())?.and_then(|n| n.parse().ok()).unwrap_or(0))
+}
 /// How long an authorization code handed to the agent's page may wait to be exchanged.
 pub const CODE_LIFE: SignedDuration = SignedDuration::from_mins(5);
 /// How often the waiting page may ask after one sign-in.
@@ -89,6 +101,8 @@ pub struct Ctx {
     /// Held by the check running: a second waits for it, so neither replaces the
     /// other's value (brief 80 §5.3).
     pub one_check: Mutex<()>,
+    /// Each waiting request's wrong code entries (`oauth::enter_code`).
+    pub tries: Mutex<std::collections::HashMap<String, u8>>,
 }
 
 impl Ctx {

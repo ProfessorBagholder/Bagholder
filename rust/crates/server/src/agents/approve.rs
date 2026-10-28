@@ -87,15 +87,15 @@ pub fn waiting(store: &AgentsBook, now: Timestamp) -> Result<Vec<Waiting>, Strin
             code: r.code,
             who: r.who,
             name: r.client_name,
-            // registered as https: should one not read as such, it is shown whole
-            redirect_host: super::fetch::https_host(&r.redirect_uri).map_or_else(|_| r.redirect_uri.clone(), |h| h.0),
+            redirect_host: super::oauth::redirect_shown(&r.redirect_uri),
             made_at: r.made_at.to_string(),
         });
     }
     Ok(out)
 }
 
-/// Every grant and key, the cut off ones last.
+/// Every grant and key still standing: a removed one has left the list (brief 81
+/// §3), its access withdrawn the moment it was removed.
 pub fn connected(store: &AgentsBook) -> Result<Vec<Connected>, String> {
     let mut out: Vec<Connected> = store
         .grants()
@@ -112,7 +112,8 @@ pub fn connected(store: &AgentsBook) -> Result<Vec<Connected>, String> {
         last_used_at: k.last_used_at.map(|t| t.to_string()),
         cut_off_at: k.withdrawn_at.map(|t| t.to_string()),
     }));
-    out.sort_by(|a, b| a.cut_off_at.is_some().cmp(&b.cut_off_at.is_some()).then_with(|| a.made_at.cmp(&b.made_at)));
+    out.retain(|c| c.cut_off_at.is_none());
+    out.sort_by(|a, b| a.made_at.cmp(&b.made_at));
     Ok(out)
 }
 

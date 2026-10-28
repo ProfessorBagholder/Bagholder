@@ -471,7 +471,7 @@ impl AgentsBook {
 /// The agents' own settings, the only ones their handle reads or writes: on or
 /// off, the listener's port, the tunnel chosen, the public name, and whether the
 /// person's last Start or Stop of the tunnel was a Start.
-pub const SETTINGS: [&str; 5] = ["agents.on", "agents.port", "agents.tunnel", "agents.host", "agents.running"];
+pub const SETTINGS: [&str; 6] = ["agents.on", "agents.port", "agents.tunnel", "agents.host", "agents.running", "agents.wrong_codes"];
 
 fn own(key: &str) -> Result<()> {
     if SETTINGS.contains(&key) {

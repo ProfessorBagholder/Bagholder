@@ -26,8 +26,8 @@ pub fn routes() -> Routed {
         post "/api/agents/tunnel/stop" => stop_tunnel;
         post "/api/agents/tunnel/look" => look;
         post "/api/agents/check" => check;
-        post "/api/agents/requests/allow" => allow;
         post "/api/agents/requests/deny" => deny;
+        post "/api/agents/codes/resume" => resume_codes;
         post "/api/agents/keys" => make_key;
         post "/api/agents/cut-off" => cut_off;
         get "/api/agents/log" => log;
@@ -65,6 +65,9 @@ pub struct AgentsStatus {
     /// The requests refused from callers no grant or key names since the address
     /// opened, counted by reason (none is written).
     pub refused: Vec<RefusedCount>,
+    /// Whether sign-in is paused: codes were typed wrong too often, on any request,
+    /// and no code is taken until the person resumes it (brief 81 §2).
+    pub codes_paused: bool,
     /// What could not be read, in words.
     pub error: String,
 }
@@ -109,6 +112,7 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
             out.address = a.setting(agents::HOST).map_err(|e| e.to_string())?.map(|h| format!("https://{h}")).unwrap_or_default();
         }
         out.waiting = approve::waiting(&a, bagholder_core::jiff::Timestamp::now())?;
+        out.codes_paused = agents::wrong_codes(&a)? >= agents::WRONG_CODES_PAUSE;
         out.allowed = approve::connected(&a)?;
         Ok(())
     };
@@ -148,6 +152,7 @@ fn ctx(app: &Arc<App>, host: &str, receives: Option<&str>) -> Ctx {
         limits: Default::default(),
         check: Default::default(),
         one_check: Default::default(),
+        tries: Default::default(),
     }
 }
 
@@ -379,13 +384,17 @@ async fn answer(state: AppState, id: String, allowed: bool) -> Api<OkOr> {
     Ok(Json(done.map_or_else(OkOr::err, |()| OkOr::ok())))
 }
 
-/// Allow a sign-in the person started: its agent's page goes on with its code.
-async fn allow(State(state): State<AppState>, Required(asked): Required<AgentId>) -> Api<OkOr> {
-    answer(state, asked.id, true).await
-}
-
+/// End a sign-in the person did not start: its agent is told it was refused. A
+/// sign-in is allowed only by its code, typed on the agent's page (brief 81 §2).
 async fn deny(State(state): State<AppState>, Required(asked): Required<AgentId>) -> Api<OkOr> {
     answer(state, asked.id, false).await
+}
+
+/// Resume sign-in after codes were typed wrong too often: the count starts again.
+async fn resume_codes(State(state): State<AppState>) -> Api<OkOr> {
+    let app = state.app.clone();
+    let done = blocking(move || store(&app).and_then(|a| a.set_setting(agents::WRONG_CODES, None, bagholder_core::jiff::Timestamp::now()).map_err(|e| e.to_string()))).await?;
+    Ok(Json(done.map_or_else(OkOr::err, |()| OkOr::ok())))
 }
 
 /// A key made for an agent: shown this once.

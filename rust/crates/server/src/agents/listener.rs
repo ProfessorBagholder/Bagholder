@@ -115,6 +115,7 @@ pub const ROUTES: &[(&str, &[Method])] = &[
     ("/oauth/register", &[Method::POST]),
     ("/oauth/authorize", &[Method::GET]),
     ("/oauth/authorize/status", &[Method::GET]),
+    ("/oauth/authorize/code", &[Method::POST]),
     ("/oauth/token", &[Method::POST]),
     ("/mcp", &[Method::POST, Method::GET]),
     ("/mcp/key", &[Method::POST, Method::GET]),
@@ -133,6 +134,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/.well-known/oauth-authorization-server", get(oauth::authorization_server))
         .route("/oauth/register", post(oauth::register))
         .route("/oauth/authorize", get(oauth::authorize))
+        .route("/oauth/authorize/code", post(oauth::enter_code))
         .route("/oauth/token", post(oauth::token))
         .route("/agents/check/{value}", get(check))
         .route("/api/agents/openapi.json", get(api::openapi))
