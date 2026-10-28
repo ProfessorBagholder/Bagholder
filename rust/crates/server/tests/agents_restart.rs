@@ -200,6 +200,20 @@ fn a_tunnel_the_person_stopped_stays_stopped_across_a_restart() {
     stop(&mut started);
 }
 
+/// Clearing the agents with a tunnel running stops it: nothing is left to answer
+/// an agent (brief 80's re-review, 8).
+#[test]
+fn clearing_the_agents_stops_their_running_tunnel() {
+    let h = Homes::new();
+    let mut started = Started::default();
+    let port = serve(&h, false, &mut started);
+    let tunnel = started_by_the_person(port, &mut started);
+    let (code, said) = ask(port, "POST", "/api/data/clear", Some(r#"{"kinds":["agents"]}"#));
+    assert_eq!(code, 200, "{said}");
+    assert!(ended(tunnel), "the tunnel outlived Clear");
+    stop(&mut started);
+}
+
 #[test]
 fn a_copy_of_the_book_never_starts_the_person_s_tunnel() {
     let h = Homes::new();

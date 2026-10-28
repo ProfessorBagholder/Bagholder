@@ -160,6 +160,11 @@ pub fn clear(app: &Arc<App>, f: &Figures, kinds: &[Kind], now: bagholder_core::j
             return Err(Refused::BracketLive(symbol));
         }
     }
+    if kinds.contains(&Kind::Agents) {
+        // the address closes and its tunnel stops before what they answer with goes:
+        // nothing is left to answer an agent
+        app.agents.switch_off();
+    }
     book.clear(&book_clearing(kinds)).map_err(|e| Refused::Failed(e.to_string()))?;
     // what a page kept of the book as it was is not shown again
     book.renew_id(now).map_err(|e| Refused::Failed(e.to_string()))?;
@@ -174,10 +179,6 @@ pub fn clear(app: &Arc<App>, f: &Figures, kinds: &[Kind], now: bagholder_core::j
     }
     if kinds.contains(&Kind::Login) {
         crate::session::delete_session(app).map_err(Refused::Failed)?;
-    }
-    if kinds.contains(&Kind::Agents) {
-        // the address closes and its tunnel stops: nothing is left to answer an agent
-        app.agents.switch_off();
     }
     if kinds.contains(&Kind::Broker) {
         let mut st = app.state.lock().unwrap();
