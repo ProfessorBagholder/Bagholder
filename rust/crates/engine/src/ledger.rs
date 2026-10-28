@@ -1281,13 +1281,14 @@ impl<'a, 'm> Matcher<'a, 'm> {
         let lots: Vec<&Lot> = self.out.books.get(&(account, instrument)).map(|b| b.lots.iter().filter(|l| l.direction == Direction::Long).collect()).unwrap_or_default();
         let held = lots.iter().try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty)).ok()?;
         let cost = lots.iter().try_fold(Money::zero(currency), |a, l| l.value.clone().and_then(|v| Ok(a.checked_add(v)?)));
-        let read_on = |d: Date| stated.days_held.get(&d).map(|r| (d, r));
+        // a day read before its book value in the listing's currency was asked is not read yet
+        let read_on = |d: Date| stated.days_held.get(&d).filter(|r| !r.book_unasked).map(|r| (d, r));
         let holds = |r: &&crate::input::HeldDay| r.held.get(&instrument).is_some_and(|u| held.checked_add(qty).is_ok_and(|w| *u >= w));
         let after = day.tomorrow().ok();
         // the arrival's own day where its read states them; else the day after, read;
         // else the first of the two not read yet (never a day read already)
         let Some((day, read)) = read_on(day).filter(|(_, r)| holds(r)).or_else(|| after.and_then(read_on)) else {
-            let wait = if stated.days_held.contains_key(&day) { after.unwrap_or(day) } else { day };
+            let wait = if read_on(day).is_some() { after.unwrap_or(day) } else { day };
             return Some((Err(Gaps::of(Gap::HoldingsUnread(wait))), StatedRead::Unread(wait)));
         };
         let value: Fig<Money> = match (read.book.get(&instrument), cost) {
@@ -1324,7 +1325,8 @@ impl<'a, 'm> Matcher<'a, 'm> {
         }
         let Some(stated) = self.inputs.market.brokers.get(&account).filter(|b| !b.days_held.is_empty()) else { return };
         let Ok(before) = day.yesterday() else { return };
-        let Some(read) = stated.days_held.get(&before) else {
+        // a day read before its book value in the listing's currency was asked is not read yet
+        let Some(read) = stated.days_held.get(&before).filter(|r| !r.book_unasked) else {
             // the units the transaction takes beyond the lots, their cost waiting on
             // that day's read: the round trip shows as a figure not read yet
             let Ok(missing) = qty.checked_sub(held) else { return };

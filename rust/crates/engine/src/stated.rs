@@ -1,9 +1,12 @@
 //! The holdings as the broker states them (brief 79 §1,
 //! `docs/plans/every-amount-as-wealthsimple-states-it.md`): each account's
 //! units and book value as its positions read states them, valued at
-//! Bagholder's quote, the quote the only figure of Bagholder's own. Average
-//! cost is the book value over the units; market value the units times the
-//! quote; unrealized the market value less the book value.
+//! Bagholder's quote, the quote the only figure of Bagholder's own. The book
+//! value is the read's in the listing's own currency (`marketBookValue`); its
+//! CAD figure is the read's in CAD (`bookValue`). Average cost is the book value
+//! over the units; market value the units times the quote; unrealized the market
+//! value less the book value, and in CAD the market value in CAD less the book
+//! value in CAD.
 //!
 //! `holdings` reads what the broker states, the instruments' terms and the
 //! market alone: no part of the history reaches it, so nothing the journal
@@ -45,6 +48,8 @@ pub struct Stated<'a> {
     pub account: AccountId,
     pub held: &'a BTreeMap<InstrumentId, Dec>,
     pub book: &'a BTreeMap<InstrumentId, Money>,
+    /// What they cost in CAD, as stated.
+    pub book_cad: &'a BTreeMap<InstrumentId, Money>,
 }
 
 /// One holding: every amount of it the broker's, the quote aside.
@@ -99,12 +104,12 @@ pub fn holdings<'a>(of: &Sources, stated: impl IntoIterator<Item = Stated<'a>>, 
 /// trade-7: not a holding, the owner's rule of 2026-09-27).
 pub fn holding_of(of: &Sources, stated: &Stated, instrument: InstrumentId, as_of: Option<Date>) -> Option<Holding> {
     let units = stated.held.get(&instrument).filter(|u| !u.is_zero())?;
-    let h = holding(of, stated.account, instrument, *units, stated.book.get(&instrument).copied(), as_of);
+    let h = holding(of, stated.account, instrument, *units, stated.book.get(&instrument).copied(), stated.book_cad.get(&instrument).copied(), as_of);
     let dust = h.mark.as_ref().is_ok_and(|m| crate::dust::is_dust(of, h.account, h.instrument, h.qty, m.price, as_of.unwrap_or(of.clock.today)));
     (!dust).then_some(h)
 }
 
-fn holding(of: &Sources, account: AccountId, instrument: InstrumentId, units: Dec, book: Option<Money>, as_of: Option<Date>) -> Holding {
+fn holding(of: &Sources, account: AccountId, instrument: InstrumentId, units: Dec, book: Option<Money>, book_cad: Option<Money>, as_of: Option<Date>) -> Holding {
     let info = of.instruments.get(&instrument);
     let kind = info.map(|i| i.instrument.kind).unwrap_or(InstrumentKind::Security);
     let currency = info.map(|i| i.instrument.currency).unwrap_or(Currency::CAD);
@@ -167,6 +172,24 @@ fn holding(of: &Sources, account: AccountId, instrument: InstrumentId, units: De
         Ok(None) => Ok(None),
         Err(g) => Err(g.clone()),
     };
+    // in CAD: the book value the read states in CAD, else the book value at the rate
+    let market_cad = cad(&market);
+    let book_cad: Fig<Money> = match book_cad {
+        Some(b) => Ok(Money::new(b.amount.abs(), b.currency)),
+        None => cad(&book),
+    };
+    let unrealized_cad = match (&market_cad, &book_cad) {
+        (Ok(mk), Ok(bk)) => match direction {
+            Direction::Long => mk.checked_sub(*bk).map_err(Gaps::from),
+            Direction::Short => bk.checked_sub(*mk).map_err(Gaps::from),
+        },
+        (Err(g), Ok(_)) | (Ok(_), Err(g)) => Err(g.clone()),
+        (Err(a), Err(b)) => {
+            let mut g = a.clone();
+            g.merge(b);
+            Err(g)
+        }
+    };
     let mut gaps = Gaps::none();
     for f in [&book, &market] {
         if let Err(g) = f {
@@ -181,9 +204,9 @@ fn holding(of: &Sources, account: AccountId, instrument: InstrumentId, units: De
         direction,
         qty,
         multiplier: mult,
-        book_cad: cad(&book),
-        market_cad: cad(&market),
-        unrealized_cad: cad(&unrealized),
+        book_cad,
+        market_cad,
+        unrealized_cad,
         book,
         book_currency,
         avg,

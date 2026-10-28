@@ -528,7 +528,7 @@ impl Engine {
         }
         cache.retain(|_, w| w.strong_count() > 0);
         let i = &self.inputs;
-        let stated = i.market.brokers.iter().filter_map(|(a, b)| b.days_held.get(&day).map(|d| crate::stated::Stated { account: *a, held: &d.held, book: &d.book }));
+        let stated = i.market.brokers.iter().filter_map(|(a, b)| b.days_held.get(&day).map(|d| crate::stated::Stated { account: *a, held: &d.held, book: &d.book, book_cad: &d.book_cad }));
         let positions = crate::stated::holdings(&crate::stated::Sources::of(i), stated, Some(day)).into_iter().map(|h| crate::positions::linked(i, None, None, h)).collect();
         let p = std::sync::Arc::new(Past { day, positions });
         cache.insert(day, std::sync::Arc::downgrade(&p));
@@ -627,7 +627,8 @@ impl Engine {
             for h in &p.positions {
                 n.spans.entry(h.instrument).or_default().insert((p.day, p.day));
             }
-            if brokers.values().any(|b| b.net_value.range(..=p.day).next().is_some() && !b.days_held.contains_key(&p.day)) {
+            // a day read before its book value in the listing's currency was asked is read again
+            if brokers.values().any(|b| b.net_value.range(..=p.day).next().is_some() && !b.days_held.get(&p.day).is_some_and(|d| !d.book_unasked)) {
                 n.holdings_on.insert(p.day);
             }
         }
