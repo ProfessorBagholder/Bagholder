@@ -95,3 +95,16 @@ Eight readers checked each section against this brief, each gap checked by a ref
 15. The PR text no longer says the app moves Funnel to 8443.
 
 Accepted as they stand: §3.5's metadata e2e replaced by the component test (an e2e run has no public address); §5.5's server half held by reading; §5.4's and §5.6's tests on their helpers; `every_copy` held by `the_tunnel_s_guard_is_given_this_process_to_end_with`; 'within the click' held by reading.
+
+## Round 3 at 750eff32 (c7e69d5c adds only #646's merge), 2026-10-28
+
+Run here: the head's tests pass (agents 82, `http::` 20, `status::` 10, `clear::` 6, `tests_misc` 29, `agents_restart` 4, `tunnel_guard` 2, `exit_with` 3, net 13; nothing left). The round-2 plants rerun: 44 of 49 caught, among them plants 48 and 49 that had passed; the other 5 no longer apply to rewritten code. Five readers and their refuters checked items 1 to 15 (20 gaps confirmed, 1 refuted), and 30 new plants ran here: **every plant the PR's table names is caught (21)**; the 9 not caught were written to show gaps, below. The changes:
+
+1. **A copy opens no agents address at all.** The copy check in `open()` (`http/agents.rs:193`) comes after `switch_on` (`:183`), so a copy binds the person's kept port; with their own proxy, or a cloudflared or ngrok they run as a service, the public path reaches the copy and its copied grants. The check goes first. Test: the copy's status shows no agents address; plant: the check below `switch_on`.
+2. **`public()` refuses an IPv4-mapped (and IPv4-compatible) form of this machine's own address**, which the bind used to catch and `getifaddrs` does not. Test and plant.
+3. **The MCP session bound (re-review item 12) is withdrawn and removed.** It refused a person's own agent for five minutes after four conversations (a session can never be closed), an `Mcp-Session-Id` header rmcp cannot read bypassed it, and concurrent opens all passed it. An approved agent's sessions end by rmcp's own idle expiry, as before. My request; subtract it.
+4. **OpenAPI: the test builds each request from the served description**, not from the source the description is made from, and shows each parameter is read (a value that changes the answer, or a wrong one refused). Plant: positions described with another route's arguments (passed here).
+5. **Tests for what passed here:** switch-off clears `agents.running` (start, switch off, switch on, restart: no tunnel); Clear removes every agents setting, `agents.running` included (the test sets every key in `SETTINGS` first); `get_at` passes its ceiling to `answer_of` (a coded body through `get_at`); the public-DNS error rule (one server failing, the other's answers taken; no address at all an error). Each with the plant that passed here.
+6. **Small:** `agents.running`'s comment and the PR say the rule as it is (the person's last Start or Stop); every text that says four agents settings says five; the JSON API cut test holds the first `LOGGED_TEXT` characters; `redirect_ok`'s doc states the number rule.
+
+Accepted as they stand, by reading: `this_machine` reading the interfaces (plant 14); Clear's order (plant 19); the per-id poll's check and note around the book's open (concurrent polls of one id); a failed Clear's state; the GraphQL ceiling held at `answer_of` beside item 5's test.
