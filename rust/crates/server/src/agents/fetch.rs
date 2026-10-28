@@ -81,14 +81,23 @@ fn public_v6(ip: Ipv6Addr) -> bool {
 
 /// Whether `host` is a DNS name a browser reads as that name alone: labels of
 /// letters, digits and hyphens (none at either end), at least one dot, and a last
-/// label that is not all digits; never `localhost` or a name under it. An address
-/// written as a host (`127.0.0.1`, `127.1`, `0x7f.1`, `[::1]`) is none.
+/// label a browser does not read as a number; never `localhost` or a name under
+/// it. An address written as a host (`127.0.0.1`, `127.1`, `0x7f.1`, `0x7f.0x1`,
+/// `127.0x`, `[::1]`) is none.
 pub fn dns_name(host: &str) -> bool {
     let labels: Vec<&str> = host.split('.').collect();
     labels.len() >= 2
         && labels.iter().all(|l| !l.is_empty() && !l.starts_with('-') && !l.ends_with('-') && l.bytes().all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-'))
-        && !labels.last().is_some_and(|l| l.bytes().all(|b| b.is_ascii_digit()))
+        && !labels.last().is_some_and(|l| numeric(l))
         && labels.last() != Some(&"localhost")
+}
+
+/// Whether a browser reads a host's last label as a number, and so the host as an
+/// address (the WHATWG URL standard's "ends in a number"): all digits, or `0x`
+/// followed by hex digits or by nothing.
+fn numeric(label: &str) -> bool {
+    let l = label.to_ascii_lowercase();
+    (!l.is_empty() && l.bytes().all(|b| b.is_ascii_digit())) || l.strip_prefix("0x").is_some_and(|h| h.bytes().all(|b| b.is_ascii_hexdigit()))
 }
 
 /// What turns a name into addresses: the system's resolver in use, a stand-in in tests.

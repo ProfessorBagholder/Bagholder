@@ -155,7 +155,8 @@ fn test_an_agents_name_that_is_this_machine_is_refused_and_the_page_stays_reacha
     let port = *app().port.lock().unwrap();
     runtime().block_on(async {
         assert_eq!(json_of(from_the_page(Method::POST, "/api/agents/switch", Some(r#"{"on":true}"#))).await.0, StatusCode::OK);
-        for name in [format!("127.0.0.1:{port}"), "localhost".into(), "app.localhost".into(), "[::1]".into(), "10.0.0.1".into()] {
+        // the last four end in a number as browsers read one (brief 80's re-review, 4)
+        for name in [format!("127.0.0.1:{port}"), "localhost".into(), "app.localhost".into(), "[::1]".into(), "10.0.0.1".into(), "0x7f.0x1".into(), "0x7f.0.0.0x1".into(), "0X7F.0X1".into(), "127.0x".into()] {
             let (_, said) = json_of(from_the_page(Method::POST, "/api/agents/tunnel", Some(&serde_json::json!({ "provider": "own", "name": name }).to_string()))).await;
             assert_eq!(said["ok"], false, "{name}: {said}");
             let (_, said) = json_of(from_the_page(Method::POST, "/api/agents/tunnel", Some(&serde_json::json!({ "provider": "own", "name": "agents.example.com", "sendsHost": name }).to_string()))).await;

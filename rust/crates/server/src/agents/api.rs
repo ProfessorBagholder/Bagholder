@@ -93,10 +93,11 @@ fn object(v: Option<Value>) -> Result<Option<Value>, Response> {
     }
 }
 
-/// A tool's read for the caller, logged first, its answer or its reason.
+/// A tool's read for the caller, logged first (its arguments cut to
+/// `LOGGED_TEXT`, as a read over MCP is), its answer or its reason.
 async fn answer(ctx: Arc<Ctx>, caller: Caller, tool: &'static str, args: Value, read: impl FnOnce(&crate::mcp::ReadOnly) -> Result<Value, String> + Send + 'static) -> Response {
     let got = tokio::task::spawn_blocking(move || {
-        let r = bagholder_book::agents::Read { agent: caller.agent.clone(), at: ctx.now(), tool: Some(tool.to_string()), arguments: Some(args.to_string()), refusal: None };
+        let r = bagholder_book::agents::Read { agent: caller.agent.clone(), at: ctx.now(), tool: Some(tool.to_string()), arguments: Some(super::listener::cut(&args.to_string())), refusal: None };
         if let Err(e) = ctx.store().and_then(|s| s.log(&r).map_err(|e| e.to_string())) {
             crate::app::log(&format!("bagholder: an agent's read could not be logged: {e}"));
         }

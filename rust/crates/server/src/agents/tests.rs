@@ -717,6 +717,7 @@ fn a_redirect_that_is_not_a_public_host_is_refused_everywhere() {
         "http://localhost/cb", "http://localhost:33418/cb", "http://foo.localhost/cb", "http://127.0.0.2/cb", "http://[::1]/cb",
         "https://localhost/cb", "https://127.0.0.1/cb", "https://[::1]/cb", "https://app.localhost/cb",
         "https://2130706433/cb", "https://127.1/cb", "https://0x7f.1/cb", "https://localhost./cb", "https://0.0.0.0/cb",
+        "https://0x7f.0x1/cb", "https://0x7f.0.0.0x1/cb", "https://0X7F.0X1/cb", "https://127.0x/cb",
         "https://%6Cocalhost/cb", "https://localhost\\x/cb", "https://10.0.0.1/cb", "https://[::ffff:127.0.0.1]/cb", "https://[0:0:0:0:0:0:0:1]/cb",
     ];
     let docs = Arc::new(Documents { doc: json!({ "client_id": CIMD, "client_name": "Agent Example", "redirect_uris": refused }), asked: Mutex::new(vec![]) });
@@ -808,6 +809,22 @@ fn strangers_refused_are_counted_by_reason_and_never_written() {
     }
     assert!(h.store().reads("", usize::MAX).unwrap().is_empty(), "nothing written");
     assert_eq!(listener::strangers(&h.ctx), vec![("for another host".to_string(), 1), ("with a wrong key".to_string(), 1000)]);
+}
+
+/// A read through the JSON API keeps its arguments in the agent's log cut to
+/// `LOGGED_TEXT`, as a read over MCP does: a 60 KB `sort` is never stored whole
+/// (brief 80's re-review, 3).
+#[test]
+fn a_json_api_read_logs_its_arguments_cut() {
+    let h = harness();
+    let key = h.key("api");
+    let agent = h.store().keys().unwrap()[0].id.clone();
+    let sort = "x".repeat(60 * 1024);
+    let a = h.ask("GET", &format!("/api/agents/trades?sort={sort}"), &[("authorization", &format!("Bearer {key}"))], vec![]);
+    assert_ne!(a.status, StatusCode::UNAUTHORIZED);
+    let reads = h.store().reads(&agent, 10).unwrap();
+    let kept = reads.iter().find_map(|r| r.arguments.clone()).expect("the read is logged");
+    assert!(kept.chars().count() <= listener::LOGGED_TEXT, "{} characters kept", kept.chars().count());
 }
 
 /// What an agent's log keeps of a caller's own text is cut to `LOGGED_TEXT`.
