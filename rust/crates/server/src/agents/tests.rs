@@ -1062,15 +1062,18 @@ fn the_11th_read_in_a_burst_is_refused_and_the_log_keeps_arguments_never_answers
 }
 
 /// One MCP service per path: a session the POST opened is the GET's to stream,
-/// and a session it did not open is not (brief 80 §6.1).
+/// and a session it did not open is not, on /mcp and /mcp/key alike (brief 80
+/// §6.1; its re-review, 13).
 #[test]
 fn a_session_opened_by_post_is_the_get_s_to_stream() {
-    let h = harness();
-    let key = h.key("mcp");
-    let session = h.mcp_session("/mcp/key", &key);
-    let auth = format!("Bearer {key}");
-    assert_eq!(h.status_only("GET", "/mcp/key", &[("accept", "text/event-stream"), ("authorization", &auth), ("mcp-session-id", &session)]), StatusCode::OK);
-    assert_ne!(h.status_only("GET", "/mcp/key", &[("accept", "text/event-stream"), ("authorization", &auth), ("mcp-session-id", "no-such-session")]), StatusCode::OK);
+    for path in ["/mcp", "/mcp/key"] {
+        let h = harness();
+        let bearer = if path == "/mcp" { h.sign_in().0 } else { h.key("mcp") };
+        let session = h.mcp_session(path, &bearer);
+        let auth = format!("Bearer {bearer}");
+        assert_eq!(h.status_only("GET", path, &[("accept", "text/event-stream"), ("authorization", &auth), ("mcp-session-id", &session)]), StatusCode::OK, "{path}");
+        assert_ne!(h.status_only("GET", path, &[("accept", "text/event-stream"), ("authorization", &auth), ("mcp-session-id", "no-such-session")]), StatusCode::OK, "{path}");
+    }
 }
 
 /// Over MCP each tool call is a read, charged to the agent's rate and kept in its
