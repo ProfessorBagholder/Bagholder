@@ -761,7 +761,8 @@ pub struct Quote {
     pub source: QuoteSource,
 }
 
-/// What a broker states about one account, the check against Bagholder's own.
+/// What a broker states about one account: every amount the app shows of it
+/// (brief 79, `docs/plans/every-amount-as-wealthsimple-states-it.md`).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct BrokerAccount {
     /// The account's net value per day, as the broker states it, in the
@@ -775,30 +776,38 @@ pub struct BrokerAccount {
     pub net_value_now: Option<Money>,
     /// When the broker stated its balances and holdings now.
     pub as_of: Option<Timestamp>,
-    /// When the account's activity was last read in full: every fill the
-    /// broker had posted by then is on the record.
-    pub activity_read_at: Option<Timestamp>,
     /// Cash per currency now.
     pub cash: BTreeMap<Currency, Dec>,
-    /// Cash per currency as stated at or before `activity_read_at`: every fill
-    /// it reflects is on the record, so the broker check compares with it.
-    pub cash_read: Option<BTreeMap<Currency, Dec>>,
-    /// What the broker held against the account when it stated `cash_read`
-    /// (`bagholder_core::hold`): its stated cash is net of them.
-    pub cash_read_holds: Vec<bagholder_core::hold::Hold>,
-    /// Units held per instrument, as of `held_as_of`.
+    /// Units held per instrument, as of `held_as_of`, a short's negative.
     pub held: BTreeMap<InstrumentId, Dec>,
     /// What the broker states those units are worth, where it states it.
     pub held_value: BTreeMap<InstrumentId, Money>,
-    /// The day the broker states `held` as of: the last day whose activity is
-    /// read in full (`docs/plans/stage-3b-wealthsimple.md`, question 4); today
-    /// where none is stated.
+    /// What the broker states those units cost (its book value), in the
+    /// currency it states it in, where it states it.
+    pub held_book: BTreeMap<InstrumentId, Money>,
+    /// The day the broker states `held` as of: today, read with the balances
+    /// (`docs/plans/every-amount-as-wealthsimple-states-it.md` §2.1).
     pub held_as_of: Option<Date>,
+    /// Each past day a positions read was asked as of, what it states: a past
+    /// day's holdings and cash are these, never worked back from the history
+    /// (§2.4).
+    pub days_held: BTreeMap<Date, HeldDay>,
     /// What it can borrow, as the broker states it, or why it cannot say.
     pub buying_power: Option<Result<Money, String>>,
     /// A margin account's yearly interest rate on what it borrows, per
     /// currency, as a fraction: the currencies the broker states one in.
     pub margin_rates: BTreeMap<Currency, Dec>,
+}
+
+/// What one positions read states an account held as of a past day.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HeldDay {
+    /// Units per instrument, a short's negative.
+    pub held: BTreeMap<InstrumentId, Dec>,
+    /// What those units cost, where the read states it.
+    pub book: BTreeMap<InstrumentId, Money>,
+    /// Cash per currency.
+    pub cash: BTreeMap<Currency, Dec>,
 }
 
 /// The ETF that tracks a benchmark, as its source states it: each session's

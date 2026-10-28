@@ -45,7 +45,7 @@ function n2(v: number, dp: number): string {
 const WAITS_FOR: Record<string, string> = {
   'rate-pending': 'rate', 'rate-missing': 'rate', 'rate-unpublished': 'rate', 'rate-not-held': 'rate',
   'multiplier-unstated': 'size', 'quantity-unstated': 'qty', 'leg-unstated': 'leg', 'price-unknown': 'price',
-  'basis-unknown': 'cost', 'event-unknown': 'event', 'event-on-short': 'event', 'no-expiry-record': 'expiry',
+  'basis-unknown': 'cost', 'book-unstated': 'cost', 'holdings-unread': 'unread', 'event-unknown': 'event', 'event-on-short': 'event', 'no-expiry-record': 'expiry',
   'adjustment-conflict': 'record', 'effect-conflict': 'record', 'beyond-held': 'record',
   'currency-unstated': 'currency', 'value-unstated': 'value', 'payer-not-read': 'payer', 'no-distribution-yet': 'unpaid',
   'schedule-unstated': 'schedule', 'form-unstated': 'form', 'buying-power-unread': 'unread', 'margin-rate-unread': 'unread', 'deposits-restated': 'deposits', arithmetic: 'overflow',

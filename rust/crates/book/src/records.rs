@@ -243,15 +243,6 @@ impl Book {
             .ok_or_else(|| text::corrupt("record_revisions", "record_id", &id.to_string(), "a record with no revision"))
     }
 
-    /// What `mapping` reads a record's latest payload as, whatever its state,
-    /// storing nothing: a superseded record's own units, which it holds no
-    /// transactions of.
-    pub fn mapped(&self, id: RecordId, mapping: &dyn Mapping) -> Result<crate::mapping::Mapped> {
-        let connection = self.record(id)?.connection;
-        let (payload, _) = self.latest_revision(id)?;
-        Ok(mapping.map(&MapContext { connection, record: id, zones: &self.zones }, &payload))
-    }
-
     /// Derive a live record's transactions from `payload` again, replacing what
     /// it had, and move or orphan the trades anchored on it. Each leg is kept on
     /// the instrument its own references name (`Book::own_instrument`), so a
@@ -524,24 +515,6 @@ impl Book {
             // a removed event row no longer states a succession
             self.settle_successions()?;
             Ok(Changes { removed, ..Changes::default() })
-        })
-    }
-
-    /// Note on a removed record that it was taken back from what `version` wrote:
-    /// a revision of its payload naming that version under `takenBack`. A reading
-    /// that books again a row it once withdrew (one whose latest payload is the
-    /// row's) does not book it; the source stating it again stores it as ever.
-    pub fn note_taken_back(&self, record: RecordId, version: &str, at: jiff::Timestamp) -> Result<()> {
-        self.atomically(|| {
-            if self.record(record)?.state != RecordState::Removed {
-                return Err(BookError::Refused(format!("record {record} is not removed, so it is not taken back")));
-            }
-            let (latest, n) = self.latest_revision(record)?;
-            let bagholder_core::json::Value::Object(mut o) = bagholder_core::json::parse(&latest).map_err(|e| BookError::Refused(format!("record {record}'s payload is not JSON: {e}")))? else {
-                return Err(BookError::Refused(format!("record {record}'s payload is not an object")));
-            };
-            o.insert("takenBack".to_string(), bagholder_core::json::Value::String(version.to_string()));
-            self.add_revision(record, n + 1, &bagholder_core::json::Value::Object(o).canonical(), at)
         })
     }
 

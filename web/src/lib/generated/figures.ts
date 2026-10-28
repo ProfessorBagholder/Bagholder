@@ -53,9 +53,15 @@ export type Position = { id: string,
  */
 trade: string, symbol: string, underlying: string, name: string, exchange: string, kind: string, currency: string, account: string, accountId: string, instrument: string, security: string, short: boolean, qty: Fig<Dec>, avg: Fig<Dec>, 
 /**
- * What the units held cost (long) or brought in (short).
+ * What the units held cost (long) or brought in (short), as Wealthsimple
+ * states it.
  */
 cost: Fig<Dec>, 
+/**
+ * The currency of `avg`, `cost` and `unreal`: the one Wealthsimple states
+ * the book value in (brief 79).
+ */
+bookCurrency: string, 
 /**
  * The price marked at.
  */
@@ -63,7 +69,15 @@ last: Fig<Dec>, mv: Fig<Dec>, unreal: Fig<Dec>, unrealPct: number | null, dayCha
 /**
  * The day's move of the price, as a fraction.
  */
-percentChange: number | null, opened: string, held: Fig<number>, grade: string, thesis: string, tags: Array<string>, 
+percentChange: number | null, 
+/**
+ * When the journal's first lot in it was opened; empty where it holds none.
+ */
+opened: string, 
+/**
+ * Days held, from the journal's lots; none where it holds none.
+ */
+held: Fig<number> | null, grade: string, thesis: string, tags: Array<string>, 
 /**
  * What the holding waits on.
  */
@@ -289,7 +303,12 @@ export type CashflowHolding = {
 /**
  * The holding's id.
  */
-id: string, symbol: string, account: string, currency: string, qty: Fig<Dec>, avg: Fig<Dec>, cost: Fig<Dec>, mv: Fig<Dec>, 
+id: string, symbol: string, account: string, currency: string, qty: Fig<Dec>, avg: Fig<Dec>, cost: Fig<Dec>, 
+/**
+ * The currency of `avg` and `cost`: the one Wealthsimple states the book
+ * value in (brief 79).
+ */
+bookCurrency: string, mv: Fig<Dec>, 
 /**
  * Cash per unit of the latest distribution gone ex.
  */

@@ -26,6 +26,7 @@ mod following;
 mod pull_broker;
 mod outside_debts_check;
 mod read_sources;
+mod reading;
 mod events;
 mod exit_with;
 mod webpush;
@@ -619,6 +620,8 @@ mod tests_docs_golden;
 mod tests_routes_golden;
 #[cfg(test)]
 mod tests_figures_golden;
+#[cfg(test)]
+mod tests_amounts;
 #[cfg(test)]
 mod tests_boundary;
 #[cfg(test)]

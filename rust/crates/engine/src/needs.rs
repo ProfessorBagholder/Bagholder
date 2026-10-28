@@ -23,11 +23,20 @@ pub struct FactNeeds {
     /// says whether the contract expired worthless.
     pub closes: BTreeMap<InstrumentId, BTreeSet<Date>>,
     /// Each instrument a past day's holdings price (`crate::engine::Past`), and
-    /// the spans of days they do: from the day the holding was first held to that
-    /// day, whose last close on or before it is its price then.
+    /// the spans of days they do: that day alone, whose last close on or before
+    /// it is its price then.
     pub spans: BTreeMap<InstrumentId, BTreeSet<(Date, Date)>>,
     /// Each instrument held today in some account: its price is quoted.
     pub held: BTreeSet<InstrumentId>,
+    /// Each past day whose positions read a figure reads and the book does not
+    /// hold for every account (brief 79 §2.4): a day a screen shows, and each day
+    /// the net worth history needs an account's cash of.
+    pub holdings_on: BTreeSet<Date>,
+    /// Of `holdings_on`, each day a sale's units wait on: the day before a sale
+    /// that took units the activity feed never showed arriving (brief 79, amended
+    /// 2026-10-28, point 5). Read while any page is open, as the trades it holds
+    /// back are shown on every screen.
+    pub before_sales: BTreeSet<Date>,
     /// Each security held now: its distributions and schedule are read.
     pub payers: BTreeSet<InstrumentId>,
     /// The person's oldest day: the span the benchmarks must cover.
@@ -89,31 +98,34 @@ pub fn fact_needs(inputs: &Inputs, matched: &Matched) -> FactNeeds {
             n.first_day = Some(n.first_day.map_or(*d, |f| f.min(*d)));
         }
     }
-    // each holding: its currency converted from its first day held (its lots'
-    // cost and value in CAD), quoted while held today, a security's payer read,
-    // and a contract held into its expiry decided by its underlying's close that day
-    for ((account, i), units) in &matched.units {
-        let held_today = !matched.units_on(*account, *i, today).is_ok_and(|q| q.is_zero());
+    // each holding the journal has held: its currency converted from its first day
+    // held (its lots' cost and value in CAD), and a contract held into its expiry
+    // decided by its underlying's close that day
+    for ((_, i), units) in &matched.units {
         for (from, to) in held_spans(units, today) {
             if let Some(c) = currency(i) {
                 n.rate(c, from);
             }
-            if held_today && to >= today {
-                n.held.insert(*i);
-                if kind(i) == Some(InstrumentKind::Security) {
-                    n.payers.insert(*i);
-                }
-                // a holding priced by its last stored close in another currency
-                // (a coin's USD market's), converted on that close's day
-                if let Some((day, m)) = inputs.market.closes.get(i).and_then(|c| c.range(..=today).next_back()) {
-                    if Some(m.currency) != currency(i) {
-                        n.rate(m.currency, *day);
-                    }
-                }
-            }
             if let Some(terms) = ledger.instruments.get(i).and_then(|x| x.terms.as_ref()) {
                 if terms.expiry >= from && terms.expiry <= to.min(today) {
                     n.close(terms.underlying, terms.expiry);
+                }
+            }
+        }
+    }
+    // each holding the brokers state now (brief 79: what is held is what
+    // Wealthsimple states, a holding no trade of the journal's names too): quoted,
+    // a security's payer read, and one priced by its last stored close in another
+    // currency (a coin's USD market's) converted on that close's day
+    for b in inputs.market.brokers.values() {
+        for i in b.held.iter().filter(|(_, q)| !q.is_zero()).map(|(i, _)| i) {
+            n.held.insert(*i);
+            if kind(i) == Some(InstrumentKind::Security) {
+                n.payers.insert(*i);
+            }
+            if let Some((day, m)) = inputs.market.closes.get(i).and_then(|c| c.range(..=today).next_back()) {
+                if Some(m.currency) != currency(i) {
+                    n.rate(m.currency, *day);
                 }
             }
         }

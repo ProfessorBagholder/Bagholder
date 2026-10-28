@@ -515,8 +515,28 @@ pub fn write(home: &Path) -> Result<String, String> {
     drop(book);
     let facts = crate::demo_facts::write(home)?;
 
+    // each past day the figures read Wealthsimple's positions of (the net worth
+    // history's, a sale's units'), read as the app reads them while a page is open
+    // (brief 79 §2.4): a book in use holds them, and the browser tests run offline
+    let mut f = crate::figures::Figures::open(home, at)?;
+    for _ in 0..3 {
+        let days = f.read(|e| e.needs().holdings_on).ok_or("the figures of the made-up book were not built")?;
+        if days.is_empty() {
+            break;
+        }
+        let book = f.book()?;
+        for day in days {
+            let (_, failures) = pull::holdings_as_of(&book, &mut adapter, connection, day, at).map_err(err)?;
+            if !failures.is_empty() {
+                return Err(format!("the made-up Wealthsimple's holdings as of {day} could not be read: {failures:?}"));
+            }
+        }
+        drop(book);
+        drop(f);
+        f = crate::figures::Figures::open(home, at)?;
+    }
+
     // the journal, written as a page writes it: on the trade each note's fill opened
-    let f = crate::figures::Figures::open(home, at)?;
     let book = f.book()?;
     let opened: BTreeMap<bagholder_core::TransactionId, (bagholder_core::AccountId, Option<bagholder_core::InstrumentId>, Date)> = book.transactions().map_err(err)?.into_iter().map(|t| (t.id, (t.account, t.instrument, t.trade_date))).collect();
     let trades: Vec<(bagholder_core::TransactionId, bagholder_core::TradeId)> = f

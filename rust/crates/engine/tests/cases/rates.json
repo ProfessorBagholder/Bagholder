@@ -25,9 +25,9 @@
     }
   },
   {
-    "name": "after 16:30 a rate not stored is a failure of the Bank source, for a transaction and for a live mark",
-    "spec": "docs/architecture.md §7: failing to reach the Bank is a failure of that source, never covered by a number of the app's own",
-    "working": ["the same book at 17:00 Eastern (22:00Z): 2026-01-06's rate is due and not stored → missing, for the day and for a live mark"],
+    "name": "after 16:30 a rate not read yet leaves the Bank's last published rate standing, for a transaction and for a live mark",
+    "spec": "the owner, 2026-10-28, on an old rate: \"Show nothing\" (brief 79 amended); the Bank's own last rate, never a number of the app's own",
+    "working": ["the same book at 17:00 Eastern (22:00Z): 2026-01-06's rate is due and not stored → 2026-01-05's, 1.41, for the day and for a live mark, with no gap"],
     "today": "2026-01-06",
     "now": "2026-01-06T22:00:00Z",
     "rates": {"USD": {"2025-12-31": "1.37", "2026-01-02": "1.40", "2026-01-05": "1.41"}},
@@ -35,21 +35,21 @@
     "series": {"USD": [["2017-01-03", "2026-12-31"]]},
     "expect": {
       "rates": [
-        {"currency": "USD", "day": "2026-01-06", "value": {"gaps": ["rate-missing"]}},
-        {"currency": "USD", "day": "2026-01-06", "live": true, "value": {"gaps": ["rate-missing"]}}
+        {"currency": "USD", "day": "2026-01-06", "value": "1.41"},
+        {"currency": "USD", "day": "2026-01-06", "live": true, "value": "1.41"}
       ]
     }
   },
   {
-    "name": "a weekday no completed read covered is a rate not read, never a holiday",
-    "spec": "docs/plans/stage-2-engine.md, rates: a read that failed can never pass for a holiday",
-    "working": ["a read covered 2025-12-29 to 2026-01-02; Mon 2026-01-05 is covered by none and has no rate: missing, not the Friday's"],
+    "name": "a weekday no completed read covered is a rate not read, never a holiday: the last published rate stands",
+    "spec": "docs/plans/stage-2-engine.md, rates: a read that failed can never pass for a holiday; amended 2026-10-28 (the owner: \"Show nothing\"): a rate due and not read leaves the last published one standing",
+    "working": ["a read covered 2025-12-29 to 2026-01-02; Mon 2026-01-05 is covered by none and has no rate: due and not read, so the Friday's, 1.40, stands"],
     "today": "2026-01-07",
     "now": "2026-01-07T22:00:00Z",
     "rates": {"USD": {"2025-12-31": "1.37", "2026-01-02": "1.40"}},
     "covered": {"USD": [["2025-12-29", "2026-01-02"]]},
     "series": {"USD": [["2017-01-03", "2026-12-31"]]},
-    "expect": {"rates": [{"currency": "USD", "day": "2026-01-05", "value": {"gaps": ["rate-missing"]}}]}
+    "expect": {"rates": [{"currency": "USD", "day": "2026-01-05", "value": "1.40"}]}
   },
   {
     "name": "a holiday from the Bank's own schedule takes the previous business day's rate, for a transaction and a live mark",

@@ -352,15 +352,7 @@ fn every_kind_of_write_equals_a_fresh_build_in_every_figure_and_order() {
                 held.insert(b.ids.instrument("X"), bagholder_core::Dec::from_int(10));
             }
             let cash = BTreeMap::from([(bagholder_core::Currency::CAD, bagholder_core::Dec::from_int(r.below(5000) as i64))]);
-            let stated = bagholder_engine::input::BrokerAccount {
-                cash: cash.clone(),
-                cash_read: Some(cash),
-                held,
-                held_as_of: Some(full.clock.today),
-                as_of: Some(full.clock.now),
-                activity_read_at: Some(full.clock.now),
-                ..Default::default()
-            };
+            let stated = bagholder_engine::input::BrokerAccount { cash, held, held_as_of: Some(full.clock.today), as_of: Some(full.clock.now), ..Default::default() };
             full.market.brokers.insert(a, stated);
         }
         let all_links: Vec<(TransactionId, TransactionId)> = full.ledger.transfer_links.iter().map(|(o, n)| (o.clone(), n.clone())).collect();

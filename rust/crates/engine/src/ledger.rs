@@ -73,6 +73,10 @@ pub enum Flag {
     /// Written off at nothing as dust: what a fill left of a coin, worth less
     /// than the smallest order the broker takes (`crate::dust`).
     Dust,
+    /// Units the activity feed never showed arriving, as Wealthsimple's positions
+    /// read of the day before a transaction that took them states them held (brief
+    /// 79, amended 2026-10-28): opened from that read, its cost the read's.
+    Stated,
 }
 
 impl Flag {
@@ -89,6 +93,7 @@ impl Flag {
             Flag::Transferred => "transferred",
             Flag::Entered => "entered",
             Flag::Dust => "dust",
+            Flag::Stated => "stated",
         }
     }
 }
@@ -198,14 +203,41 @@ pub struct Trip {
     pub openings: Vec<TripKey>,
 }
 
-/// A transaction that took out more than the account held.
+/// Units a transaction took out that the journal's own lots did not hold: the
+/// activity feed never showed them arriving (a transfer in, a corporate action
+/// it does not spell out, a coin's rounding). Wealthsimple's positions read of
+/// the day before says what they were (brief 79, amended 2026-10-28).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Beyond {
     pub transaction: TransactionId,
     pub account: AccountId,
     pub instrument: InstrumentId,
-    /// What was left once the lots ran out.
+    /// The units the journal's lots did not hold.
     pub qty: Dec,
+    pub read: StatedRead,
+}
+
+/// What Wealthsimple's positions read of the day before a transaction says of
+/// units the journal did not hold.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StatedRead {
+    /// That day's read states them: a lot of them was opened from it (`Flag::Stated`).
+    Opened(Date),
+    /// That day is not read yet: the holding waits on its read.
+    Unread(Date),
+    /// No read states them: the account is one no holdings are read of, or the
+    /// read states fewer. They have no cost on record.
+    Unstated,
+}
+
+impl StatedRead {
+    /// The day of the read it rests on, where it rests on one.
+    pub fn day(self) -> Option<Date> {
+        match self {
+            StatedRead::Opened(d) | StatedRead::Unread(d) => Some(d),
+            StatedRead::Unstated => None,
+        }
+    }
 }
 
 /// An amount of a coin that was dust (`crate::dust`).
@@ -352,10 +384,6 @@ pub struct Matched {
     /// it is about: units that arrived with no cost on the record, and corporate
     /// events nothing says the values of.
     pub waiting: BTreeMap<TransactionId, Waiting>,
-    /// Each account's cash in each currency: every transaction's cash added up,
-    /// kept so that one account's check with its broker reads its own totals and
-    /// nothing else (`equity::broker_checks`); a sum that does not fit is that failure.
-    pub cash: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>>,
     /// Each instrument's round trips (by the instrument each is keyed on): what a
     /// family's figures are rebuilt from without a pass over every round trip.
     pub trips_of: BTreeMap<InstrumentId, BTreeSet<TripKey>>,
@@ -1235,10 +1263,92 @@ impl<'a, 'm> Matcher<'a, 'm> {
     /// Units beyond worth less than the broker's smallest coin order at the
     /// transaction's own price are dust (`crate::dust`), and not listed.
     fn beyond(&mut self, t: &Transaction, account: AccountId, instrument: InstrumentId, qty: Dec) {
-        if self.price_of(t, instrument).is_some_and(|p| crate::dust::is_dust(self.inputs, account, instrument, qty, p, t.trade_date)) {
+        if self.price_of(t, instrument).is_some_and(|p| crate::dust::is_dust(&crate::stated::Sources::of(self.inputs), account, instrument, qty, p, t.trade_date)) {
             return self.out.dust.push(Dust { transaction: t.id.clone(), account, instrument, qty, beyond: true });
         }
-        self.out.beyond.push(Beyond { transaction: t.id.clone(), account, instrument, qty });
+        self.out.beyond.push(Beyond { transaction: t.id.clone(), account, instrument, qty, read: StatedRead::Unstated });
+    }
+
+    /// What `qty` units arriving on `day` cost, as Wealthsimple's positions read
+    /// states the holding (brief 79, amended 2026-10-28, point 5): its book value
+    /// less the cost of the lots held, never below nothing, from the read of the day
+    /// they arrived, or the day after where that day's does not state them yet (a
+    /// row dated at a transfer's start). A day not read yet leaves the cost waiting
+    /// on its read; an account no holdings are read of is none.
+    fn cost_stated(&self, account: AccountId, instrument: InstrumentId, qty: Dec, day: Date) -> Option<(Fig<Money>, StatedRead)> {
+        let stated = self.inputs.market.brokers.get(&account).filter(|b| !b.days_held.is_empty())?;
+        let currency = self.currency(instrument);
+        let lots: Vec<&Lot> = self.out.books.get(&(account, instrument)).map(|b| b.lots.iter().filter(|l| l.direction == Direction::Long).collect()).unwrap_or_default();
+        let held = lots.iter().try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty)).ok()?;
+        let cost = lots.iter().try_fold(Money::zero(currency), |a, l| l.value.clone().and_then(|v| Ok(a.checked_add(v)?)));
+        let read_on = |d: Date| stated.days_held.get(&d).map(|r| (d, r));
+        let holds = |r: &&crate::input::HeldDay| r.held.get(&instrument).is_some_and(|u| held.checked_add(qty).is_ok_and(|w| *u >= w));
+        let after = day.tomorrow().ok();
+        // the arrival's own day where its read states them; else the day after, read;
+        // else the first of the two not read yet (never a day read already)
+        let Some((day, read)) = read_on(day).filter(|(_, r)| holds(r)).or_else(|| after.and_then(read_on)) else {
+            let wait = if stated.days_held.contains_key(&day) { after.unwrap_or(day) } else { day };
+            return Some((Err(Gaps::of(Gap::HoldingsUnread(wait))), StatedRead::Unread(wait)));
+        };
+        let value: Fig<Money> = match (read.book.get(&instrument), cost) {
+            (Some(book), Ok(cost)) => crate::fx::convert(&self.inputs.facts.rates, &self.inputs.clock, Money::new(book.amount.abs(), book.currency), currency, day).and_then(|b| {
+                let left = b.checked_sub(cost.amount)?;
+                Ok(Money::new(if left.is_negative() { Dec::ZERO } else { left }, currency))
+            }),
+            (None, _) => Err(Gaps::of(Gap::BookUnstated(instrument))),
+            (_, Err(g)) => Err(g),
+        };
+        Some((value, StatedRead::Opened(day)))
+    }
+
+    /// Units `tx` takes out of a holding beyond the journal's own lots of it, where
+    /// Wealthsimple's positions read of the day before states them held (brief 79,
+    /// amended 2026-10-28, point 5): every unit the read states that the lots do not
+    /// hold opens a lot, marked `Flag::Stated`, before the transaction takes them.
+    /// Its cost is the read's book value for the holding less the cost of the lots
+    /// held, never below nothing: a split the feed leaves out brings units at no
+    /// cost, a transfer in the whole book value, a coin's rounding almost nothing.
+    /// A day not read yet leaves the holding waiting on its read; an account no
+    /// holdings are read of leaves the units beyond what was held, as before.
+    #[allow(clippy::too_many_arguments)]
+    fn stated_before(&mut self, tx: &TransactionId, day: Date, at: Option<Timestamp>, account: AccountId, instrument: InstrumentId, direction: Direction, qty: Dec) {
+        let (held, cost, trip) = {
+            let lots: Vec<&Lot> = self.out.books.get(&(account, instrument)).map(|b| b.lots.iter().filter(|l| l.direction == direction).collect()).unwrap_or_default();
+            let held = lots.iter().try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty));
+            let cost = lots.iter().try_fold(Money::zero(self.currency(instrument)), |a, l| l.value.clone().and_then(|v| Ok(a.checked_add(v)?)));
+            (held, cost, lots.first().map(|l| l.trip.clone()))
+        };
+        let Ok(held) = held else { return };
+        if qty <= held {
+            return;
+        }
+        let Some(stated) = self.inputs.market.brokers.get(&account).filter(|b| !b.days_held.is_empty()) else { return };
+        let Ok(before) = day.yesterday() else { return };
+        let Some(read) = stated.days_held.get(&before) else {
+            // the units the transaction takes beyond the lots, their cost waiting on
+            // that day's read: the round trip shows as a figure not read yet
+            let Ok(missing) = qty.checked_sub(held) else { return };
+            let currency = self.currency(instrument);
+            self.out.beyond.push(Beyond { transaction: tx.clone(), account, instrument, qty: missing, read: StatedRead::Unread(before) });
+            return self.open_lot(account, instrument, tx, before, at, direction, missing, Err(Gaps::of(Gap::HoldingsUnread(before))), Money::zero(currency), BTreeSet::from([Flag::Stated]), trip);
+        };
+        let units = read.held.get(&instrument).copied().unwrap_or(Dec::ZERO);
+        let units = if direction == Direction::Short { units.neg() } else { units };
+        let Ok(missing) = units.checked_sub(held) else { return };
+        if !missing.is_positive() {
+            return;
+        }
+        let currency = self.currency(instrument);
+        let value: Fig<Money> = match (read.book.get(&instrument), cost) {
+            (Some(book), Ok(cost)) => crate::fx::convert(&self.inputs.facts.rates, &self.inputs.clock, Money::new(book.amount.abs(), book.currency), currency, before).and_then(|b| {
+                let left = b.checked_sub(cost.amount)?;
+                Ok(Money::new(if left.is_negative() { Dec::ZERO } else { left }, currency))
+            }),
+            (None, _) => Err(Gaps::of(Gap::BookUnstated(instrument))),
+            (_, Err(g)) => Err(g),
+        };
+        self.out.beyond.push(Beyond { transaction: tx.clone(), account, instrument, qty: missing, read: StatedRead::Opened(before) });
+        self.open_lot(account, instrument, tx, before, at, direction, missing, value, Money::zero(currency), BTreeSet::from([Flag::Stated]), trip);
     }
 
     /// Every contract past its expiry before `day` with lots still open: closed
@@ -1481,6 +1591,7 @@ impl<'a, 'm> Matcher<'a, 'm> {
                 if !self.holds(account, instrument, d) && self.holds(account, instrument, d.opposite()) {
                     return self.contradicts(t, &[(account, instrument)]);
                 }
+                self.stated_before(&t.id, t.trade_date, t.occurred_at, account, instrument, d, qty);
                 match self.close(account, instrument, d, qty, charge(Ok(Money::zero(currency))), fee, &closer, t.trade_date, t.occurred_at, &none) {
                     Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
                     Ok(_) => {}
@@ -1495,6 +1606,7 @@ impl<'a, 'm> Matcher<'a, 'm> {
                     self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, Direction::Long, qty, Ok(Money::zero(currency)), Money::zero(currency), flags, None);
                 } else {
                     // a reward taken back: the units leave for nothing
+                    self.stated_before(&t.id, t.trade_date, t.occurred_at, account, instrument, Direction::Long, qty);
                     match self.close(account, instrument, Direction::Long, qty, Ok(Money::zero(currency)), Money::zero(currency), &closer, t.trade_date, t.occurred_at, &none) {
                         Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
                         Ok(_) => {}
@@ -1504,6 +1616,7 @@ impl<'a, 'm> Matcher<'a, 'm> {
             }
             Move::Resolve => {
                 let value = charge(fill_value(t, qty, false, currency, &Ok(Dec::ONE)));
+                self.stated_before(&t.id, t.trade_date, t.occurred_at, account, instrument, Direction::Long, qty);
                 match self.close(account, instrument, Direction::Long, qty, value, fee, &closer, t.trade_date, t.occurred_at, &none) {
                     Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
                     Ok(_) => {}
@@ -1525,7 +1638,7 @@ impl<'a, 'm> Matcher<'a, 'm> {
         let Some(price) = self.price_of(t, instrument) else { return };
         let held = self.book(account, instrument).lots.iter().filter(|l| l.direction == Direction::Long).try_fold(Dec::ZERO, |a, l| a.checked_add(l.qty));
         let Ok(held) = held else { return };
-        if !held.is_positive() || !crate::dust::is_dust(self.inputs, account, instrument, held, price, t.trade_date) {
+        if !held.is_positive() || !crate::dust::is_dust(&crate::stated::Sources::of(self.inputs), account, instrument, held, price, t.trade_date) {
             return;
         }
         let zero = Money::zero(self.currency(instrument));
@@ -1571,6 +1684,18 @@ impl<'a, 'm> Matcher<'a, 'm> {
             return self.contradicts(t, &[(account, instrument)]);
         }
         let may_close = effect != Some(Effect::Open);
+        // what is left once the lots run out opens a position only where it may:
+        // an option's net position either way, a share, coin or event contract only
+        // long, unless the record says it opens; where it may not, units
+        // Wealthsimple states held come first
+        let may_open_left = match effect {
+            Some(Effect::Close) => false,
+            Some(Effect::Open) => true,
+            None => option || acquiring,
+        };
+        if may_close && !may_open_left {
+            self.stated_before(&t.id, t.trade_date, t.occurred_at, account, instrument, closes, qty);
+        }
         let Closed { left, value_left, fee_left } = if may_close {
             match self.close(account, instrument, closes, qty, value, fee, &closer, t.trade_date, t.occurred_at, &none) {
                 Ok(r) => r,
@@ -1588,12 +1713,7 @@ impl<'a, 'm> Matcher<'a, 'm> {
         }
         // what is left opens a position: an option's net position either way; a
         // share, coin or event contract only long, unless the record says it opens
-        let may_open = match effect {
-            Some(Effect::Close) => false,
-            Some(Effect::Open) => true,
-            None => option || acquiring,
-        };
-        if !may_open {
+        if !may_open_left {
             return self.beyond(t, account, instrument, left);
         }
         let joins = if option { self.rolled_from(t, instrument, opens, record_legs) } else { None };
@@ -1668,26 +1788,39 @@ impl<'a, 'm> Matcher<'a, 'm> {
             // what the asset cost: the person's stated cost, else what the source
             // states it was worth as it arrived, else not on the record
             let stated = self.inputs.facts.adjustments.get(&t.id).and_then(|a| a.legs.iter().find(|l| l.from.is_none() && l.to == Some(instrument) && l.cost.is_some()).cloned());
+            let mut flags = BTreeSet::from([Flag::Deposited]);
             let (value, day) = match stated {
                 Some(leg) => (Ok(leg.cost.expect("filtered")), leg.acquired.unwrap_or(t.trade_date)),
                 None if self.inputs.facts.adjustments.in_conflict(&t.id) => (Err(Gaps::of(Gap::AdjustmentConflict(t.id.clone()))), t.trade_date),
                 None if t.value.is_some() => (Ok(t.value.expect("tested")), t.trade_date),
-                None => {
-                    self.out.waiting.insert(t.id.clone(), Waiting { what: Wanted::CostOfArrival, account, instrument, day: t.trade_date, units: Some(qty) });
-                    (Err(Gaps::of(Gap::BasisUnknown(t.id.clone()))), t.trade_date)
-                }
+                // units Wealthsimple's positions read states held: their cost is the
+                // read's book value for the holding less the lots' cost, never below
+                // nothing, and nothing is asked of the person (brief 79, amended
+                // 2026-10-28, point 5); the form only for an account no holdings are
+                // read of
+                None => match self.cost_stated(account, instrument, qty, t.trade_date) {
+                    Some((value, read)) => {
+                        self.out.beyond.push(Beyond { transaction: t.id.clone(), account, instrument, qty, read });
+                        flags.insert(Flag::Stated);
+                        (value, t.trade_date)
+                    }
+                    None => {
+                        self.out.waiting.insert(t.id.clone(), Waiting { what: Wanted::CostOfArrival, account, instrument, day: t.trade_date, units: Some(qty) });
+                        (Err(Gaps::of(Gap::BasisUnknown(t.id.clone()))), t.trade_date)
+                    }
+                },
             };
             let value = match value {
                 Ok(v) if v.currency != currency => Err(Gaps::of(Gap::CurrencyUnstated(t.id.clone()))),
                 v => v,
             };
-            let flags = BTreeSet::from([Flag::Deposited]);
             self.open_lot(account, instrument, &t.id, day, t.occurred_at, Direction::Long, qty, value, Money::zero(currency), flags, None);
             return;
         }
         let link = self.link_of(t, instrument);
         // what the holding waits on goes with what leaves it
         let waiting = self.book(account, instrument).taint.clone();
+        self.stated_before(&t.id, t.trade_date, t.occurred_at, account, instrument, Direction::Long, qty);
         match self.take(account, instrument, qty) {
             Ok(Taken { lots, left, cost }) => {
                 if left.is_positive() {
@@ -1788,6 +1921,7 @@ impl<'a, 'm> Matcher<'a, 'm> {
             }
             return self.contradicts(t, &holdings);
         }
+        self.stated_before(&t.id, t.trade_date, t.occurred_at, account, instrument, closing, qty);
         match self.close(account, instrument, closing, qty, Ok(Money::zero(currency)), Money::zero(currency), &closer, t.trade_date, t.occurred_at, &flags) {
             Ok(c) if c.left.is_positive() => self.beyond(t, account, instrument, c.left),
             Ok(_) => {}
@@ -1847,7 +1981,10 @@ impl<'a, 'm> Matcher<'a, 'm> {
                     let currency = self.currency(instrument);
                     let flags = BTreeSet::from([Flag::FromEvent]);
                     self.open_lot(account, instrument, &t.id, t.trade_date, t.occurred_at, Direction::Long, q, Err(unknown.clone()), Money::zero(currency), flags, None);
-                } else if let Ok(Taken { lots, left, .. }) = self.take(account, instrument, q.abs()) {
+                } else if let Ok(Taken { lots, left, .. }) = {
+                    self.stated_before(&t.id, t.trade_date, t.occurred_at, account, instrument, Direction::Long, q.abs());
+                    self.take(account, instrument, q.abs())
+                } {
                     self.moved_out(&lots);
                     if left.is_positive() {
                         self.beyond(t, account, instrument, left);
@@ -2064,9 +2201,10 @@ impl<'a, 'm> Matcher<'a, 'm> {
                 }
                 let value = cash.times(out)?;
                 let closer = Closer::Transaction(anchor.clone());
+                self.stated_before(anchor, day, at, account, from, Direction::Long, out);
                 let left = self.close(account, from, Direction::Long, out, Ok(value), Money::zero(currency), &closer, day, at, &BTreeSet::new())?.left;
                 if left.is_positive() {
-                    self.out.beyond.push(Beyond { transaction: anchor.clone(), account, instrument: from, qty: left });
+                    self.out.beyond.push(Beyond { transaction: anchor.clone(), account, instrument: from, qty: left, read: StatedRead::Unstated });
                 }
                 Ok(())
             }
@@ -2398,8 +2536,6 @@ impl MatchState {
 pub struct Continued {
     pub trips: BTreeSet<TripKey>,
     pub holdings: BTreeSet<(AccountId, InstrumentId)>,
-    /// The added rows' cash, by account.
-    pub cash: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>>,
     /// Rows whose cashflow row reads what the walk wrote: the stock dividends it
     /// took out and wrote again, after a cut.
     pub rows: BTreeSet<TransactionId>,
@@ -2615,20 +2751,6 @@ pub fn passes_over(inputs: &Inputs, t: &Transaction) -> bool {
     t.instrument.is_none() || (t.kind == Kind::Dividend && inputs.facts.adjustments.get(&t.id).is_none())
 }
 
-/// Each account's cash `txs` move.
-fn cash_of(txs: &[&Transaction]) -> BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>> {
-    let mut out: BTreeMap<AccountId, BTreeMap<Currency, Fig<Dec>>> = BTreeMap::new();
-    for t in txs {
-        if let Some(c) = t.cash {
-            let e = out.entry(t.account).or_default().entry(c.currency).or_insert(Ok(Dec::ZERO));
-            if let Ok(total) = e {
-                *e = total.checked_add(c.amount).map_err(Gaps::from);
-            }
-        }
-    }
-    out
-}
-
 /// The match of `txs` alone, and what it keeps to be continued from: a set of
 /// transactions no other transaction's matching reaches (a family,
 /// `crate::families`), or every transaction. The lists of what the record waits
@@ -2647,7 +2769,6 @@ pub fn match_family(inputs: &Inputs, txs: Vec<&Transaction>) -> (Matched, MatchS
     let (mut state, _, _) = m.into_state(last, opens);
     state.expired_at_end = end.popped;
     state.ended_quiet = !end.acted;
-    out.cash = cash_of(&txs);
     out.in_match_order(&inputs.ledger);
     out.index();
     (out, state)
@@ -2673,7 +2794,7 @@ pub fn continue_family(inputs: &Inputs, out: &mut Matched, state: &mut MatchStat
     let (last, opens) = (s.last.take(), std::mem::take(&mut s.opens_at_last));
     let (s, trips, holdings) = walk_from(inputs, out, s, &added, last, opens, scope);
     *state = s;
-    Continued { trips, holdings, cash: cash_of(&added), rows: BTreeSet::new() }
+    Continued { trips, holdings, rows: BTreeSet::new() }
 }
 
 /// `rows` walked on from `s` into `out`, as the whole match walks them: the
@@ -2814,7 +2935,7 @@ pub fn match_from_cut(inputs: &Inputs, out: &mut Matched, state: &mut MatchState
     *state = s;
     trips.extend(gone);
     rows.extend(out.stock_dividends.iter().filter(|x| later.contains(&x.transaction)).map(|x| x.transaction.clone()));
-    Continued { trips, holdings, cash: cash_of(added), rows }
+    Continued { trips, holdings, rows }
 }
 
 /// A round trip added inside one of a family's flat stretches, placed there
@@ -2926,7 +3047,7 @@ pub fn place_in_stretch(inputs: &Inputs, out: &mut Matched, state: &mut MatchSta
     state.stretches.extend(stretches);
     // every cut after the rows held the match without them
     state.cuts.retain(|k, _| start.as_ref().is_some_and(|st| k <= st));
-    Some(Continued { trips, holdings, cash: cash_of(&added), rows: BTreeSet::new() })
+    Some(Continued { trips, holdings, rows: BTreeSet::new() })
 }
 
 impl Matched {
@@ -2958,7 +3079,7 @@ impl Matched {
         self.roles.retain(|x, _| !tx_in(x));
         self.waiting.retain(|x, _| !tx_in(x));
         // the lists kept in the match's order: each new row put in its place
-        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, trips_by_fill, held_by } = fresh;
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, trips_of, trips_by_fill, held_by } = fresh;
         let at = |id: &TransactionId| ledger.transactions.get(id).map(|t| place_in_match(ledger, t));
         fn put<T>(list: &mut Vec<T>, rows: Vec<T>, key: impl Fn(&T) -> Option<(Date, u8, Option<Timestamp>, u8, String, u8, String, TransactionId)>) {
             for row in rows {
@@ -3011,7 +3132,7 @@ impl Matched {
     /// Everything `fresh` holds put in beside what this holds, the cash totals
     /// aside (the caller's); the lists left for `in_match_order`.
     pub fn absorb(&mut self, fresh: Matched) {
-        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, cash: _, trips_of, trips_by_fill, held_by } = fresh;
+        let Matched { trips, books, beyond, dust, arrived, last_price, stock_dividends, disagreements, unit_disagreements, unapplied, units, roles, waiting, trips_of, trips_by_fill, held_by } = fresh;
         for (i, k) in trips_of {
             self.trips_of.entry(i).or_default().extend(k);
         }

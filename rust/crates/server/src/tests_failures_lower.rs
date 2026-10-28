@@ -108,7 +108,7 @@ fn exposures_whose_store_cannot_be_read_are_said_in_the_header_until_a_pass_read
 }
 
 #[test]
-fn short_interest_that_could_not_be_read_is_said_in_the_header_until_the_listing_reads() {
+fn short_interest_that_could_not_be_read_is_never_said_in_the_header() {
     use bagholder_market::shorts::{self, CaPositionRow, CaVolumeRow};
     use std::collections::HashMap;
     let _g = guard();
@@ -125,11 +125,12 @@ fn short_interest_that_could_not_be_read_is_said_in_the_header_until_the_listing
     {
         // the market's trading days, which days to cover is counted over, cannot be read
         let _broken = Broken::new(&app, "ALTER TABLE benchmark_closes RENAME TO benchmark_closes_away;", "ALTER TABLE benchmark_closes_away RENAME TO benchmark_closes;");
-        // one failed read is not said; the next failing too is (`feeds::feed_failed`)
-        assert!(crate::feeds::read_shorts(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), "TSX-V", false, "").unwrap().is_none());
-        assert!(!error(&app).contains("short interest of QNC"), "{}", error(&app));
-        assert!(crate::feeds::read_shorts(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), "TSX-V", false, "").unwrap().is_none());
-        assert!(error(&app).contains("short interest of QNC · TSX-V could not be read"), "{}", error(&app));
+        // a market source's read failing goes to the log, however often, never to
+        // the header (brief 79, amended 2026-10-28)
+        for _ in 0..3 {
+            assert!(crate::feeds::read_shorts(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), "TSX-V", false, "").unwrap().is_none());
+            assert!(!error(&app).contains("short interest"), "{}", error(&app));
+        }
     }
     assert!(crate::feeds::read_shorts(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), "TSX-V", false, "").unwrap().is_some());
     assert!(!error(&app).contains("short interest"), "{}", error(&app));

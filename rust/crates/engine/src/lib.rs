@@ -12,6 +12,7 @@ pub mod families;
 pub mod dust;
 pub mod identity;
 pub mod positions;
+pub mod stated;
 pub mod stat;
 pub mod trades;
 pub mod cashflow;

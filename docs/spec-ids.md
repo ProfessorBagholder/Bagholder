@@ -34,7 +34,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `trade-6`
 - `trade-7`
 - `trade-8`
-- `trade-9`
+- `trade-9` retired
 - `trade-10`
 - `trade-11`
 - `trade-12`
@@ -92,6 +92,8 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `trade-64`
 - `trade-65`
 - `trade-66`
+- `trade-67`
+- `trade-68`
 - `what-you-enter-1`
 - `what-you-enter-2`
 - `what-you-enter-3`
@@ -118,6 +120,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `position-11`
 - `position-12`
 - `position-13`
+- `position-14`
 - `distribution-1`
 - `distribution-2`
 - `distribution-3`
@@ -148,29 +151,30 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `equity-and-returns-15`
 - `equity-and-returns-16`
 - `movements-the-activity-feed-leaves-out-1`
-- `movements-the-activity-feed-leaves-out-2`
-- `movements-the-activity-feed-leaves-out-3`
-- `movements-the-activity-feed-leaves-out-4`
-- `movements-the-activity-feed-leaves-out-5`
-- `movements-the-activity-feed-leaves-out-6`
-- `movements-the-activity-feed-leaves-out-7`
-- `movements-the-activity-feed-leaves-out-8`
-- `movements-the-activity-feed-leaves-out-9`
-- `movements-the-activity-feed-leaves-out-10`
-- `movements-the-activity-feed-leaves-out-11`
-- `movements-the-activity-feed-leaves-out-12`
-- `movements-the-activity-feed-leaves-out-13`
-- `movements-the-activity-feed-leaves-out-14`
-- `movements-the-activity-feed-leaves-out-15`
-- `movements-the-activity-feed-leaves-out-16`
-- `movements-the-activity-feed-leaves-out-17`
-- `movements-the-activity-feed-leaves-out-18`
-- `movements-the-activity-feed-leaves-out-19`
-- `movements-the-activity-feed-leaves-out-20`
-- `movements-the-activity-feed-leaves-out-21`
-- `movements-the-activity-feed-leaves-out-22`
-- `movements-the-activity-feed-leaves-out-23`
-- `movements-the-activity-feed-leaves-out-24`
+- `movements-the-activity-feed-leaves-out-2` retired
+- `movements-the-activity-feed-leaves-out-3` retired
+- `movements-the-activity-feed-leaves-out-4` retired
+- `movements-the-activity-feed-leaves-out-5` retired
+- `movements-the-activity-feed-leaves-out-6` retired
+- `movements-the-activity-feed-leaves-out-7` retired
+- `movements-the-activity-feed-leaves-out-8` retired
+- `movements-the-activity-feed-leaves-out-9` retired
+- `movements-the-activity-feed-leaves-out-10` retired
+- `movements-the-activity-feed-leaves-out-11` retired
+- `movements-the-activity-feed-leaves-out-12` retired
+- `movements-the-activity-feed-leaves-out-13` retired
+- `movements-the-activity-feed-leaves-out-14` retired
+- `movements-the-activity-feed-leaves-out-15` retired
+- `movements-the-activity-feed-leaves-out-16` retired
+- `movements-the-activity-feed-leaves-out-17` retired
+- `movements-the-activity-feed-leaves-out-18` retired
+- `movements-the-activity-feed-leaves-out-19` retired
+- `movements-the-activity-feed-leaves-out-20` retired
+- `movements-the-activity-feed-leaves-out-21` retired
+- `movements-the-activity-feed-leaves-out-22` retired
+- `movements-the-activity-feed-leaves-out-23` retired
+- `movements-the-activity-feed-leaves-out-24` retired
+- `movements-the-activity-feed-leaves-out-25`
 - `market-data-1`
 - `market-data-2`
 - `market-data-3`
@@ -182,7 +186,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `market-data-9`
 - `market-data-10`
 - `market-data-11`
-- `market-data-12`
+- `market-data-12` retired
 - `market-data-13`
 - `market-data-14`
 - `market-data-15`
@@ -205,6 +209,8 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `market-data-32`
 - `market-data-33`
 - `market-data-34`
+- `market-data-35`
+- `market-data-36`
 - `versions-and-the-update-check-1`
 - `versions-and-the-update-check-2`
 - `versions-and-the-update-check-3`
@@ -320,13 +326,13 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `pages-11`
 - `pages-12`
 - `pages-13`
-- `pages-14`
-- `pages-15`
-- `pages-16`
-- `pages-17`
+- `pages-14` retired
+- `pages-15` retired
+- `pages-16` retired
+- `pages-17` retired
 - `pages-18`
-- `pages-19`
-- `pages-20`
+- `pages-19` retired
+- `pages-20` retired
 - `pages-21`
 - `pages-22`
 - `pages-23`
@@ -348,6 +354,9 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `pages-39`
 - `pages-40`
 - `pages-41`
+- `pages-42`
+- `pages-43`
+- `pages-44`
 - `dashboard-1`
 - `dashboard-2`
 - `dashboard-3`

@@ -183,53 +183,35 @@ fn test_a_rollback_that_cannot_put_the_previous_version_back_is_said_and_keeps_i
 }
 
 #[test]
-fn test_a_distribution_notice_whose_record_cannot_be_read_says_why_until_one_can() {
+fn test_a_distribution_notice_whose_record_cannot_be_read_is_never_said() {
     let (_home, app) = fresh();
     *app.feeds.record_fails.lock().unwrap() = Some("TMX Money could not be reached".into());
     use bagholder_market::stored::feeds::{Feed, NewsItem, NewsKind};
     let item = |id: &str| NewsItem { id: id.into(), headline: "Announces Monthly Distribution".into(), source: String::new(), url: String::new(), published_at: "2026-09-15T13:00:00Z".into(), summary: String::new(), kind: NewsKind::Release, via: Feed::Tmx };
     crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[item("tmx:1")]);
     assert!(!error(&app).contains("declared distributions"), "one failure is not said");
+    // a market source's failure goes to the log, never to the page (brief 79, amended 2026-10-28)
     crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[item("tmx:1")]);
-    assert!(error(&app).contains("QNC · TSX-V's declared distributions could not be read again: TMX Money could not be reached"), "{}", error(&app));
+    assert_eq!(error(&app), "", "nor the second");
     *app.feeds.record_fails.lock().unwrap() = None;
     app.feeds.release_texts.lock().unwrap().insert("tmx:2".into(), "<p>Quantum eMotion announces a distribution.</p>".into());
     crate::feeds::release_notice(&app, &bagholder_core::ListingKey::on("QNC", "TSX-V").unwrap(), &[item("tmx:2")]);
     assert_eq!(error(&app), "");
 }
 
+/// A market source failing, once or however often and for however many
+/// listings, goes to the log and never to the page (brief 79, amended
+/// 2026-10-28): the figure waits where it is shown.
 #[test]
-fn test_one_source_down_is_one_sentence_for_every_listing_it_stopped() {
+fn test_a_market_source_failing_is_never_said_however_many_listings_it_stopped() {
     let (_home, app) = fresh();
-    // each failed twice in a row, so each is said
-    for _ in 0..2 {
+    for _ in 0..3 {
         for sym in ["ASTS", "LUNR", "MU"] {
             crate::feeds::feed_failed(&app, &format!("shorts:{sym}@US"), "FINRA could not be reached");
         }
         crate::feeds::feed_failed(&app, "shorts:VEQT@XTSE", "CIRO could not be reached");
+        assert_eq!(error(&app), "");
     }
-    assert_eq!(
-        error(&app),
-        "The short interest of ASTS · US, LUNR · US, MU · US could not be read: FINRA could not be reached. The short interest of VEQT · TSX could not be read: CIRO could not be reached."
-    );
     crate::feeds::feed_answered(&app, "shorts:LUNR@US");
-    assert!(error(&app).starts_with("The short interest of ASTS · US, MU · US could not be read"), "{}", error(&app));
-}
-
-/// A single failed request to an outside source is not told to the person: the
-/// failure is said once the next asking fails too, and an answer between starts
-/// the count again.
-#[test]
-fn test_a_single_failed_request_to_a_source_is_not_said() {
-    let (_home, app) = fresh();
-    let feed = "shorts:ZZQQ@XTSE";
-    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403");
-    assert_eq!(error(&app), "", "one failure");
-    crate::feeds::feed_answered(&app, feed);
-    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403");
-    assert_eq!(error(&app), "", "one failure after an answer");
-    crate::feeds::feed_failed(&app, feed, "CIRO: HTTP 403");
-    assert_eq!(error(&app), "The short interest of ZZQQ · TSX could not be read: CIRO: HTTP 403.");
-    crate::feeds::feed_answered(&app, feed);
     assert_eq!(error(&app), "");
 }
