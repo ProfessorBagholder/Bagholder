@@ -81,3 +81,7 @@ The owner, on 2.11.5's header line "Sync failed: statement:<a card account's id>
 6. **The per-kind table** is the one built from the owner's book (what was ever answered, per kind): margin gets accounts, activity, balances, positions, history, buying power and margin rates; cash, crypto and event-contracts the same without buying power and margin rates; spending accounts, activity, balances and history; credit cards and lines of credit accounts, activity, the card read and history; an unrecognised kind accounts and activity only.
 
 Built into the brief 79 PR; `SPEC.md` pages-11 and pages-13 say the rule.
+
+## Amended 2026-10-28: the currency of Book and Avg (the owner's answer)
+
+The owner: "each Wealthsimple accounts include CAD + USD side, so each stock shows in its own correct currency", and "the way they handle that may have changed over the past few years. that shoudl already have been accounted for since a long time ago." Each Wealthsimple account id's positions are asked in that id's own currency (the accounts read states it): Book and Avg are in the currency of the side a holding is on, exactly as that side states them, converted by nothing of Bagholder's, whatever Wealthsimple did over the years. The `currency: "CAD"` asked of every id (plan §2.2) was wrong and is replaced; 2.12.0 stays a pre-release until 2.12.1 carries this.
