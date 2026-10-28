@@ -805,9 +805,15 @@ pub fn get_at(clock: &std::sync::Arc<dyn crate::Clock>, to: std::net::SocketAddr
     }
     req.push_str("\r\n");
     c.write_all(req.as_bytes()).and_then(|_| c.flush()).map_err(transport)?;
-    let head = read_head(&mut c).and_then(|(raw, _)| parse_head(&raw))?;
+    answer_of(&mut c, ceiling)
+}
+
+/// The answer on `c` once its request is sent (`get_at`): its head, and its body
+/// held to `ceiling` as it arrives and again once decoded.
+fn answer_of(c: &mut Conn, ceiling: u64) -> Result<Response, Error> {
+    let head = read_head(c).and_then(|(raw, _)| parse_head(&raw))?;
     let mut raw: Vec<u8> = Vec::new();
-    read_body(&mut c, &head, &mut Capped::new(&mut raw, ceiling))?;
+    read_body(c, &head, &mut Capped::new(&mut raw, ceiling))?;
     Ok(Response { status: head.status, body: decoded(raw, &head.headers, ceiling)?, headers: head.headers.clone() })
 }
 
@@ -1017,7 +1023,7 @@ mod leaving_tests {
 
 #[cfg(test)]
 mod coding_tests {
-    use super::decoded;
+    use super::{answer_of, decoded, Conn};
     use std::io::Write;
 
     fn gz(data: &[u8]) -> Vec<u8> {
@@ -1052,6 +1058,20 @@ mod coding_tests {
     /// undone: a megabyte of zeros sent as about a kilobyte of gzip, held to 8 KiB.
     #[test]
     fn a_coded_body_is_held_to_its_ceiling_once_decoded() {
+        // and in the answer `get_at` reads, over a socket (brief 80's re-review, 5)
+        let bomb = gz(&vec![0u8; 1 << 20]);
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let to = l.local_addr().unwrap();
+        let sent = bomb.clone();
+        let peer = std::thread::spawn(move || {
+            let (mut s, _) = l.accept().unwrap();
+            let _ = std::io::Write::write_all(&mut s, format!("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n", sent.len()).as_bytes());
+            let _ = std::io::Write::write_all(&mut s, &sent);
+        });
+        let mut c = Conn::Plain(std::net::TcpStream::connect(to).unwrap());
+        let said = answer_of(&mut c, 8 * 1024).err().expect("refused once decoded");
+        assert!(said.to_string().contains("larger than the 8192 bytes"), "{said}");
+        peer.join().unwrap();
         let bomb = gz(&vec![0u8; 1 << 20]);
         assert!(bomb.len() < 8 * 1024, "{}", bomb.len());
         let said = decoded(bomb.clone(), &h("gzip"), 8 * 1024).err().expect("refused");
