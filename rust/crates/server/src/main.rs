@@ -315,6 +315,10 @@ fn serve() -> i32 {
 
     let url = format!("http://127.0.0.1:{}", port);
     app::say(&format!("Bagholder  {}", url));
+    // in a container no browser runs here: say where it opens from another device
+    if a.bind_host != "127.0.0.1" {
+        app::say("On your network: open it through your reverse proxy's route, or at this server's address and the port Docker publishes. Bagholder answers local names and addresses, and refuses visitors from the internet.");
+    }
     app::say(&format!("orders: {}", if orders::orders_live(&a) { "live" } else { "dry" }));
     // a second instance run for verification must not open anyone's browser
     if !app::env_on("BAGHOLDER_NO_BROWSER") {

@@ -7,6 +7,7 @@
   // none), and adding Bagholder in the agent, where a sign-in shows the code to type.
   // Built as the menu's other modals are (Modals.svelte).
   import { status as statusSlot } from './subs.svelte'
+  import { copyText } from './clipboard'
   import { closeModal } from './ui.svelte'
   import { call } from './api'
   import { read } from './reads.svelte'
@@ -82,7 +83,7 @@
   /** an agent named as the person knows it */
   const rename = (id: string, name: string) => act(id, () => call('POST /api/agents/rename', { body: { id, name } }))
   function copy(text: string, what: string) {
-    navigator.clipboard.writeText(text).then(
+    copyText(text).then(
       () => {
         // a check for two seconds, then the copy icon again, as the header's copy button
         copied = what

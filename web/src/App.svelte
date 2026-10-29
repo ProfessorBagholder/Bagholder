@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from 'svelte'
+  import { copyText } from './lib/clipboard'
   import { start, refilter, loadDetail } from './lib/state.svelte'
   import { conn, connect, disconnect, everyScreen, keptRow } from './lib/live.svelte'
   import { status as statusSlot, book, dashboard, positions, trades, cashflow, exposure, markets, trade, use, filtered, limits } from './lib/subs.svelte'
@@ -305,7 +306,7 @@
   /** The header's line, whole, to the clipboard. */
   function copySaid(): void {
     const text = said
-    navigator.clipboard.writeText(text).then(
+    copyText(text).then(
       () => {
         copied = text
         setTimeout(() => {

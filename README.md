@@ -98,7 +98,11 @@ The app opens at `http://127.0.0.1:8765` in your browser. Use that address as wr
 
 ### From another device
 
-To open it from elsewhere, put a tunnel or reverse proxy with a login of its own in front of it, on the same machine, and list the name it serves the app under in `BAGHOLDER_HOSTS` (comma-separated, each exactly as the address bar shows it, `name` or `name:port`). The app then answers that name as it answers `127.0.0.1:8765`, and only from its own machine, where the proxy runs: any other name, and any request from another machine, is refused. The app has no sign-in of its own, so the proxy's login is the only one: list only a name nobody reaches without it. An entry the app cannot read stops it at start, naming the entry.
+On its own computer, Bagholder answers only that computer. To open it from another device:
+
+- **From anywhere:** turn on **Open from anywhere** (below).
+- **On your own network:** put a reverse proxy on the same computer (Caddy, Traefik, nginx). Bagholder answers whatever name the proxy routes to it, for visitors on your local network, and refuses visitors from the internet. The proxy has to pass on the visitor's address. Caddy and Traefik do; nginx needs `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;`. When Bagholder refuses a visit, the page says what it saw and what to change.
+- **A proxy with a login of its own that also lets in visitors from the internet:** list the name it serves the app under in `BAGHOLDER_HOSTS` (comma-separated, each exactly as the address bar shows it, `name` or `name:port`). Bagholder has no sign-in of its own, so that proxy's login is the only one: list only a name nobody reaches without it. An entry the app cannot read stops it at start, naming the entry.
 
 **Open from anywhere** (in the menu) sets this up for you with Cloudflare: the page at an address on your own Cloudflare domain, behind Cloudflare Access with GitHub sign-in, letting in only the email you name. You sign in to Cloudflare, make a token on Cloudflare's page that Bagholder fills in, and press Create once on GitHub. Bagholder makes the tunnel, the address, the Access application and its own GitHub sign-in, and checks Cloudflare's signed pass on every request itself.
 
@@ -142,13 +146,33 @@ The Docker copy restarts with Docker itself (`restart: unless-stopped` in `docke
 
 ## Docker
 
-For a copy that runs in the background on a machine you keep on. Nothing is needed on the host but Docker: the image carries Chromium for the sign-in, and the database and the login live in `./data` beside the compose file.
+For a copy that runs in the background on a machine you keep on. Nothing is needed on the host but Docker: the image carries Chromium for the sign-in, and the database and the login live in `./data` beside the compose file. The image is published with every release as `ghcr.io/professorbagholder/bagholder:latest` and `:X.Y.Z`; moving to a new one is under Keeping up to date below.
+
+Bagholder answers your local network (its addresses, and names like `server.local` or a name a reverse proxy routes to it) and refuses visitors from the internet, whichever way they reach it. From outside your network, turn on **Open from anywhere**. Publish a port only where nothing else reaches the container:
+
+- **Behind a reverse proxy (Traefik, Caddy, Nginx Proxy Manager):** publish no port. Join the proxy's network and route a name to the container's port 8765. With Traefik, beside `image` and `volumes`:
+
+  ```yaml
+      networks: [traefik]
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.bagholder.rule=Host(`bagholder.lan`)  # the name you open it at
+        - traefik.http.routers.bagholder.entrypoints=https           # your entrypoint
+        - traefik.http.routers.bagholder.middlewares=bagholder-local
+        - traefik.http.middlewares.bagholder-local.ipallowlist.sourcerange=192.168.1.0/24  # your network
+        - traefik.http.services.bagholder.loadbalancer.server.port=8765
+  ```
+
+  Keep the route to your network, as the allowlist does, when the proxy also faces the internet. Bagholder refuses visitors from the internet anyway, but the route is then never open to them.
+- **No proxy, on a home server or a NAS:** publish the port on the network (`ports: ["8765:8765"]`) and open `http://<the server's address>:8765`.
+- **On the computer you browse from (Docker Desktop):** the compose file as it is, which publishes the port on that computer alone. Open `http://127.0.0.1:8765`.
+- **A rented server with a public address:** publish nothing beyond its loopback (the compose file as it is). Open it once through an SSH tunnel (`ssh -L 8765:127.0.0.1:8765 you@server`, then `http://127.0.0.1:8765` on your computer), and turn on Open from anywhere.
 
 ```
 docker compose up -d
 ```
 
-Open `http://127.0.0.1:8765` and choose Connect Wealthsimple: the sign-in page opens inside the page. Sign in with your email, password and 2FA code (a passkey needs a real browser). The port is published on the host's loopback only. The image is published with every release as `ghcr.io/professorbagholder/bagholder:latest` and `:X.Y.Z`; moving to a new one is under Keeping up to date below.
+Then choose Connect Wealthsimple: the sign-in page opens inside the page. Sign in with your email, password and 2FA code (a passkey needs a real browser). The container's log says where it opens.
 
 To build the image yourself, from the root of a clone, `docker build -f rust/Dockerfile -t bagholder .`, and point the compose file's `image` at `bagholder`.
 

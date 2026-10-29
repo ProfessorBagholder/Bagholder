@@ -57,7 +57,9 @@ fn test_only_the_page_on_this_machine_gets_in() {
 
         let mut elsewhere = from_the_page(Method::GET, "/api/status", None);
         elsewhere.extensions_mut().insert(ConnectInfo(SocketAddr::from(([192, 168, 1, 20], 50000))));
-        assert_eq!(json_of(elsewhere).await, (StatusCode::FORBIDDEN, json!({"ok": false})), "a peer that is not this machine");
+        let (code, body) = json_of(elsewhere).await;
+        assert_eq!((code, &body["ok"]), (StatusCode::FORBIDDEN, &json!(false)), "a peer that is not this machine");
+        assert!(body["error"].as_str().is_some_and(|e| e.contains("192.168.1.20")), "the refusal says what it saw: {body}");
 
         let mut rebound = from_the_page(Method::GET, "/api/status", None);
         rebound.headers_mut().insert(header::HOST, "evil.example:8765".parse().unwrap());

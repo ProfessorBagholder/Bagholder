@@ -3,7 +3,9 @@ services:
     # published on every release; update with: docker compose pull && docker compose up -d
     image: ghcr.io/professorbagholder/bagholder:latest
     container_name: bagholder
-    # loopback only on the host, as the app itself binds. The port is the same
+    # on this computer alone: behind a reverse proxy, publish no port and route to it
+    # instead; on a home server with no proxy, publish it on the network (README,
+    # Docker). Bagholder answers the local network and refuses the internet. The port is the same
     # inside and out, so the address the app prints is the one to open:
     # BAGHOLDER_PORT=8766 docker compose up
     environment:

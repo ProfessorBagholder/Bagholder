@@ -28,7 +28,7 @@
     ['releasesAll', 'All tickers'],
   ]
   const notifyWord = $derived(
-    channel() === 'unavailable' ? 'Unavailable' : channel() === 'denied' ? 'Blocked' : NOTIFY_KINDS.concat(NOTIFY_SCOPES, NOTIFY_RELEASE_SCOPES).some((k) => notifyOn(k[0])) ? 'On' : 'Off',
+    channel() === 'unavailable' ? (window.isSecureContext ? 'Unavailable' : 'Needs https') : channel() === 'denied' ? 'Blocked' : NOTIFY_KINDS.concat(NOTIFY_SCOPES, NOTIFY_RELEASE_SCOPES).some((k) => notifyOn(k[0])) ? 'On' : 'Off',
   )
   const themeWord = $derived((THEMES.find((t) => t[0] === theme.name) || THEMES[0])[1])
 </script>
