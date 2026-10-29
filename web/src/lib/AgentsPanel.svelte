@@ -35,6 +35,8 @@
   let view = $state<View | ''>('')
   let kind = $state<Kind>('claude')
   const agentName = $derived(AGENTS.find((a) => a.id === kind)!.name)
+  /** the agent as a sentence names it: one not on the list is "your agent", never its card's "Another agent" */
+  const agentWords = $derived(kind === 'other' ? 'your agent' : agentName)
   $effect(() => {
     // an error belongs to the screen it happened on: moving to another clears it
     void view
@@ -232,7 +234,7 @@
     walked = true
     view = 'ready'
   }
-  const reachTitle = $derived(reachFor === 'connect' ? `Which server should ${moving?.name ?? agentName} use?` : 'Which server do you want to add?')
+  const reachTitle = $derived(reachFor === 'connect' ? `Which server should ${moving?.name ?? agentWords} use?` : 'Which server do you want to add?')
 
   // ---- step 3: the address getting ready ----
   const setting = $derived(addresses.find((a) => a.provider === settingUp) ?? null)
@@ -511,7 +513,7 @@
         <h5 id="agTitle" class="ag-manage-head">{PROVIDER[viewed.provider]}</h5>
         <span class="ag-pill" class:ok={s === 'Ready'} class:bad={s === 'Stopped'} class:off={s === 'Off' || s === 'Not running'}>{s}</span>
       {:else}
-        <h5 id="agTitle">{view === 'home' || view === '' ? 'Agents' : reachFor !== 'connect' && (view === 'reach' || view === 'ready') ? 'Add a server' : view === 'agent' ? 'Connect an agent' : view === 'done' ? `Connect ${doneName || agentName}` : moving ? movingTitle : `Connect ${agentName}`}</h5>
+        <h5 id="agTitle">{view === 'home' || view === '' ? 'Agents' : reachFor !== 'connect' && (view === 'reach' || view === 'ready') ? 'Add a server' : view === 'agent' ? 'Connect an agent' : view === 'done' ? `Connect ${doneName || agentWords}` : moving ? movingTitle : kind === 'other' ? 'Connect an agent' : `Connect ${agentName}`}</h5>
       {/if}
       <button class="tk-x" aria-label="Close" onclick={closeModal}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.x} /></svg></button>
     </div>
@@ -659,7 +661,7 @@
       <div class="ag-pick" role="radiogroup" aria-label="Server">
         {#if mine.length}
           <div class="lbl">Your servers</div>
-          <div class="ag-choices">{#each mine as w (w.p)}{@render way(w, hostOf(existing(w.p)?.url ?? ''))}{/each}</div>
+          <div class="ag-choices">{#each mine as w (w.p)}{@render way(w, `${existing(w.p)?.url ?? ''}/mcp`)}{/each}</div>
           {#if fresh.length}<div class="lbl">New server</div>{/if}
         {/if}
         {#if fresh.length}<div class="ag-choices">{#each fresh as w (w.p)}{@render way(w, w.note)}{/each}</div>{/if}
@@ -746,7 +748,7 @@
             <div class="ag-grow">
               <div>{a?.ready?.state === 'ready' ? 'Your server answers from the internet' : a?.ready?.state === 'unconfirmed' ? 'Bagholder couldn’t confirm your server answers' : a?.ready?.state === 'failed' ? 'Your server didn’t answer yet' : 'Checking that your server answers'}</div>
               {#if !a?.ready}<div class="muted ag-small">This can take a minute or two the first time.</div>{/if}
-              {#if a?.ready?.state === 'unconfirmed'}<div class="muted ag-small">It may still work. Try it from {reachFor === 'connect' ? agentName : 'your agent'}.</div>{/if}
+              {#if a?.ready?.state === 'unconfirmed'}<div class="muted ag-small">It may still work. Try it from {reachFor === 'connect' ? agentWords : 'your agent'}.</div>{/if}
               {#if a?.ready?.state === 'failed'}<div class="muted ag-small">{a.ready.said}</div>{/if}
             </div>
             {#if a?.ready && a.ready.state !== 'ready'}<button class="btn btn-secondary" disabled={busy === 'check'} onclick={() => check(a.provider)}>{busy === 'check' ? 'Checking…' : 'Check again'}</button>{/if}
@@ -768,8 +770,8 @@
       </div>
 
     {:else if view === 'add' && usingAddr}
-      <div class="ag-q">Now add Bagholder in {agentName}</div>
-      {@render steps4(kind, usingAddr.url, `Waiting for ${kind === 'other' ? 'your agent' : agentName}…`)}
+      <div class="ag-q">Now add Bagholder in {agentWords}</div>
+      {@render steps4(kind, usingAddr.url, `Waiting for ${agentWords}…`)}
 
     {:else if view === 'done'}
       <div class="ag-done">
