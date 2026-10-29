@@ -311,7 +311,7 @@ describe('your agents and their addresses', () => {
     const { container, getByRole } = render(AgentsPanel)
     flushSync()
     expect(getByRole('button', { name: /^Claude\s*Connected with Tailscale$/ })).toBeTruthy()
-    // each agent's dot says its state on hover, and stays out of the row's name
+    // each agent's dot shows its state, and stays out of the row's name
     expect(container.querySelectorAll('button.ag-agent .ag-dot.ok')).toHaveLength(2)
     expect(getByRole('button', { name: /^Muse\s*Connected with Tailscale$/ })).toBeTruthy()
     // the detail lives on the agent's page, not in the list

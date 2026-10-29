@@ -382,7 +382,7 @@
 
 {#snippet copyBox(text: string, what: string)}
   <div class="ag-copy">
-    <code class="ag-field" title={text}>{text}</code>
+    <code class="ag-field">{text}</code>
     {@render copyIcon(text, what)}
   </div>
 {/snippet}
@@ -538,7 +538,7 @@
         {#each st?.allowed ?? [] as c (c.id)}
           {@const problem = cantReach(c)}
           <button class="ag-agent ag-rowbtn" onclick={() => manage(c)}>
-            <span class="ag-dot" class:ok={!problem && !!addressOf(c)} class:bad={problem} class:off={!problem && !addressOf(c)} title={problem ? 'Can’t reach Bagholder' : 'Connected'} aria-hidden="true"></span>
+            <span class="ag-dot" class:ok={!problem && !!addressOf(c)} class:bad={problem} class:off={!problem && !addressOf(c)} aria-hidden="true"></span>
             <span class="ag-grow">
               <span class="ag-name ag-block">{c.name}</span>
               {#if problem}<span class="status-err ag-small ag-block">Can’t reach Bagholder</span>
@@ -559,7 +559,7 @@
         {#each addresses as a (a.provider)}
           {@const s = status(a)}
           <div class="ag-agent ag-rowbtn" role="button" tabindex="0" aria-label={`${PROVIDER[a.provider]} ${s}`} onclick={() => { viewing = a.provider; removingAddr = null; view = 'server' }} onkeydown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); viewing = a.provider; removingAddr = null; view = 'server' } }}>
-            <span class="ag-dot" class:ok={s === 'Ready'} class:bad={s === 'Stopped'} class:off={s === 'Off' || s === 'Not running'} title={s}></span>
+            <span class="ag-dot" class:ok={s === 'Ready'} class:bad={s === 'Stopped'} class:off={s === 'Off' || s === 'Not running'} aria-hidden="true"></span>
             <span class="ag-grow">
               <span class="ag-name ag-block">{PROVIDER[a.provider]}{#if s !== 'Ready'}{' '}<span class="muted ag-small">· {s}</span>{/if}</span>
               {#if a.url}<span class="ag-block">{@render urlCopy(a.url + '/mcp', 'url' + a.provider)}</span>{/if}
