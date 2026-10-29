@@ -125,7 +125,10 @@ pub fn install(home: &Path, provider: Provider, source: &Source, download: Downl
         std::fs::rename(&program, &target).map_err(|e| format!("{} could not be put in place: {e}", target.display()))?;
         Ok(target.clone())
     })();
+    // what was downloaded or unpacked goes, whatever came of the install
+    #[expect(clippy::let_underscore_must_use, reason = "a part not there is gone already; one left is replaced by the next install, never read")]
     let _ = std::fs::remove_file(&part);
+    #[expect(clippy::let_underscore_must_use, reason = "as the part: what is unpacked is made again for each install")]
     let _ = std::fs::remove_dir_all(&unpacked);
     result
 }
@@ -141,6 +144,7 @@ fn unpack(archive: &Path, packed: Packed, into: &Path, provider: Provider) -> Re
     if entries != [want.as_str()] {
         return Err(format!("{}'s download held something other than {want}: nothing was installed.", maker(provider)));
     }
+    #[expect(clippy::let_underscore_must_use, reason = "an earlier unpacking left behind, or none: the folder is made new just below either way")]
     let _ = std::fs::remove_dir_all(into);
     std::fs::create_dir_all(into).map_err(|e| format!("{} could not be made: {e}", into.display()))?;
     run::output("tar", &[take.to_string(), archive_s, "-C".to_string(), into.display().to_string()], &[], WAIT)?;

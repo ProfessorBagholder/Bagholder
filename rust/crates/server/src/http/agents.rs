@@ -152,18 +152,19 @@ fn running(a: &bagholder_book::agents::AgentsBook) -> Result<BTreeSet<Provider>,
 /// hold several, the single settings of before cleared.
 fn keep(a: &bagholder_book::agents::AgentsBook, setups: &[Setup], hosts: &BTreeMap<Provider, String>, running: &BTreeSet<Provider>) -> Result<(), String> {
     let now = bagholder_core::jiff::Timestamp::now();
+    let (setups, hosts, running) = (json(setups)?, json(hosts)?, (!running.is_empty()).then(|| json(running)).transpose()?);
     a.atomically(|| {
-        a.set_setting(agents::TUNNELS, Some(&json(&setups)), now)?;
-        a.set_setting(agents::HOSTS, Some(&json(hosts)), now)?;
-        a.set_setting(agents::RUNNING, (!running.is_empty()).then(|| json(running)).as_deref(), now)?;
+        a.set_setting(agents::TUNNELS, Some(&setups), now)?;
+        a.set_setting(agents::HOSTS, Some(&hosts), now)?;
+        a.set_setting(agents::RUNNING, running.as_deref(), now)?;
         a.set_setting(agents::TUNNEL, None, now)?;
         a.set_setting(agents::HOST, None, now)
     })
     .map_err(|e| e.to_string())
 }
 
-fn json<T: Serialize + ?Sized>(v: &T) -> String {
-    serde_json::to_string(v).unwrap_or_default()
+fn json<T: Serialize + ?Sized>(v: &T) -> Result<String, String> {
+    serde_json::to_string(v).map_err(|e| format!("the agents' settings could not be written: {e}"))
 }
 
 /// The addresses the listener answers at: each way whose name is known.

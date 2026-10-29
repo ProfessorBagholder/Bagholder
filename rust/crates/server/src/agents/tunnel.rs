@@ -772,6 +772,7 @@ pub mod run {
         let read = |mut r: Box<dyn Read + Send>| {
             std::thread::spawn(move || {
                 let mut s = String::new();
+                #[expect(clippy::let_underscore_must_use, reason = "what a stream that fails says is what it said before it failed")]
                 let _ = r.read_to_string(&mut s);
                 s
             })
@@ -784,13 +785,17 @@ pub mod run {
                 break s;
             }
             if start.elapsed() > wait {
+                #[expect(clippy::let_underscore_must_use, reason = "it may have ended already; the wait below reaps it either way")]
                 let _ = child.kill();
+                #[expect(clippy::let_underscore_must_use, reason = "reaping it; it is said not to have finished, whatever it says")]
                 let _ = child.wait();
                 return Err(format!("{program} did not finish within {} seconds: try again.", wait.as_secs()));
             }
             std::thread::sleep(Duration::from_millis(50));
         };
-        let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+        // a reader that panicked read nothing that can be trusted: said so, in place of its text
+        let joined = |h: std::thread::JoinHandle<String>| h.join().unwrap_or_else(|_| format!("({program}'s output could not be read)"));
+        let (out, err) = (joined(out), joined(err));
         if status.success() {
             Ok(out + &err)
         } else {
