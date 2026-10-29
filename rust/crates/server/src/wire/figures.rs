@@ -57,8 +57,10 @@ pub struct Trade {
     pub instrument: String,
     /// The broker's id for the instrument, which an order names (stage 4 moves orders onto the instrument).
     pub security: String,
-    /// `SELL` for a long, `COVER` for a short.
+    /// `SELL` for a long, `COVER` for a short: the order that would close it.
     pub side: String,
+    /// `long` or `short`: what the trade holds, said plainly (an agent reads it).
+    pub direction: String,
     pub qty: Fig<Dec>,
     pub entry: Fig<Dec>,
     /// None before the first sale.
@@ -429,6 +431,15 @@ pub struct OwedDebt {
 pub struct Account {
     pub id: String,
     pub name: String,
+    /// What it is, as the screens name an account the person has not: `TFSA`,
+    /// `RRSP`, `FHSA`, `Cash`, `Margin`, `Crypto`, `Spending` (chequing), `Credit
+    /// card`, `Line of credit` and the like.
+    #[serde(rename = "type")]
+    pub type_: String,
+    /// Held jointly with someone else.
+    pub joint: bool,
+    /// Managed by the broker, not self-directed.
+    pub managed: bool,
     /// The broker's own id for it, which an order names; none for an account
     /// kept by hand.
     pub broker_account: Option<String>,

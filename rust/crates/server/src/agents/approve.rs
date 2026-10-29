@@ -24,8 +24,6 @@ pub struct Waiting {
     /// Whether the name was read from the agent's own published document (`true`),
     /// or given by the agent when it registered, unchecked.
     pub checked: bool,
-    /// The host the agent is sent back to.
-    pub redirect_host: String,
     pub made_at: String,
 }
 
@@ -40,6 +38,9 @@ pub struct Connected {
     pub way: String,
     /// For a sign-in, who it was granted to.
     pub who: String,
+    /// The server it was made for (`https://{host}`). Empty for a key made before
+    /// keys named theirs and not used since.
+    pub at: String,
     pub made_at: String,
     pub last_used_at: Option<String>,
     pub cut_off_at: Option<String>,
@@ -66,10 +67,18 @@ pub struct MadeKey {
 }
 
 #[derive(Clone, Debug, Deserialize, TS)]
+pub struct Renamed {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, TS)]
 pub struct KeyAsked {
     pub name: String,
     /// `mcp` or `api`.
     pub way: String,
+    /// The server it is for (`https://{host}`): it is taken only there.
+    pub at: String,
 }
 
 fn e(err: impl ToString) -> String {
@@ -87,7 +96,6 @@ pub fn waiting(store: &AgentsBook, now: Timestamp) -> Result<Vec<Waiting>, Strin
             code: r.code,
             who: r.who,
             name: r.client_name,
-            redirect_host: super::oauth::redirect_shown(&r.redirect_uri),
             made_at: r.made_at.to_string(),
         });
     }
@@ -101,13 +109,14 @@ pub fn connected(store: &AgentsBook) -> Result<Vec<Connected>, String> {
         .grants()
         .map_err(e)?
         .into_iter()
-        .map(|g| Connected { id: g.id, name: g.name, way: "sign-in".into(), who: g.who, made_at: g.made_at.to_string(), last_used_at: g.last_used_at.map(|t| t.to_string()), cut_off_at: g.withdrawn_at.map(|t| t.to_string()) })
+        .map(|g| Connected { id: g.id, name: g.name, way: "sign-in".into(), who: g.who, at: g.resource.trim_end_matches("/mcp").to_string(), made_at: g.made_at.to_string(), last_used_at: g.last_used_at.map(|t| t.to_string()), cut_off_at: g.withdrawn_at.map(|t| t.to_string()) })
         .collect();
     out.extend(store.keys().map_err(e)?.into_iter().map(|k| Connected {
         id: k.id,
         name: k.name,
         way: if k.way == "mcp" { "mcp-key".into() } else { "api-key".into() },
         who: String::new(),
+        at: k.at.unwrap_or_default(),
         made_at: k.made_at.to_string(),
         last_used_at: k.last_used_at.map(|t| t.to_string()),
         cut_off_at: k.withdrawn_at.map(|t| t.to_string()),
@@ -147,8 +156,9 @@ pub fn answer(store: &AgentsBook, id: &str, allowed: bool, now: Timestamp) -> Re
     }
 }
 
-/// A key made for `way`, named by the person: the key itself, this once.
-pub fn make_key(store: &AgentsBook, asked: &KeyAsked, now: Timestamp) -> Result<MadeKey, String> {
+/// A key made for `way` at one of `servers`, named by the person: the key itself,
+/// this once.
+pub fn make_key(store: &AgentsBook, asked: &KeyAsked, servers: &[String], now: Timestamp) -> Result<MadeKey, String> {
     let name: String = asked.name.chars().filter(|c| !c.is_control()).take(60).collect();
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -157,8 +167,11 @@ pub fn make_key(store: &AgentsBook, asked: &KeyAsked, now: Timestamp) -> Result<
     if asked.way != "mcp" && asked.way != "api" {
         return Err(format!("{:?} is not a way in", asked.way));
     }
+    if !servers.contains(&asked.at) {
+        return Err(format!("{} is not one of Bagholder's servers.", asked.at));
+    }
     let (id, key) = (secret::id("bhk_"), secret::secret(if asked.way == "mcp" { "bhm_" } else { "bhj_" }));
-    store.add_key(&id, &name, &asked.way, &secret::hash(&key), now).map_err(e)?;
+    store.add_key(&id, &name, &asked.way, &secret::hash(&key), &asked.at, now).map_err(e)?;
     Ok(MadeKey { id, name, way: asked.way.clone(), key })
 }
 
@@ -166,6 +179,21 @@ pub fn make_key(store: &AgentsBook, asked: &KeyAsked, now: Timestamp) -> Result<
 pub fn cut_off(store: &AgentsBook, id: &str, now: Timestamp) -> Result<(), String> {
     let done = if id.starts_with("bhg_") { store.withdraw_grant(id, now).map_err(e)? } else { store.withdraw_key(id, now).map_err(e)? };
     if done {
+        Ok(())
+    } else {
+        Err("No agent by that id is connected.".into())
+    }
+}
+
+/// A connected agent named by the person, as they know it: an agent's own name is
+/// what it gave (Grok Bot signs in as Cursor), never more than its sender says.
+pub fn rename(store: &AgentsBook, asked: &Renamed) -> Result<(), String> {
+    let name: String = asked.name.chars().filter(|c| !c.is_control()).take(60).collect();
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Give the agent a name.".into());
+    }
+    if store.rename_agent(&asked.id, name).map_err(e)? {
         Ok(())
     } else {
         Err("No agent by that id is connected.".into())

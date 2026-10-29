@@ -8,7 +8,7 @@
 
 use std::collections::VecDeque;
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 
@@ -20,7 +20,7 @@ use super::{fetch, secret, Ctx};
 
 /// The tunnels Bagholder supports, side by side; Tailscale Funnel recommended,
 /// none chosen for the person (brief 72, §2.5).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, TS, Diff)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize, TS, Diff)]
 #[serde(rename_all = "kebab-case")]
 pub enum Provider {
     Tailscale,
@@ -94,8 +94,22 @@ pub fn clean_name(s: &str) -> Result<String, String> {
 
 /// The command Bagholder starts for `setup`, with fixed arguments: the program's
 /// path first. None for the person's own proxy, which is theirs to run.
-pub fn command(setup: &Setup, program: &str, port: u16) -> Option<Vec<String>> {
+pub fn command(setup: &Setup, program: &str, port: u16, home: &std::path::Path) -> Option<Vec<String>> {
     let target = format!("127.0.0.1:{port}");
+    // set up by Bagholder (brief 81 §3): run from its own folder; else as the person set it up
+    match setup.provider {
+        Provider::Cloudflare => {
+            if let Some(c) = super::cloudflare::Files::new(home).run(program, &target) {
+                return Some(c);
+            }
+        }
+        Provider::Ngrok => {
+            if let Some(c) = super::ngrok::Files::new(home).run(program, &target) {
+                return Some(c);
+            }
+        }
+        _ => {}
+    }
     let args: Vec<String> = match setup.provider {
         // in the foreground: `--bg` would keep it serving after Bagholder ends (§4.3a)
         Provider::Tailscale => vec!["funnel".into(), format!("--https={}", setup.funnel_port.unwrap_or(443)), target],
@@ -145,6 +159,46 @@ pub fn find(provider: Provider) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(&exe)).find(|p| p.is_file()))
 }
 
+/// `provider`'s program: the copy Bagholder installed (`install`) first, then the
+/// computer's own.
+pub fn find_here(home: &Path, provider: Provider) -> Option<PathBuf> {
+    super::install::path(home, provider).filter(|p| p.is_file()).or_else(|| find(provider))
+}
+
+/// One address agents reach Bagholder at (brief 81 §3): a way set up, its tunnel,
+/// and what the last check of it found.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct Address {
+    pub provider: Provider,
+    /// `https://{host}`, once its name is known.
+    pub url: String,
+    /// Served on 443: every agent reaches it, and Claude.ai reaches no other port
+    /// (anthropics/claude-ai-mcp#1155).
+    pub port443: bool,
+    pub running: bool,
+    pub ready: Option<Ready>,
+    /// How its tunnel last ended, when it ended on its own.
+    pub exited: Option<String>,
+    /// Its tunnel's last lines.
+    pub lines: Vec<String>,
+}
+
+/// Cloudflare as Bagholder sets it up (brief 81 §3): its own sign-in, tunnel and
+/// address, every file in Bagholder's own folder, so a Cloudflare set up on this
+/// computer for something else is never read or changed.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct CloudflareSays {
+    /// Bagholder's own sign-in to Cloudflare is kept.
+    pub signed_in: bool,
+    /// A sign-in under way: the page Cloudflare asks the person to open, once it said it.
+    pub signing_in: bool,
+    pub sign_in_url: Option<String>,
+    /// Why the last sign-in or setup did not finish, in plain words.
+    pub said: String,
+}
+
 /// What Tailscale states of this machine, by which the panel shows each of its
 /// steps done: installed, signed in, its tailnet letting it take HTTPS
 /// certificates and use Funnel, and its name on the tailnet.
@@ -172,6 +226,23 @@ pub struct TailscaleSays {
 /// The operator step on this system: none but on Linux, done only for root.
 pub fn operator_step(linux: bool, root: bool) -> Option<bool> {
     linux.then_some(root)
+}
+
+/// The name of the computer Bagholder runs on, as its owner named it, without a
+/// `.local` or other domain: the panel names it where something is missing there,
+/// as the page may be open on another computer. Empty where it cannot be read.
+pub fn computer() -> String {
+    #[cfg(unix)]
+    let name = {
+        let mut buf = [0u8; 256];
+        // SAFETY: the buffer is ours, and gethostname writes at most its length
+        let ok = unsafe { libc::gethostname(buf.as_mut_ptr().cast(), buf.len()) } == 0;
+        let end = buf.iter().position(|&b| b == 0).unwrap_or(buf.len());
+        if ok { String::from_utf8_lossy(&buf[..end]).into_owned() } else { String::new() }
+    };
+    #[cfg(not(unix))]
+    let name = std::env::var("COMPUTERNAME").unwrap_or_default();
+    name.split('.').next().unwrap_or_default().trim().to_string()
 }
 
 /// The operator step for this process.
@@ -247,6 +318,15 @@ pub struct TunnelState {
 pub struct Tunnels {
     child: Option<Child>,
     state: Arc<Mutex<TunnelState>>,
+    /// Which start the child is: what its end is told by.
+    run: u64,
+}
+
+/// Whether a tunnel's lines say Tailscale refused a change to its settings because
+/// another program changed them at the same moment: a clash, gone once the other
+/// change is made, so the start is tried again.
+pub fn clashed(lines: &[String]) -> bool {
+    lines.iter().any(|l| l.contains("etag mismatch") || l.contains("changing the serve config"))
 }
 
 impl Tunnels {
@@ -256,7 +336,9 @@ impl Tunnels {
 
     /// Start `argv` with `env` (`guarded`: the tunnel through `bagholder
     /// tunnel-guard`, ending with this process). Refused while one runs, naming it.
-    pub fn start(&mut self, provider: Provider, (argv, env): Guarded, signal: Arc<dyn Fn() + Send + Sync>) -> Result<(), String> {
+    /// `ended` is told, once, when its output has closed: the tunnel ended, and it
+    /// is given the start's number for `ended` here.
+    pub fn start(&mut self, provider: Provider, (argv, env): Guarded, signal: Arc<dyn Fn() + Send + Sync>, ended: Arc<dyn Fn(u64) + Send + Sync>) -> Result<(), String> {
         if let Some(running) = self.state.lock().unwrap_or_else(|e| e.into_inner()).running {
             return Err(format!("A tunnel is running already ({running:?}): stop it first."));
         }
@@ -269,9 +351,13 @@ impl Tunnels {
             let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
             *s = TunnelState { running: Some(provider), command: argv.clone(), lines: Vec::new(), exited: None };
         }
+        self.run += 1;
+        let run = self.run;
         let lines: Arc<Mutex<VecDeque<String>>> = Arc::default();
-        for out in [child.stdout.take().map(|o| Box::new(o) as Box<dyn std::io::Read + Send>), child.stderr.take().map(|e| Box::new(e) as Box<dyn std::io::Read + Send>)].into_iter().flatten() {
-            let (state, signal, lines) = (self.state.clone(), signal.clone(), lines.clone());
+        let streams: Vec<Box<dyn std::io::Read + Send>> = [child.stdout.take().map(|o| Box::new(o) as Box<dyn std::io::Read + Send>), child.stderr.take().map(|e| Box::new(e) as Box<dyn std::io::Read + Send>)].into_iter().flatten().collect();
+        let open = Arc::new(std::sync::atomic::AtomicUsize::new(streams.len()));
+        for out in streams {
+            let (state, signal, lines, open, ended) = (self.state.clone(), signal.clone(), lines.clone(), open.clone(), ended.clone());
             std::thread::Builder::new()
                 .name("tunnel-output".into())
                 .spawn(move || {
@@ -285,8 +371,12 @@ impl Tunnels {
                         drop(l);
                         signal();
                     });
-                    // the stream closed: the tunnel ended, and the panel reads how
+                    // the stream closed: the tunnel ended, and the panel reads how;
+                    // the last stream to close tells its end
                     signal();
+                    if open.fetch_sub(1, std::sync::atomic::Ordering::SeqCst) == 1 {
+                        ended(run);
+                    }
                 })
                 .map_err(|e| e.to_string())?;
         }
@@ -310,6 +400,32 @@ impl Tunnels {
         let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
         s.running = None;
         s.exited = Some(format!("The tunnel ended: {status}"));
+    }
+
+    /// Start `run` ended on its own, its end recorded: false where it was stopped,
+    /// or is not the start running now.
+    pub fn ended(&mut self, run: u64) -> bool {
+        if run != self.run {
+            return false;
+        }
+        if let Some(mut c) = self.child.take() {
+            let said = match c.wait() {
+                Ok(status) => format!("The tunnel ended: {status}"),
+                Err(e) => format!("The tunnel's state could not be read: {e}"),
+            };
+            let mut s = self.state.lock().unwrap_or_else(|e| e.into_inner());
+            s.running = None;
+            s.exited = Some(said);
+            return true;
+        }
+        // reaped already as the status was read: ended on its own if that was said
+        self.state.lock().unwrap_or_else(|e| e.into_inner()).exited.is_some()
+    }
+
+    /// Whether start `run`, ended, is started again: it ended on its own, refused for
+    /// a clash in Tailscale's settings (`clashed`).
+    pub fn start_again(&mut self, run: u64) -> bool {
+        self.ended(run) && clashed(&self.state().lines)
     }
 
     /// Stop the tunnel: the guard ends its group.
@@ -552,17 +668,16 @@ pub const UNCONFIRMED: &str = "Reachable from this computer; confirm from your a
 /// resolved through public DNS, the answer a public address, the value fetched
 /// from that address with the public name for TLS and `Host`; for Tailscale, the
 /// request arriving the Funnel way.
-pub fn reach(ctx: &Ctx, provider: Provider) -> Ready {
+pub fn reach(ctx: &Ctx, host: &str, provider: Provider) -> Ready {
     let _one = ctx.one_check.lock().unwrap_or_else(|e| e.into_inner());
     let value = secret::secret("bhcheck_");
     *ctx.check.lock().unwrap_or_else(|e| e.into_inner()) = Some(Check { value: value.clone(), seen: false, funnel: false });
-    let ready = reach_with(ctx, provider, &value);
+    let ready = reach_with(ctx, host, provider, &value);
     *ctx.check.lock().unwrap_or_else(|e| e.into_inner()) = None;
     ready
 }
 
-fn reach_with(ctx: &Ctx, provider: Provider, value: &str) -> Ready {
-    let host = ctx.host();
+fn reach_with(ctx: &Ctx, host: &str, provider: Provider, value: &str) -> Ready {
     if host.is_empty() {
         return Ready::Failed { said: "The address is not known yet.".into() };
     }
@@ -612,4 +727,61 @@ fn reach_with(ctx: &Ctx, provider: Provider, value: &str) -> Ready {
         return Ready::Unconfirmed { said: UNCONFIRMED.into() };
     }
     Ready::Ready
+}
+
+// ---- setup commands ----
+
+/// A tunnel program's setup commands (Cloudflare's, ngrok's: brief 81 §3), run to their
+/// end with a bound on the wait: what it wrote, or why it failed in its own words.
+pub mod run {
+    use std::io::Read;
+    use std::process::{Command, Stdio};
+    use std::time::{Duration, Instant};
+
+    /// How long a setup command may take: each is one request to its service.
+    pub const WAIT: Duration = Duration::from_secs(60);
+
+    pub fn output(program: &str, args: &[String], env: &[(String, String)], wait: Duration) -> Result<String, String> {
+        let mut child = Command::new(program)
+            .args(args)
+            .envs(env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .map_err(|e| format!("{program} could not start: {e}"))?;
+        let read = |mut r: Box<dyn Read + Send>| {
+            std::thread::spawn(move || {
+                let mut s = String::new();
+                let _ = r.read_to_string(&mut s);
+                s
+            })
+        };
+        let out = read(Box::new(child.stdout.take().expect("piped")));
+        let err = read(Box::new(child.stderr.take().expect("piped")));
+        let start = Instant::now();
+        let status = loop {
+            if let Some(s) = child.try_wait().map_err(|e| e.to_string())? {
+                break s;
+            }
+            if start.elapsed() > wait {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(format!("{program} did not finish within {} seconds: try again.", wait.as_secs()));
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        };
+        let (out, err) = (out.join().unwrap_or_default(), err.join().unwrap_or_default());
+        if status.success() {
+            Ok(out + &err)
+        } else {
+            Err(if err.trim().is_empty() { out } else { err })
+        }
+    }
+}
+
+/// A program started with its output piped, read by the caller: Cloudflare's sign-in.
+pub fn spawn_piped(argv: &[String], env: Vec<(String, String)>) -> Result<std::process::Child, String> {
+    let (exe, args) = argv.split_first().ok_or("no command")?;
+    Command::new(exe).args(args).envs(env).stdin(Stdio::null()).stdout(Stdio::piped()).stderr(Stdio::piped()).spawn().map_err(|e| e.to_string())
 }

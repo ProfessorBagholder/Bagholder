@@ -19,6 +19,45 @@ funnelPort: number | null,
  */
 sendsHost: string | null, };
 
+export type Address = { provider: Provider, 
+/**
+ * `https://{host}`, once its name is known.
+ */
+url: string, 
+/**
+ * Served on 443: every agent reaches it, and Claude.ai reaches no other port
+ * (anthropics/claude-ai-mcp#1155).
+ */
+port443: boolean, running: boolean, ready: Ready | null, 
+/**
+ * How its tunnel last ended, when it ended on its own.
+ */
+exited: string | null, 
+/**
+ * Its tunnel's last lines.
+ */
+lines: Array<string>, };
+
+export type CloudflareSays = { 
+/**
+ * Bagholder's own sign-in to Cloudflare is kept.
+ */
+signedIn: boolean, 
+/**
+ * A sign-in under way: the page Cloudflare asks the person to open, once it said it.
+ */
+signingIn: boolean, signInUrl: string | null, 
+/**
+ * Why the last sign-in or setup did not finish, in plain words.
+ */
+said: string, };
+
+export type Installing = { provider: Provider, 
+/**
+ * Empty while it runs; why it failed, once it did.
+ */
+failed: string, };
+
 export type TailscaleSays = { installed: boolean, signedIn: boolean, https: boolean, funnel: boolean, name: string | null, 
 /**
  * This machine's first address on its tailnet.
@@ -69,11 +108,7 @@ who: string, name: string,
  * Whether the name was read from the agent's own published document (`true`),
  * or given by the agent when it registered, unchecked.
  */
-checked: boolean, 
-/**
- * The host the agent is sent back to.
- */
-redirectHost: string, madeAt: string, };
+checked: boolean, madeAt: string, };
 
 export type Connected = { id: string, name: string, 
 /**
@@ -83,7 +118,12 @@ way: string,
 /**
  * For a sign-in, who it was granted to.
  */
-who: string, madeAt: string, lastUsedAt: string | null, cutOffAt: string | null, };
+who: string, 
+/**
+ * The server it was made for (`https://{host}`). Empty for a key made before
+ * keys named theirs and not used since.
+ */
+at: string, madeAt: string, lastUsedAt: string | null, cutOffAt: string | null, };
 
 export type ProgramFound = { provider: Provider, 
 /**
@@ -95,18 +135,32 @@ export type RefusedCount = { why: string, count: number, };
 
 export type AgentsStatus = { on: boolean, port: number | null, 
 /**
- * The tunnel the person chose, and what they entered for it.
+ * Every address agents reach Bagholder at, each with its tunnel (brief 81 §3).
  */
-setup: Setup | null, 
+addresses: Array<Address>, programs: Array<ProgramFound>, 
 /**
- * The address an agent is given, once its name is known.
+ * The computer Bagholder runs on, by its name: what a program missing is
+ * missing from (`tunnel::computer`).
  */
-address: string, programs: Array<ProgramFound>, 
+computer: string, 
+/**
+ * Its system (`linux`, `macos` or `windows`): what Tailscale is installed
+ * with there.
+ */
+os: string, 
+/**
+ * The programs Bagholder is installing there, or failed to (`agents::install`).
+ */
+installing: Array<Installing>, 
 /**
  * What Tailscale said of this machine when last asked: asked when Tailscale is
  * chosen, when its tunnel starts, and when the person asks again.
  */
-tailscale: TailscaleSays | null, tunnel: TunnelState, ready: Ready | null, waiting: Array<Waiting>, 
+tailscale: TailscaleSays | null, 
+/**
+ * Cloudflare as Bagholder sets it up: signed in, or signing in.
+ */
+cloudflare: CloudflareSays, waiting: Array<Waiting>, 
 /**
  * Every agent that may read: each grant and each key.
  */
@@ -128,13 +182,23 @@ error: string, };
 
 export type SwitchAsked = { on: boolean, };
 
+export type ProviderAsked = { provider: Provider, };
+
 export type AgentId = { id: string, };
+
+export type Renamed = { id: string, name: string, };
+
+export type NgrokToken = { token: string, };
 
 export type KeyAsked = { name: string, 
 /**
  * `mcp` or `api`.
  */
-way: string, };
+way: string, 
+/**
+ * The server it is for (`https://{host}`): it is taken only there.
+ */
+at: string, };
 
 export type MadeKey = { id: string, name: string, way: string, key: string, };
 

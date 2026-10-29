@@ -1,13 +1,13 @@
 // Generated from the server's route table (`api_routes!`). Do not edit: change the
 // route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.
 
-import type { AgentId, AgentLog, KeyAsked, LogAsked, MadeKey, Setup, SwitchAsked } from './agents'
+import type { AgentId, AgentLog, KeyAsked, LogAsked, MadeKey, NgrokToken, ProviderAsked, Renamed, Setup, SwitchAsked } from './agents'
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, Details, TradesDoc } from './figures'
 import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Resolve, ResolveAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
-import type { Clear, ClearAnswer, DebtAnswer, DebtAnswerRequest, EntryAnswer, EntryRequest, ImportAccepted, ImportQuery, ImportTold, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
+import type { Clear, ClearAnswer, DebtAnswer, DebtAnswerRequest, EntryAnswer, EntryRequest, ImportAccepted, ImportQuery, ImportTold, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, TransactionsAnswer, TransactionsQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer, PushAnswer, PushEndpoint, PushSubscription } from './notifications'
 import type { Adjust, ListingOf, Modify, Named, OrderActionAnswer, OrderListingAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
@@ -60,6 +60,7 @@ export interface Routes {
   'GET /api/figures/details': { answer: Details }
   'GET /api/figures/trades': { query: TradesQuery; answer: TradesDoc }
   'GET /api/view': { query: ViewQuery; answer: ViewAnswer }
+  'GET /api/transactions': { query: TransactionsQuery; answer: TransactionsAnswer }
   'POST /api/data/clear': { body: Clear; answer: ClearAnswer }
   'POST /api/journal': { body: JournalEntryRequest; answer: JournalAnswer }
   'POST /api/debts/answer': { body: DebtAnswerRequest; answer: DebtAnswer }
@@ -73,13 +74,18 @@ export interface Routes {
   'POST /api/watch/scan': { answer: WatchStatus }
   'POST /api/agents/switch': { body: SwitchAsked; answer: OkOr }
   'POST /api/agents/tunnel': { body: Setup; answer: OkOr }
-  'POST /api/agents/tunnel/start': { answer: OkOr }
-  'POST /api/agents/tunnel/stop': { answer: OkOr }
+  'POST /api/agents/tunnel/start': { body: ProviderAsked; answer: OkOr }
+  'POST /api/agents/tunnel/stop': { body: ProviderAsked; answer: OkOr }
+  'POST /api/agents/tunnel/remove': { body: ProviderAsked; answer: OkOr }
   'POST /api/agents/tunnel/look': { answer: OkOr }
-  'POST /api/agents/check': { answer: OkOr }
-  'POST /api/agents/requests/allow': { body: AgentId; answer: OkOr }
+  'POST /api/agents/check': { body: ProviderAsked; answer: OkOr }
   'POST /api/agents/requests/deny': { body: AgentId; answer: OkOr }
+  'POST /api/agents/codes/resume': { answer: OkOr }
   'POST /api/agents/keys': { body: KeyAsked; answer: MadeKey }
   'POST /api/agents/cut-off': { body: AgentId; answer: OkOr }
+  'POST /api/agents/rename': { body: Renamed; answer: OkOr }
+  'POST /api/agents/cloudflare/sign-in': { answer: OkOr }
+  'POST /api/agents/ngrok/token': { body: NgrokToken; answer: OkOr }
+  'POST /api/agents/install': { body: ProviderAsked; answer: OkOr }
   'GET /api/agents/log': { query: LogAsked; answer: AgentLog }
 }

@@ -1,5 +1,5 @@
 <script lang="ts">
-  // The confirmation dialog, ported from confirmDialogHtml: Clear data / Disconnect,
+  // The confirmation dialog, ported from confirmDialogHtml: Clear data / Disconnect Wealthsimple,
   // and the order/bracket cancel variants (confirm = `cancel:<id>` / `bracket:<id>`).
   import { ui, clearDataNow, disconnectNow, DATA_KINDS } from './ui.svelte'
   import { ordersStore, orderLine, legRow, cancelOrderNow, cancelBracketNow } from './orders/orders.svelte'
@@ -14,7 +14,7 @@
   function title(): string {
     if (bracketId) return 'Cancel bracket'
     if (cancelId) return 'Cancel order'
-    return clear ? 'Clear data' : 'Disconnect'
+    return clear ? 'Clear data' : 'Disconnect Wealthsimple'
   }
   function body(): string {
     if (bracketId) return bracket ? symText(bracket.symbol) + ' · ' + bracket.legs.map(legRow).map((l) => l.label + ' ' + l.line).join(' · ') : ''
@@ -27,7 +27,7 @@
   function goLabel(): string {
     if (bracketId) return 'Cancel bracket'
     if (cancelId) return 'Cancel order'
-    return clear ? 'Clear data' : 'Disconnect'
+    return clear ? 'Clear data' : 'Disconnect Wealthsimple'
   }
   function go() {
     const oid = cancelId

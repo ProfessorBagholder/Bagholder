@@ -31,7 +31,6 @@
     channel() === 'unavailable' ? 'Unavailable' : channel() === 'denied' ? 'Blocked' : NOTIFY_KINDS.concat(NOTIFY_SCOPES, NOTIFY_RELEASE_SCOPES).some((k) => notifyOn(k[0])) ? 'On' : 'Off',
   )
   const themeWord = $derived((THEMES.find((t) => t[0] === theme.name) || THEMES[0])[1])
-  const agentsWord = $derived(!status?.agents?.on ? 'Off' : status.agents.waiting.length ? 'Asking' : status.agents.ready?.state === 'ready' ? 'Ready' : 'On')
 </script>
 
 <div class="menu elev-md">
@@ -41,11 +40,13 @@
   {:else}
     <button class="primary" onclick={connect}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:1"><path d={ICONS.link} /></svg>Connect Wealthsimple</button>
   {/if}
+  <button onclick={openAgents}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.robot} /></svg>Agents</button>
+
+  <div class="sep"></div>
   <button onclick={openTradeModal}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.plus} /></svg>Add trade</button>
   <button onclick={importCsv}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.import} /></svg>Import CSV</button>
   <button onclick={openFolder}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.folder} /></svg>Load folder</button>
   <button onclick={exportCsv}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.export} /></svg>Export trades CSV</button>
-  <button onclick={openData}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.trash} /></svg>Clear data</button>
 
   <div class="sep"></div>
   <div style="position:relative" role="presentation" onmouseenter={() => (themeOpen = true)} onmouseleave={() => (themeOpen = false)}>
@@ -81,7 +82,7 @@
       </div>
     {/if}
   </div>
-  <button onclick={openAgents}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.link} /></svg>Agents<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">{agentsWord}</span><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.5"><path d={ICONS.caret} /></svg></button>
   <div class="sep"></div>
-  <button style={status?.connected || status?.email ? 'color:var(--neg)' : undefined} disabled={!status?.connected && !status?.email} onclick={disconnect}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.signout} /></svg>Disconnect</button>
+  <button onclick={openData}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.trash} /></svg>Clear data</button>
+  <button style={status?.connected || status?.email ? 'color:var(--neg)' : undefined} disabled={!status?.connected && !status?.email} onclick={disconnect}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.signout} /></svg>Disconnect Wealthsimple</button>
 </div>

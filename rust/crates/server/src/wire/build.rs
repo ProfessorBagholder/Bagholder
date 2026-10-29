@@ -203,6 +203,7 @@ pub(crate) fn trade(inputs: &Inputs, names: &Names, t: &TradeFig, position: Opti
         instrument: t.instrument.to_string(),
         security: names.security.get(&t.instrument).cloned().unwrap_or_default(),
         side: if t.direction == Direction::Short { "COVER" } else { "SELL" }.into(),
+        direction: if t.direction == Direction::Short { "short" } else { "long" }.into(),
         qty: fig_dec(&t.qty),
         entry: fig_dec(&t.entry),
         exit: t.exit.as_ref().map(fig_dec),
@@ -399,6 +400,9 @@ pub fn accounts(inputs: &Inputs, names: &Names) -> Vec<Account> {
         .map(|(id, info)| Account {
             id: id.to_string(),
             name: account_name(inputs, *id),
+            type_: info.account.account_type.label(),
+            joint: matches!(info.account.account_type, AccountType::Known { joint: true, .. }),
+            managed: matches!(info.account.account_type, AccountType::Known { managed: true, .. }),
             broker_account: names.account.get(id).cloned(),
             status: info.account.status.as_str().into(),
             // an account the ticket can place with: the one broker orders go to, self-directed, trading securities

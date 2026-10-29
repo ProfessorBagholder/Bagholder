@@ -12,14 +12,14 @@
 
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::listener::{refused, said};
-use super::{fetch, secret, Ctx};
+use super::{fetch, secret, Ctx, Site};
 use bagholder_book::agents::{Client, NewRequest};
 use bagholder_core::jiff::Timestamp;
 
@@ -35,10 +35,10 @@ async fn blocking(work: impl FnOnce() -> Response + Send + 'static) -> Response 
 // ---- metadata ----
 
 /// RFC 9728: the resource `/mcp`, signed in to at this address.
-pub async fn protected_resource(State(ctx): State<Arc<Ctx>>) -> Response {
+pub async fn protected_resource(Extension(site): Extension<Site>) -> Response {
     axum::Json(json!({
-        "resource": ctx.resource(),
-        "authorization_servers": [ctx.base()],
+        "resource": site.resource(),
+        "authorization_servers": [site.base()],
         "bearer_methods_supported": ["header"],
         "resource_name": "Bagholder",
     }))
@@ -46,8 +46,8 @@ pub async fn protected_resource(State(ctx): State<Arc<Ctx>>) -> Response {
 }
 
 /// RFC 8414.
-pub async fn authorization_server(State(ctx): State<Arc<Ctx>>) -> Response {
-    let base = ctx.base();
+pub async fn authorization_server(Extension(site): Extension<Site>) -> Response {
+    let base = site.base();
     axum::Json(json!({
         "issuer": base,
         "authorization_endpoint": format!("{base}/oauth/authorize"),
@@ -64,9 +64,9 @@ pub async fn authorization_server(State(ctx): State<Arc<Ctx>>) -> Response {
 }
 
 /// The `WWW-Authenticate` that sends a client with no good token to sign in.
-fn challenge(ctx: &Ctx, error: Option<&str>) -> Response {
+fn challenge(site: &Site, error: Option<&str>) -> Response {
     let mut r = said(StatusCode::UNAUTHORIZED, error.unwrap_or("unauthorized"), "Sign in to Bagholder first.");
-    let mut v = format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"", ctx.base());
+    let mut v = format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"", site.base());
     if let Some(e) = error {
         v.push_str(&format!(", error=\"{e}\""));
     }
@@ -77,20 +77,23 @@ fn challenge(ctx: &Ctx, error: Option<&str>) -> Response {
 }
 
 /// An access token of a grant still standing, for this address's `/mcp`: the grant's id.
-pub fn access(ctx: &Ctx, token: Option<&str>) -> Result<String, Response> {
-    let Some(token) = token else { return Err(challenge(ctx, None)) };
+pub fn access(ctx: &Ctx, site: &Site, token: Option<&str>) -> Result<String, Response> {
+    let Some(token) = token else { return Err(challenge(site, None)) };
     let store = ctx.store().map_err(unavailable)?;
     let Some(t) = store.token(&secret::hash(token)).map_err(unavailable)? else {
         super::listener::stranger(ctx, "with a wrong token");
-        return Err(challenge(ctx, Some("invalid_token")));
+        return Err(challenge(site, Some("invalid_token")));
     };
+    // an access token run out is the agent's sign to refresh it (RFC 6750 §3.1),
+    // routine every hour: refused, never logged as the agent's doing
+    if !t.refresh && t.expires_at <= ctx.now() {
+        return Err(challenge(site, Some("invalid_token")));
+    }
     let why = if t.refresh {
         Some("a refresh token sent as an access token")
-    } else if t.expires_at <= ctx.now() {
-        Some("an expired token")
     } else if t.grant.withdrawn_at.is_some() {
         Some("a token of a grant cut off")
-    } else if t.grant.resource != ctx.resource() {
+    } else if t.grant.resource != site.resource() {
         Some("a token for another resource")
     } else {
         None
@@ -98,7 +101,7 @@ pub fn access(ctx: &Ctx, token: Option<&str>) -> Result<String, Response> {
     match why {
         Some(why) => {
             refused(ctx, &t.grant.id, why);
-            Err(challenge(ctx, Some("invalid_token")))
+            Err(challenge(site, Some("invalid_token")))
         }
         None => Ok(t.grant.id),
     }
@@ -135,7 +138,7 @@ pub fn same_redirect(uri: &str, asked: &str) -> bool {
     uri == asked || matches!((loopback(uri), loopback(asked)), (Some((_, a)), Some((_, b))) if a == b)
 }
 
-/// The host a redirect sends the person back to, as both pages show it.
+/// The host a redirect sends the person back to: who a registered agent is.
 pub fn redirect_shown(uri: &str) -> String {
     loopback(uri).map(|(h, _)| h.to_string()).or_else(|| fetch::https_host(uri).ok().map(|h| h.0)).unwrap_or_else(|| uri.to_string())
 }
@@ -222,8 +225,6 @@ struct Asking {
     client: Client,
     /// The host shown as who it is: the metadata document's, or the redirect's.
     who: String,
-    /// The host the agent is sent back to, shown whoever asks (plan §3).
-    redirect_host: String,
 }
 
 /// The client `client_id` names, and that `redirect_uri` is exactly one of its own.
@@ -247,7 +248,6 @@ fn asking(ctx: &Ctx, client_id: &str, redirect_uri: &str) -> Result<Asking, Stri
     if !client.redirect_uris.iter().any(|u| same_redirect(u, redirect_uri)) {
         return Err(format!("{redirect_uri} is not a redirect URI of this client"));
     }
-    let redirect_host = redirect_shown(redirect_uri);
     // an app on the person's own computer names itself, unchecked: any app can
     // claim any name (the specification's "Localhost Redirect URI Risks")
     let who = if client.metadata {
@@ -255,9 +255,9 @@ fn asking(ctx: &Ctx, client_id: &str, redirect_uri: &str) -> Result<Asking, Stri
     } else if loopback(redirect_uri).is_some() {
         LOCAL_APP.to_string()
     } else {
-        redirect_host.clone()
+        redirect_shown(redirect_uri)
     };
-    Ok(Asking { client, who, redirect_host })
+    Ok(Asking { client, who })
 }
 
 #[derive(Deserialize, Default)]
@@ -274,7 +274,7 @@ pub struct AuthorizeQuery {
 /// A page that says what is wrong, sent to no one: a request whose client or
 /// redirect cannot be trusted is never redirected.
 fn error_page(status: StatusCode, error: &str, why: &str) -> Response {
-    let body = format!("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title><body style='font:16px system-ui;margin:40px auto;max-width:520px;padding:0 16px'><h1 style='font-size:20px'>This sign-in can't go ahead</h1><p>{}</p><p style='opacity:.6'>{}</p>", escape(why), escape(error));
+    let body = format!("{HEAD}<main><div class=dim style='font-size:13px'>Bagholder</div><h1>This sign-in can't go ahead</h1><p>{}</p><p class=dim style='font-size:13px'>{}</p></main>", escape(why), escape(error));
     let mut r = (status, Html(body)).into_response();
     page_headers(r.headers_mut());
     r
@@ -291,9 +291,9 @@ pub fn escape(s: &str) -> String {
 }
 
 /// `/oauth/authorize`: the public page. A waiting request is recorded, and the
-/// page shows who is asking and the code, and waits for the person's answer on
-/// their computer. It has nothing that grants anything.
-pub async fn authorize(State(ctx): State<Arc<Ctx>>, Query(q): Query<AuthorizeQuery>) -> Response {
+/// page asks for the code Bagholder shows the person, saying who wants to read
+/// (brief 81 §2).
+pub async fn authorize(State(ctx): State<Arc<Ctx>>, Extension(site): Extension<Site>, Query(q): Query<AuthorizeQuery>) -> Response {
     blocking(move || {
         let (Some(client_id), Some(redirect_uri)) = (q.client_id.as_deref(), q.redirect_uri.as_deref()) else {
             return error_page(StatusCode::BAD_REQUEST, "invalid_request", "The agent did not say who it is, or where to go back to.");
@@ -309,9 +309,9 @@ pub async fn authorize(State(ctx): State<Arc<Ctx>>, Query(q): Query<AuthorizeQue
         if q.code_challenge_method.as_deref() != Some("S256") || !(43..=128).contains(&challenge.len()) {
             return error_page(StatusCode::BAD_REQUEST, "invalid_request", "PKCE with S256 is required.");
         }
-        let resource = q.resource.unwrap_or_else(|| ctx.resource());
-        if resource != ctx.resource() {
-            return error_page(StatusCode::BAD_REQUEST, "invalid_target", &format!("This address signs in to {} alone.", ctx.resource()));
+        let resource = q.resource.unwrap_or_else(|| site.resource());
+        if resource != site.resource() {
+            return error_page(StatusCode::BAD_REQUEST, "invalid_target", &format!("This address signs in to {} alone.", site.resource()));
         }
         let now = ctx.now();
         let store = match ctx.store() {
@@ -339,30 +339,32 @@ pub async fn authorize(State(ctx): State<Arc<Ctx>>, Query(q): Query<AuthorizeQue
     .await
 }
 
+/// The head both public pages share: Bagholder's colours, light or dark as the
+/// person's device is, and its card.
+const HEAD: &str = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title><style>:root{color-scheme:light dark;--bg:#eef0f5;--card:#fafafc;--ink:#1b1d27;--dim:rgba(27,29,39,.72);--line:rgba(27,29,39,.12);--accent:#6b5cd6;--on:#eef0f5;--err:#c0505f}\
+@media (prefers-color-scheme:dark){:root{--bg:#101220;--card:#161826;--ink:#e9e9ed;--dim:rgba(233,233,237,.68);--line:rgba(233,233,237,.14);--accent:#9184d9;--on:#161826;--err:#e0778a}}\
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Inter,system-ui,-apple-system,Segoe UI,sans-serif}\
+main{max-width:440px;margin:48px auto;padding:28px;background:var(--card);border:1px solid var(--line);border-radius:12px}\
+.dim{color:var(--dim)}h1{font-size:20px;margin:6px 0 10px}form{margin-top:18px}\
+input{box-sizing:border-box;width:100%;padding:12px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 24px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.25em}\
+button{margin-top:14px;width:100%;padding:12px;border:0;border-radius:8px;background:var(--accent);color:var(--on);font:600 15px Inter,system-ui,sans-serif;cursor:pointer}\
+button:disabled{opacity:.5;cursor:default}#s{min-height:24px;margin:12px 0 0;font-size:14px}.err{color:var(--err)}\
+</style>";
+
 fn waiting_page(a: &Asking, id: &str) -> String {
     // a name the agent gave itself is said to be so: any app can claim any name
     let name = if a.client.metadata {
         if a.client.name.is_empty() { String::new() } else { format!(" <span class=dim>({})</span>", escape(&a.client.name)) }
     } else {
-        format!(" <span class=dim>(calls itself “{}”: a name it gave, not checked)</span>", escape(&a.client.name))
+        format!(" <span class=dim>(calls itself “{}”)</span>", escape(&a.client.name))
     };
     #[expect(clippy::disallowed_methods, reason = "a string always serializes")]
     let id_json = serde_json::to_string(id).unwrap_or_default();
     format!(
-        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title>\
-<style>:root{{color-scheme:light dark;--bg:#f6f7f9;--card:#fff;--ink:#14161c;--dim:#5b6270;--line:#d9dde4;--accent:#1f8f5f;--on:#fff;--err:#b4232a}}\
-@media (prefers-color-scheme:dark){{:root{{--bg:#0f1117;--card:#171a22;--ink:#e6e8ee;--dim:#9aa1ad;--line:#2a2f3a;--accent:#5fd39a;--on:#0f1117;--err:#f08a8a}}}}\
-body{{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 system-ui,-apple-system,Segoe UI,sans-serif}}\
-main{{max-width:440px;margin:48px auto;padding:28px;background:var(--card);border:1px solid var(--line);border-radius:12px}}\
-.dim{{color:var(--dim)}}h1{{font-size:20px;margin:6px 0 10px}}label{{display:block;font-size:14px;margin:18px 0 6px}}\
-input{{box-sizing:border-box;width:100%;padding:12px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 24px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.25em}}\
-button{{margin-top:14px;width:100%;padding:12px;border:0;border-radius:8px;background:var(--accent);color:var(--on);font:600 15px system-ui,sans-serif;cursor:pointer}}\
-button:disabled{{opacity:.5;cursor:default}}#s{{min-height:24px;margin:12px 0 0;font-size:14px}}.err{{color:var(--err)}}</style>\
-<main><div class=dim style='font-size:13px'>Bagholder</div>\
-<h1>Allow this agent to read your trade history?</h1>\
-<p><b>{who}</b>{name} is asking. It can only read: your trades, holdings, lists and executions. It sends you back to <b>{back}</b>.</p>\
-<form id=f><label for=c>The code Bagholder shows on your computer</label>\
-<input id=c inputmode=numeric autocomplete=one-time-code maxlength=7 placeholder='000 000' autofocus>\
+        "{head}<main><div class=dim style='font-size:13px'>Bagholder</div>\
+<h1 id=t>Enter the code shown in Bagholder</h1>\
+<p><b>{who}</b>{name} wants to read your trades and holdings.</p>\
+<form id=f><input id=c aria-labelledby=t inputmode=numeric autocomplete=one-time-code maxlength=7 placeholder='000 000' autofocus>\
 <button id=b>Allow</button></form><p id=s class=dim></p></main>\
 <script>(function(){{var id={id},s=document.getElementById('s'),b=document.getElementById('b'),c=document.getElementById('c');\
 function say(t,e){{s.textContent=t;s.className=e?'err':'dim'}}\
@@ -372,11 +374,11 @@ document.getElementById('f').addEventListener('submit',function(e){{e.preventDef
 fetch('/oauth/authorize/code',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({{request:id,code:v}})}}).then(function(r){{return r.json()}}).then(function(j){{\
 if(j.state==='allowed'){{say('Allowed. Taking you back to your agent…');ask()}}\
 else if(j.state==='wrong'){{b.disabled=false;c.value='';say(j.left===1?'That code doesn\\u2019t match. One try left.':'That code doesn\\u2019t match. '+j.left+' tries left.',true)}}\
-else if(j.state==='paused'){{over('Sign-in is paused because codes were entered wrong. Resume it in Bagholder on your computer, then start again from your agent.')}}\
+else if(j.state==='paused'){{over('Sign-in is paused: the code was entered wrong too many times. Resume it in Bagholder, then start again from your agent.')}}\
 else{{over('This sign-in has ended. Start again from your agent.')}}}}).catch(function(){{b.disabled=false;say('Bagholder didn\\u2019t answer. Try again.',true)}})}});\
 ask()}})()</script>",
+        head = HEAD,
         who = escape(&a.who),
-        back = escape(&a.redirect_host),
         name = name,
         id = id_json,
     )
@@ -414,7 +416,7 @@ pub fn ended(r: &bagholder_book::agents::Request, now: Timestamp) -> bool {
 /// waiting page never uses it up, and is answered at most once a `POLL_EVERY`; one
 /// naming none takes a call, as any stranger's. An answer ends the request: a
 /// denial once its page has read it, an allowed one's code is handed once.
-pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -> Response {
+pub async fn status(State(ctx): State<Arc<Ctx>>, Extension(site): Extension<Site>, Query(q): Query<StatusQuery>) -> Response {
     blocking(move || {
         let not = || super::listener::spend_before_sign_in(&ctx).err().unwrap_or_else(|| said(StatusCode::NOT_FOUND, "not_found", "No such sign-in."));
         // an id is 32 hex digits: anything else, the code among them, names nothing
@@ -433,7 +435,7 @@ pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -
             Err(e) => return unavailable(e),
         };
         super::listener::polled(&ctx, &r.id, now);
-        let iss = ctx.base();
+        let iss = site.base();
         match r.answer {
             None => axum::Json(json!({ "state": "waiting" })).into_response(),
             Some(false) => match store.drop_request(&r.id) {
@@ -480,49 +482,50 @@ pub async fn enter_code(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) ->
             Ok(s) => s,
             Err(e) => return unavailable(e),
         };
-        match super::wrong_codes(&store) {
-            Ok(n) if n >= super::WRONG_CODES_PAUSE => return state("paused"),
-            Ok(_) => {}
-            Err(e) => return unavailable(e),
-        }
-        let r = match store.request(&id) {
-            Ok(Some(r)) if r.answer.is_none() && !ended(&r, now) => r,
-            Ok(_) => return state("ended"),
-            Err(e) => return unavailable(e),
-        };
-        if secret::same(code.as_bytes(), r.code.as_bytes()) {
-            ctx.tries.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-            return match super::approve::answer(&store, &id, true, now) {
-                Ok(()) => state("allowed"),
-                Err(e) => unavailable(e),
-            };
-        }
-        let wrong = match super::wrong_codes(&store).and_then(|n| {
-            store.set_setting(super::WRONG_CODES, Some(&(n + 1).to_string()), now).map_err(|e| e.to_string())?;
-            Ok(n + 1)
-        }) {
-            Ok(n) => n,
-            Err(e) => return unavailable(e),
-        };
-        let tries = {
-            let mut t = ctx.tries.lock().unwrap_or_else(|e| e.into_inner());
-            let n = t.entry(id.clone()).or_insert(0);
-            *n += 1;
-            *n
-        };
-        if tries >= super::CODE_TRIES {
-            ctx.tries.lock().unwrap_or_else(|e| e.into_inner()).remove(&id);
-            if let Err(e) = super::approve::answer(&store, &id, false, now) {
-                return unavailable(e);
+        // the whole entry in one transaction, which waits for any other's: entries
+        // sent together are taken one at a time, each seeing the counts the one
+        // before it left, so no more are compared than the pause allows
+        let refused = |e: String| bagholder_book::BookError::Refused(e);
+        let entry = store.atomically(|| {
+            if super::wrong_codes(&store).map_err(refused)? >= super::WRONG_CODES_PAUSE {
+                return Ok(Entry::Paused);
             }
-            return state(if wrong >= super::WRONG_CODES_PAUSE { "paused" } else { "ended" });
+            let r = match store.request(&id)? {
+                Some(r) if r.answer.is_none() && !ended(&r, now) => r,
+                _ => return Ok(Entry::Ended),
+            };
+            if secret::same(code.as_bytes(), r.code.as_bytes()) {
+                super::approve::answer(&store, &id, true, now).map_err(refused)?;
+                return Ok(Entry::Allowed);
+            }
+            let wrong = super::wrong_codes(&store).map_err(refused)? + 1;
+            store.set_setting(super::WRONG_CODES, Some(&wrong.to_string()), now)?;
+            let tries = store.add_wrong_code(&id)?;
+            let paused = wrong >= super::WRONG_CODES_PAUSE;
+            if tries >= u32::from(super::CODE_TRIES) {
+                super::approve::answer(&store, &id, false, now).map_err(refused)?;
+                return Ok(if paused { Entry::Paused } else { Entry::Ended });
+            }
+            Ok(if paused { Entry::Paused } else { Entry::Wrong(u32::from(super::CODE_TRIES) - tries) })
+        });
+        match entry {
+            Ok(Entry::Allowed) => state("allowed"),
+            Ok(Entry::Ended) => state("ended"),
+            Ok(Entry::Paused) => state("paused"),
+            Ok(Entry::Wrong(left)) => axum::Json(json!({ "state": "wrong", "left": left })).into_response(),
+            Err(e) => unavailable(e),
         }
-        if wrong >= super::WRONG_CODES_PAUSE {
-            return state("paused");
-        }
-        axum::Json(json!({ "state": "wrong", "left": super::CODE_TRIES - tries })).into_response()
     })
     .await
+}
+
+/// What a typed code came to.
+enum Entry {
+    Allowed,
+    /// Wrong, with the entries its request has left.
+    Wrong(u32),
+    Ended,
+    Paused,
 }
 
 fn grant_error(error: &str, why: &str) -> Response {
@@ -546,7 +549,7 @@ fn tokens(ctx: &Ctx, store: &bagholder_book::agents::AgentsBook, grant: &str) ->
 
 /// `/oauth/token`: a code exchanged once, with its verifier, for the redirect and
 /// the resource it was asked with; or a refresh token used once.
-pub async fn token(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Response {
+pub async fn token(State(ctx): State<Arc<Ctx>>, Extension(site): Extension<Site>, body: axum::body::Bytes) -> Response {
     let form: std::collections::BTreeMap<String, String> = match serde_urlencoded::from_bytes(&body) {
         Ok(f) => f,
         Err(e) => return grant_error("invalid_request", &format!("Not a token request: {e}")),
@@ -572,7 +575,7 @@ pub async fn token(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Resp
                     && get("client_id") == Some(r.client_id.as_str())
                     && get("redirect_uri") == Some(r.redirect_uri.as_str())
                     && get("resource").is_none_or(|x| x == r.resource)
-                    && r.resource == ctx.resource()
+                    && r.resource == site.resource()
                     && secret::pkce_ok(verifier, &r.challenge);
                 if !fits {
                     return grant_error("invalid_grant", "The code does not fit this request.");

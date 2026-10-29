@@ -6,6 +6,7 @@
   import type { ImportReport as FileReport } from './generated/model_api'
   import { symText } from './sym'
   import { relTime } from './fmt'
+  import { ICONS } from './icons'
 
   import { qty } from './fmt'
 
@@ -43,7 +44,7 @@
   <div class="card elev-md" style="width:{width}px;max-width:100%;padding:18px 20px;max-height:90vh;overflow:auto">
     <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px">
       <h5>{ui.modal === 'trade' ? 'Add trade' : ui.modal === 'import' ? 'Import CSV' : 'Load folder'}</h5>
-      <button class="btn btn-icon btn-secondary" aria-label="Close" style="margin-left:auto;width:28px;height:28px" onclick={closeModal}>×</button>
+      <button class="tk-x" aria-label="Close" onclick={closeModal}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.x} /></svg></button>
     </div>
 
     {#if ui.modal === 'trade' && arrivals.length}

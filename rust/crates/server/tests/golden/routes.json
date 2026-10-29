@@ -50,8 +50,7 @@
       "agents": {
         "on": false,
         "port": null,
-        "setup": null,
-        "address": "",
+        "addresses": [],
         "programs": [
           {
             "provider": "tailscale",
@@ -70,14 +69,16 @@
             "path": "<this machine's>"
           }
         ],
+        "computer": "server",
+        "os": "linux",
+        "installing": [],
         "tailscale": null,
-        "tunnel": {
-          "running": null,
-          "command": [],
-          "lines": [],
-          "exited": null
+        "cloudflare": {
+          "signedIn": false,
+          "signingIn": false,
+          "signInUrl": null,
+          "said": ""
         },
-        "ready": null,
         "waiting": [],
         "allowed": [],
         "refused": [],

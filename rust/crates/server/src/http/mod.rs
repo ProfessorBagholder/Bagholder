@@ -377,7 +377,7 @@ fn admitted(app: &App, req: &Request) -> Result<(), StatusCode> {
     // the agents' public name is never the page's, listed or not: Allow and Deny are
     // not reached through the agents' tunnel
     let host = head("host");
-    let agents_name = !host.is_empty() && app.agents.ctx().is_some_and(|c| host == c.host() || host == c.received());
+    let agents_name = !host.is_empty() && app.agents.ctx().is_some_and(|c| c.sites().iter().any(|s| host == s.host || host == s.received()));
     if peer_ok(&app.bind_host, peer) && !agents_name && host_ok(&app.bind_host, port, &host, &hosts) && (!write || from_the_page()) {
         Ok(())
     } else {
