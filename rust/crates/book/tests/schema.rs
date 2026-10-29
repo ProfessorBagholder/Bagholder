@@ -642,3 +642,25 @@ fn migration_40_drops_only_a_closed_account_s_statements_of_nothing() {
     assert_eq!(kinds(closed), vec![("cash".to_string(), 1)], "the statement with its rows stands");
     assert_eq!(kinds(open), open_before, "an open account's, untouched");
 }
+
+/// A key made before keys named their server was made for the one address
+/// Bagholder had, kept in `agents.host`: migration 44 gives it that server. One made
+/// while no address was set up is left without one.
+#[test]
+fn migration_44_gives_each_key_the_one_address_it_was_made_for() {
+    for host in [Some("agents.example.com"), None] {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join(bagholder_book::BOOK_FILE);
+        let v43: &'static Schema = Box::leak(Box::new(Schema { name: SCHEMA.name, application_id: SCHEMA.application_id, migrations: &MIGRATIONS[..43] }));
+        {
+            let (c, _) = migrate::open(v43, &path, "test", t0()).unwrap();
+            c.execute("INSERT INTO agent_keys(id, name, way, hash, made_at) VALUES ('bhk_1', 'Muse', 'api', x'01', '2026-10-20T00:00:00Z')", []).unwrap();
+            if let Some(h) = host {
+                c.execute("INSERT INTO settings(key, value, source, set_at) VALUES ('agents.host', ?1, 'person', '2026-10-20T00:00:00Z')", [h]).unwrap();
+            }
+        }
+        let (book, _) = Book::open_in(dir.path(), "test", t0()).unwrap();
+        let keys = book.agents().keys().unwrap();
+        assert_eq!(keys[0].at, host.map(|h| format!("https://{h}")), "{host:?}");
+    }
+}

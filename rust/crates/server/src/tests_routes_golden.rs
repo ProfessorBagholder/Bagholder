@@ -188,6 +188,12 @@ fn scrub_timestamps(v: &mut Value) {
                     }
                 }
             }
+            // the computer the app runs on, by its name and system: the machine's, not the route's
+            for key in ["computer", "os"] {
+                if m.get(key).is_some_and(Value::is_string) {
+                    m.insert(key.into(), json!("<this machine's>"));
+                }
+            }
             // where this machine has each tunnel's program, if anywhere: the machine's, not the route's
             if let Some(Value::Array(programs)) = m.get_mut("programs") {
                 for p in programs {

@@ -20,7 +20,7 @@ use bagholder_core::jiff::Timestamp;
 use tower_http::catch_panic::CatchPanicLayer;
 
 use super::tools::Caller;
-use super::{api, oauth, secret, Ctx};
+use super::{api, oauth, secret, Ctx, Site};
 
 /// A bucket computed when it is touched, never refilled on a clock: `tokens` as
 /// of `at`, up to `burst`, gaining `per_minute` a minute.
@@ -115,6 +115,7 @@ pub const ROUTES: &[(&str, &[Method])] = &[
     ("/oauth/register", &[Method::POST]),
     ("/oauth/authorize", &[Method::GET]),
     ("/oauth/authorize/status", &[Method::GET]),
+    ("/oauth/authorize/code", &[Method::POST]),
     ("/oauth/token", &[Method::POST]),
     ("/mcp", &[Method::POST, Method::GET]),
     ("/mcp/key", &[Method::POST, Method::GET]),
@@ -123,6 +124,12 @@ pub const ROUTES: &[(&str, &[Method])] = &[
     ("/api/agents/trade", &[Method::GET]),
     ("/api/agents/positions", &[Method::GET]),
     ("/api/agents/lists", &[Method::GET]),
+    ("/api/agents/stats", &[Method::GET]),
+    ("/api/agents/income", &[Method::GET]),
+    ("/api/agents/exposure", &[Method::GET]),
+    ("/api/agents/net-worth", &[Method::GET]),
+    ("/api/agents/markets", &[Method::GET]),
+    ("/api/agents/transactions", &[Method::GET]),
     ("/agents/check/{value}", &[Method::GET]),
 ];
 
@@ -133,6 +140,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/.well-known/oauth-authorization-server", get(oauth::authorization_server))
         .route("/oauth/register", post(oauth::register))
         .route("/oauth/authorize", get(oauth::authorize))
+        .route("/oauth/authorize/code", post(oauth::enter_code))
         .route("/oauth/token", post(oauth::token))
         .route("/agents/check/{value}", get(check))
         .route("/api/agents/openapi.json", get(api::openapi))
@@ -167,7 +175,13 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/api/agents/trades", get(api::trades).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/trade", get(api::trade).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/positions", get(api::positions).route_layer(check_with(ctx.clone(), api_key)))
-        .route("/api/agents/lists", get(api::lists).route_layer(check_with(ctx.clone(), api_key)));
+        .route("/api/agents/lists", get(api::lists).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/stats", get(api::stats).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/income", get(api::income).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/exposure", get(api::exposure).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/net-worth", get(api::net_worth).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/markets", get(api::markets).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/transactions", get(api::transactions).route_layer(check_with(ctx.clone(), api_key)));
     Router::new()
         .merge(before)
         .merge(signed_in)
@@ -226,7 +240,7 @@ pub fn refused(ctx: &Ctx, agent: &str, why: &str) {
 }
 
 /// The gate: the public name, a loopback peer, and no body where none is taken.
-async fn gate(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response {
+async fn gate(State(ctx): State<Arc<Ctx>>, mut req: Request, next: Next) -> Response {
     let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
     let loopback = match peer {
         Some(std::net::IpAddr::V4(ip)) => ip.is_loopback(),
@@ -237,11 +251,12 @@ async fn gate(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response
         return said(StatusCode::FORBIDDEN, "forbidden", "Only the tunnel on this computer reaches this address.");
     }
     let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("").trim().to_ascii_lowercase();
-    let want = ctx.received();
-    if want.is_empty() || host != want {
+    // one of the addresses set up, by name (brief 81 §3): each handler answers as that one
+    let Some(site) = ctx.site_for(&host) else {
         stranger(&ctx, "for another host");
         return said(StatusCode::MISDIRECTED_REQUEST, "misdirected_request", "This address answers for its own name alone.");
-    }
+    };
+    req.extensions_mut().insert(site);
     // the methods the table names, and no other (HEAD and OPTIONS among them)
     if req.method() != Method::GET && req.method() != Method::POST {
         return said(StatusCode::METHOD_NOT_ALLOWED, "method_not_allowed", "This address answers GET and POST alone.");
@@ -293,10 +308,11 @@ pub fn bearer(headers: &HeaderMap) -> Option<String> {
 /// Who a checked bearer is, or the answer refusing it. `per_request`: each request
 /// is a read, charged here (the JSON API); over MCP each tool call is, charged as it
 /// reads (`Served::reading`), so initializing, listing and notifications take none.
-async fn admitted(ctx: Arc<Ctx>, req: Request, next: Next, check: fn(&Ctx, Option<&str>) -> Result<String, Response>, per_request: bool) -> Response {
+async fn admitted(ctx: Arc<Ctx>, req: Request, next: Next, check: fn(&Ctx, &Site, Option<&str>) -> Result<String, Response>, per_request: bool) -> Response {
     let token = bearer(req.headers());
+    let site = req.extensions().get::<Site>().cloned().unwrap_or_default();
     let c = ctx.clone();
-    let who = tokio::task::spawn_blocking(move || check(&c, token.as_deref())).await.unwrap_or_else(|_| Err(said(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Bagholder failed to answer.")));
+    let who = tokio::task::spawn_blocking(move || check(&c, &site, token.as_deref())).await.unwrap_or_else(|_| Err(said(StatusCode::INTERNAL_SERVER_ERROR, "server_error", "Bagholder failed to answer.")));
     let agent = match who {
         Ok(a) => a,
         Err(r) => return r,
@@ -320,16 +336,17 @@ async fn oauth_bearer(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> 
 /// `/mcp/key`: a key made for MCP. No sign-in is offered: a client given a key is
 /// never sent into one.
 async fn mcp_key(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response {
-    admitted(ctx, req, next, |c, t| key(c, t, "mcp"), false).await
+    admitted(ctx, req, next, |c, s, t| key(c, s, t, "mcp"), false).await
 }
 
 /// The JSON API: a key made for it.
 async fn api_key(State(ctx): State<Arc<Ctx>>, req: Request, next: Next) -> Response {
-    admitted(ctx, req, next, |c, t| key(c, t, "api"), true).await
+    admitted(ctx, req, next, |c, s, t| key(c, s, t, "api"), true).await
 }
 
-/// A key of `way`, not withdrawn: its id.
-fn key(ctx: &Ctx, token: Option<&str>, way: &str) -> Result<String, Response> {
+/// A key of `way` made for this server, not withdrawn: its id. A key made before
+/// keys named their server is given this one, the first it is used through.
+fn key(ctx: &Ctx, site: &Site, token: Option<&str>, way: &str) -> Result<String, Response> {
     let refuse = |why: &'static str| {
         stranger(ctx, why);
         let mut r = said(StatusCode::UNAUTHORIZED, "invalid_token", "No key, or not a key Bagholder made for this address.");
@@ -340,10 +357,15 @@ fn key(ctx: &Ctx, token: Option<&str>, way: &str) -> Result<String, Response> {
     let store = ctx.store().map_err(|e| said(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable", &e))?;
     let hash = secret::hash(token);
     match store.key_by_hash(&hash).map_err(|e| said(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable", &e.to_string()))? {
-        Some(k) if k.withdrawn_at.is_none() && k.way == way => Ok(k.id),
+        Some(k) if k.withdrawn_at.is_none() && k.way == way && k.at.as_deref().is_none_or(|at| at == site.base()) => {
+            if k.at.is_none() {
+                store.key_found_at(&k.id, &site.base()).map_err(|e| said(StatusCode::SERVICE_UNAVAILABLE, "temporarily_unavailable", &e.to_string()))?;
+            }
+            Ok(k.id)
+        }
         Some(k) => {
-            refused(ctx, &k.id, if k.withdrawn_at.is_some() { "a key cut off" } else { "a key for the other way in" });
-            let mut r = said(StatusCode::UNAUTHORIZED, "invalid_token", "This key was cut off, or is for the other way in.");
+            refused(ctx, &k.id, if k.withdrawn_at.is_some() { "a key cut off" } else if k.way != way { "a key for the other way in" } else { "a key for another server" });
+            let mut r = said(StatusCode::UNAUTHORIZED, "invalid_token", "This key was cut off, or is for another way in or another server.");
             r.headers_mut().insert(header::WWW_AUTHENTICATE, HeaderValue::from_static("Bearer"));
             Err(r)
         }

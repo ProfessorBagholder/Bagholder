@@ -31,9 +31,13 @@ underlying: string, name: string, exchange: string, kind: string, currency: stri
  */
 security: string, 
 /**
- * `SELL` for a long, `COVER` for a short.
+ * `SELL` for a long, `COVER` for a short: the order that would close it.
  */
-side: string, qty: Fig<Dec>, entry: Fig<Dec>, 
+side: string, 
+/**
+ * `long` or `short`: what the trade holds, said plainly (an agent reads it).
+ */
+direction: string, qty: Fig<Dec>, entry: Fig<Dec>, 
 /**
  * None before the first sale.
  */
@@ -260,6 +264,20 @@ allocationTotal: Fig<Dec>,
 asOf: string | null, };
 
 export type Account = { id: string, name: string, 
+/**
+ * What it is, as the screens name an account the person has not: `TFSA`,
+ * `RRSP`, `FHSA`, `Cash`, `Margin`, `Crypto`, `Spending` (chequing), `Credit
+ * card`, `Line of credit` and the like.
+ */
+type: string, 
+/**
+ * Held jointly with someone else.
+ */
+joint: boolean, 
+/**
+ * Managed by the broker, not self-directed.
+ */
+managed: boolean, 
 /**
  * The broker's own id for it, which an order names; none for an account
  * kept by hand.

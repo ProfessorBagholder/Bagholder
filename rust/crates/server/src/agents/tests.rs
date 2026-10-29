@@ -69,8 +69,7 @@ fn harness_with(outside: Outside, read: Arc<dyn Fn() -> Result<crate::mcp::ReadO
     let path = home.path().to_path_buf();
     let c = clock.clone();
     let ctx = Ctx {
-        host: std::sync::RwLock::new(HOST.into()),
-        receives: Default::default(),
+        sites: std::sync::RwLock::new(vec![Site::new(HOST, None)]),
         store: Arc::new(move || bagholder_book::Book::open_in(&path, crate::app::APP_VERSION, Timestamp::now()).map(|(b, _)| b.agents()).map_err(|e| e.to_string())),
         read,
         now: Arc::new(move || *c.lock().unwrap()),
@@ -184,6 +183,45 @@ impl Harness {
         (id, code)
     }
 
+    /// The code typed on the sign-in page of request `id`: what the page is told.
+    fn enter(&self, id: &str, code: &str) -> Value {
+        self.ask("POST", "/oauth/authorize/code", &[("content-type", "application/json")], json!({ "request": id, "code": code }).to_string().into_bytes()).json()
+    }
+
+    /// Codes typed on several pages at once: every entry is released together, as a
+    /// burst sent at the same moment arrives. What each page is told, in order.
+    fn enter_together(&self, entries: &[(String, String)]) -> Vec<Value> {
+        let gate = Arc::new(tokio::sync::Barrier::new(entries.len()));
+        let asked: Vec<_> = entries
+            .iter()
+            .map(|(id, code)| {
+                let body = json!({ "request": id, "code": code }).to_string();
+                let req = Request::builder()
+                    .method("POST")
+                    .uri("/oauth/authorize/code")
+                    .header("host", HOST)
+                    .header("content-type", "application/json")
+                    .header("content-length", body.len().to_string())
+                    .extension(ConnectInfo("127.0.0.1:50000".parse::<SocketAddr>().unwrap()))
+                    .body(Body::from(body))
+                    .unwrap();
+                let (r, gate) = (self.router.clone(), gate.clone());
+                self.rt.spawn(async move {
+                    gate.wait().await;
+                    let res = r.oneshot(req).await.unwrap();
+                    serde_json::from_slice::<Value>(&axum::body::to_bytes(res.into_body(), 1 << 20).await.unwrap()).unwrap_or(Value::Null)
+                })
+            })
+            .collect();
+        self.rt.block_on(async {
+            let mut told = Vec::new();
+            for a in asked {
+                told.push(a.await.unwrap());
+            }
+            told
+        })
+    }
+
     /// The whole sign-in, allowed on the computer: the tokens, and the grant.
     fn sign_in(&self) -> (String, String, String) {
         let (id, _) = self.waiting(&self.authorize(CIMD, CALLBACK, &[]));
@@ -241,7 +279,8 @@ impl Harness {
     }
 
     fn key(&self, way: &str) -> String {
-        approve::make_key(&self.store(), &approve::KeyAsked { name: "Grok Bot".into(), way: way.into() }, self.ctx.now()).unwrap().key
+        let at = format!("https://{HOST}");
+        approve::make_key(&self.store(), &approve::KeyAsked { name: "Grok Bot".into(), way: way.into(), at: at.clone() }, &[at], self.ctx.now()).unwrap().key
     }
 }
 
@@ -286,7 +325,7 @@ fn a_second_reachability_check_waits_for_the_first() {
     let held = h.ctx.one_check.lock().unwrap();
     let ctx = h.ctx.clone();
     let (tx, rx) = std::sync::mpsc::channel();
-    let t = std::thread::spawn(move || tx.send(tunnel::reach(&ctx, tunnel::Provider::Own)).unwrap());
+    let t = std::thread::spawn(move || tx.send(tunnel::reach(&ctx, HOST, tunnel::Provider::Own)).unwrap());
     assert!(rx.recv_timeout(std::time::Duration::from_millis(300)).is_err(), "it ran beside the one running");
     drop(held);
     assert!(rx.recv_timeout(std::time::Duration::from_secs(30)).is_ok(), "it ran once the first was done");
@@ -374,6 +413,9 @@ fn the_agents_module_holds_no_write_handle() {
         ("secret.rs", include_str!("secret.rs")),
         ("tools.rs", include_str!("tools.rs")),
         ("tunnel.rs", include_str!("tunnel.rs")),
+        ("cloudflare.rs", include_str!("cloudflare.rs")),
+        ("ngrok.rs", include_str!("ngrok.rs")),
+        ("install.rs", include_str!("install.rs")),
     ];
     // every file of the module is scanned
     let on_disk: std::collections::BTreeSet<String> = std::fs::read_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src/agents")).unwrap().map(|e| e.unwrap().file_name().to_string_lossy().to_string()).filter(|n| n != "tests.rs").collect();
@@ -577,7 +619,7 @@ fn the_public_page_alone_grants_nothing() {
 fn allow_and_deny_are_unreachable_through_the_agents_listener() {
     let h = harness();
     let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
-    for p in ["/api/agents/requests/allow", "/api/agents/requests/deny", "/api/agents/keys", "/api/agents/cut-off", "/api/agents/switch"] {
+    for p in ["/api/agents/requests/deny", "/api/agents/codes/resume", "/api/agents/keys", "/api/agents/cut-off", "/api/agents/rename", "/api/agents/switch"] {
         assert_eq!(h.ask("POST", p, &[("content-type", "application/json")], json!({ "id": id }).to_string().into_bytes()).status, StatusCode::NOT_FOUND, "{p}");
         assert!(crate::http::route_table().iter().any(|e| e.path == p && e.method == "post"), "{p} is the page's");
     }
@@ -598,15 +640,15 @@ fn tokens_are_refused_for_another_resource_when_expired_and_once_cut_off() {
     let a = h.mcp("/mcp", Some("bha_other"));
     assert_eq!(a.status, StatusCode::UNAUTHORIZED);
     assert!(a.header("www-authenticate").contains("invalid_token"));
-    // expired
+    // expired: refused, and not in the agent's activity, as the agent then refreshes
     h.advance(SignedDuration::from_mins(61));
     assert_eq!(h.mcp("/mcp", Some(&access)).status, StatusCode::UNAUTHORIZED);
+    assert!(h.store().reads(&grant, 10).unwrap().iter().all(|r| r.refusal.is_none()), "an expired token is routine");
     // cut off
     let (access2, _, grant2) = h.sign_in();
     assert_eq!(h.mcp("/mcp", Some(&access2)).status, StatusCode::OK);
     approve::cut_off(&h.store(), &grant2, h.ctx.now()).unwrap();
     assert_eq!(h.mcp("/mcp", Some(&access2)).status, StatusCode::UNAUTHORIZED);
-    let _ = grant;
 }
 
 /// The token endpoint takes `client_id` and holds it to the client the code or the
@@ -692,7 +734,7 @@ fn pkce_is_s256_and_required() {
     for extra in [vec![("code_challenge_method", "plain")], vec![("code_challenge", "")], vec![("code_challenge_method", "")]] {
         let a = h.authorize(CIMD, CALLBACK, &extra);
         assert_eq!(a.status, StatusCode::BAD_REQUEST, "{extra:?}");
-        assert!(a.text().contains("invalid_request"), "{extra:?}: {}", a.text());
+        assert_eq!(a.header("x-refused"), "invalid_request", "{extra:?}");
     }
     // and a wrong verifier exchanges nothing
     let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
@@ -716,14 +758,16 @@ fn a_redirect_not_exactly_registered_is_refused_never_redirected() {
     assert_eq!(h.authorize(&client, "https://agent.example/cb", &[]).status, StatusCode::OK);
 }
 
-/// A redirect to this machine, or to a host a browser may read as it, is refused at
-/// registration and at authorization (brief 73, 3; brief 80 §3.1). The metadata
+/// A redirect to this machine in any spelling but a desktop app's loopback, or to a
+/// host a browser may read as this machine, is refused at registration and at
+/// authorization (brief 80 §3.1; brief 81 §1). The metadata
 /// document lists every one of them, so authorization reaches the redirect check
 /// itself rather than the exact match (brief 80 §3.2).
 #[test]
 fn a_redirect_that_is_not_a_public_host_is_refused_everywhere() {
     let refused = [
-        "http://localhost/cb", "http://localhost:33418/cb", "http://foo.localhost/cb", "http://127.0.0.2/cb", "http://[::1]/cb",
+        "http://foo.localhost/cb", "http://127.0.0.2/cb", "http://127.1/cb", "http://LOCALHOST/cb", "http://localhost./cb", "http://localhost:0/cb",
+        "http://localhost:99999/cb", "http://user@localhost/cb", "http://%6Cocalhost/cb", "http://localhost/cb#x", "http://[0:0:0:0:0:0:0:1]/cb",
         "https://localhost/cb", "https://127.0.0.1/cb", "https://[::1]/cb", "https://app.localhost/cb",
         "https://2130706433/cb", "https://127.1/cb", "https://0x7f.1/cb", "https://localhost./cb", "https://0.0.0.0/cb",
         "https://0x7f.0x1/cb", "https://0x7f.0.0.0x1/cb", "https://0X7F.0X1/cb", "https://127.0x/cb",
@@ -762,7 +806,7 @@ fn a_metadata_document_naming_another_client_is_refused() {
     let h = harness_with(Outside { resolve: Arc::new(PublicAnswer("93.184.215.14".parse().unwrap())), get: docs.clone(), public_dns: Arc::new(Unreachable) }, Arc::new(|| Err("none".into())));
     let a = h.authorize(CIMD, CALLBACK, &[]);
     assert_eq!(a.status, StatusCode::BAD_REQUEST);
-    assert!(a.text().contains("another client_id"), "{}", a.text());
+    assert_eq!(a.header("x-refused"), "invalid_client");
     assert!(h.store().waiting(bagholder_core::jiff::Timestamp::MIN).unwrap().is_empty());
 }
 
@@ -776,6 +820,95 @@ fn a_metadata_document_on_a_private_address_is_never_fetched() {
     assert!(docs.asked.lock().unwrap().is_empty(), "nothing fetched");
 }
 
+/// A desktop app's loopback redirect is taken, as RFC 8252 §7.3 and the MCP
+/// specification have it: `localhost`, `127.0.0.1` or `[::1]` written so, with any
+/// port, matched exactly but for the port; the app is named as it named itself,
+/// unchecked (brief 81 §1).
+#[test]
+fn a_desktop_app_s_loopback_redirect_is_taken_and_matched_but_for_its_port() {
+    for ok in ["http://localhost/callback", "http://localhost:33418/callback", "http://127.0.0.1:51004/cb?x=1", "http://[::1]:8080/cb", "http://localhost"] {
+        assert!(oauth::redirect_ok(ok).is_ok(), "{ok}");
+    }
+    assert!(oauth::same_redirect("http://127.0.0.1:43210/callback", "http://127.0.0.1:51123/callback"));
+    assert!(!oauth::same_redirect("http://127.0.0.1:43210/callback", "http://127.0.0.1:43210/other"));
+    assert!(!oauth::same_redirect("http://127.0.0.1/callback", "http://localhost/callback"), "another host");
+    assert!(!oauth::same_redirect("https://agent.example/cb", "https://agent.example:8443/cb"), "an https redirect's port is exact");
+    let h = harness();
+    let client = h.register("http://127.0.0.1:43210/callback").json()["client_id"].as_str().unwrap().to_string();
+    let page = h.authorize(&client, "http://127.0.0.1:51123/callback", &[]).text();
+    assert!(page.contains(oauth::LOCAL_APP) && page.contains("(calls itself “Totally Claude”)"), "{page}");
+    assert_eq!(h.authorize(&client, "http://127.0.0.1:51123/elsewhere", &[]).status, StatusCode::BAD_REQUEST, "another path");
+}
+
+/// A desktop app signs in end to end (brief 81 §1): registered with a loopback
+/// redirect, sent to the sign-in page, the code the panel shows typed there, sent
+/// back to its loopback with a code, the code exchanged with its verifier, and an
+/// MCP read made with the token.
+#[test]
+fn a_desktop_app_signs_in_end_to_end_with_the_typed_code() {
+    let h = harness();
+    let client = h.register("http://127.0.0.1:43210/callback").json()["client_id"].as_str().unwrap().to_string();
+    let (id, code) = h.waiting(&h.authorize(&client, "http://127.0.0.1:51123/callback", &[]));
+    let typed = h.enter(&id, &code);
+    assert_eq!(typed["state"], "allowed", "{typed}");
+    let s = h.get(&format!("/oauth/authorize/status?request={id}")).json();
+    let redirect = s["redirect"].as_str().unwrap_or_default().to_string();
+    assert!(redirect.starts_with("http://127.0.0.1:51123/callback?code="), "{s}");
+    let grant_code = redirect.split("code=").nth(1).unwrap().split('&').next().unwrap().to_string();
+    let t = h.form("/oauth/token", &[("grant_type", "authorization_code"), ("code", &grant_code), ("redirect_uri", "http://127.0.0.1:51123/callback"), ("client_id", &client), ("code_verifier", VERIFIER), ("resource", &format!("https://{HOST}/mcp"))]);
+    assert_eq!(t.status, StatusCode::OK, "{}", t.text());
+    let token = t.json()["access_token"].as_str().unwrap().to_string();
+    h.mcp_session("/mcp", &token);
+}
+
+/// The typed code's bounds (brief 81 §2): a wrong code is refused and counted, the
+/// third wrong entry ends its request, five wrong entries in all pause sign-in for
+/// everyone, a right code is then refused too, and once the person resumes, the
+/// next right code goes through. A code ends with its request after ten minutes.
+#[test]
+fn a_typed_code_is_bounded_per_request_and_wrong_codes_pause_sign_in() {
+    let h = harness();
+    let wrong = |c: &str| if c == "000000" { "111111".to_string() } else { "000000".to_string() };
+    let (a, code_a) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    assert_eq!(h.enter(&a, &wrong(&code_a)), json!({ "state": "wrong", "left": 2 }));
+    assert_eq!(h.enter(&a, &wrong(&code_a)), json!({ "state": "wrong", "left": 1 }));
+    assert_eq!(h.store().request(&a).unwrap().unwrap().wrong_codes, 2, "counted with the request, in the book");
+    assert_eq!(h.enter(&a, &wrong(&code_a))["state"], "ended", "the third wrong entry ends it");
+    assert_eq!(h.enter(&a, &code_a)["state"], "ended", "an ended request takes no code, right or not");
+    let (b, code_b) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    assert_eq!(h.enter(&b, &wrong(&code_b))["state"], "wrong", "the fourth wrong entry in all");
+    assert_eq!(h.enter(&b, &wrong(&code_b))["state"], "paused", "the fifth pauses sign-in");
+    assert_eq!(h.enter(&b, &code_b)["state"], "paused", "paused: even the right code is refused");
+    assert!(h.store().request(&b).unwrap().unwrap().answer.is_none(), "still waiting, not allowed");
+    h.store().set_setting(crate::agents::WRONG_CODES, None, h.ctx.now()).unwrap();
+    assert_eq!(h.enter(&b, &code_b)["state"], "allowed", "resumed: the right code goes through");
+    // ten minutes on, a code is refused with its request
+    let (c, code_c) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
+    *h.clock.lock().unwrap() = h.ctx.now() + crate::agents::REQUEST_LIFE + bagholder_core::jiff::SignedDuration::from_secs(1);
+    assert_eq!(h.enter(&c, &code_c)["state"], "ended", "expired");
+}
+
+/// Wrong codes sent together are taken one at a time (brief 81 §2): twenty wrong
+/// entries released at the same moment across five sign-ins, and no more are
+/// compared than the pause allows. The rest are refused as paused, never compared.
+#[test]
+fn wrong_codes_typed_together_are_taken_one_at_a_time() {
+    let h = harness();
+    let waiting: Vec<(String, String)> = (0..crate::agents::PENDING_KEPT).map(|_| h.waiting(&h.authorize(CIMD, CALLBACK, &[]))).collect();
+    let entries: Vec<(String, String)> = (0..20)
+        .map(|i| {
+            let (id, code) = &waiting[i % waiting.len()];
+            (id.clone(), if code == "000000" { "111111".into() } else { "000000".into() })
+        })
+        .collect();
+    let told = h.enter_together(&entries);
+    let paused = told.iter().filter(|t| t["state"] == "paused").count();
+    assert!(paused >= 15, "{paused} of 20 refused as paused: {told:?}");
+    assert_eq!(crate::agents::wrong_codes(&h.store()).unwrap(), crate::agents::WRONG_CODES_PAUSE, "{told:?}");
+    let counted: u32 = waiting.iter().map(|(id, _)| h.store().request(id).unwrap().unwrap().wrong_codes).sum();
+    assert_eq!(counted, crate::agents::WRONG_CODES_PAUSE, "each compared entry counted with its request");
+}
+
 /// Who is asking, as the pages show it (brief 73, 4).
 #[test]
 fn the_pages_say_who_is_really_asking() {
@@ -784,23 +917,25 @@ fn the_pages_say_who_is_really_asking() {
     assert!(page.contains("<b>agent.example</b>") && page.contains("Agent Example"), "{page}");
     let client = h.register("https://claude.example/cb").json()["client_id"].as_str().unwrap().to_string();
     let page = h.authorize(&client, "https://claude.example/cb", &[]).text();
-    assert!(page.contains("<b>claude.example</b>") && page.contains("Totally Claude") && page.contains("name given by the agent, not checked"), "{page}");
+    assert!(page.contains("<b>claude.example</b>") && page.contains("calls itself “Totally Claude”"), "{page}");
     let waiting = approve::waiting(&h.store(), h.ctx.now()).unwrap();
     assert_eq!(waiting.iter().map(|w| (w.who.as_str(), w.checked)).collect::<Vec<_>>(), vec![("agent.example", true), ("claude.example", false)]);
 }
 
 /// Who is asking is the metadata document's host, never the callback's, where the
-/// two differ; both pages name the host the agent is sent back to as well (plan §3,
-/// brief 80 §3.4, §3.5).
+/// two differ: the document's owner lists its callbacks, so its host is the one to
+/// judge (plan §3, brief 80 §3.4, §3.5). The page says what to do, enter the code
+/// shown in Bagholder, and who wants to read.
 #[test]
-fn who_is_asking_is_the_document_s_host_and_the_callback_is_named_beside_it() {
+fn who_is_asking_is_the_document_s_host_never_the_callback_s() {
     let docs = Arc::new(Documents { doc: json!({ "client_id": CIMD, "client_name": "Agent Example", "redirect_uris": ["https://callback.example/cb"] }), asked: Mutex::new(vec![]) });
     let h = harness_with(Outside { resolve: Arc::new(PublicAnswer("93.184.215.14".parse().unwrap())), get: docs, public_dns: Arc::new(Unreachable) }, Arc::new(|| Err("none".into())));
     let page = h.authorize(CIMD, "https://callback.example/cb", &[]).text();
     assert!(page.contains("<b>agent.example</b>") && page.contains("Agent Example"), "{page}");
-    assert!(page.contains("It sends you back to <b>callback.example</b>"), "{page}");
+    assert!(page.contains("Enter the code shown in Bagholder") && page.contains(&format!("<b>agent.example</b> <span class=dim>(Agent Example)</span> wants to read {}.", tools::READ)), "{page}");
+    assert!(!page.contains("callback.example"), "{page}");
     let w = approve::waiting(&h.store(), h.ctx.now()).unwrap();
-    assert_eq!(w.iter().map(|w| (w.who.as_str(), w.redirect_host.as_str(), w.checked)).collect::<Vec<_>>(), vec![("agent.example", "callback.example", true)]);
+    assert_eq!(w.iter().map(|w| (w.who.as_str(), w.checked)).collect::<Vec<_>>(), vec![("agent.example", true)]);
 }
 
 /// The status route answers for the id it is asked with alone: asked with one
@@ -1008,7 +1143,7 @@ fn a_proxy_s_own_host_is_taken_and_the_public_name_given() {
         assert_eq!(tunnel::received_host(&Setup { provider: p, sends_host: Some("bagholder.lan".into()), ..own.clone() }).unwrap(), None, "{p:?}");
     }
     let h = harness();
-    *h.ctx.receives.write().unwrap() = "bagholder.lan".into();
+    *h.ctx.sites.write().unwrap() = vec![Site::new(HOST, Some("bagholder.lan"))];
     let a = h.ask("GET", "/.well-known/oauth-protected-resource", &[("host", "bagholder.lan")], vec![]);
     assert_eq!(a.status, StatusCode::OK);
     assert_eq!(a.json()["resource"], json!(format!("https://{HOST}/mcp")), "the public name, never the proxy's own");
@@ -1188,17 +1323,17 @@ fn tailscale_s_status_shows_each_step_done() {
 fn the_tailscale_command_never_runs_in_the_background() {
     let setups = [Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: None, sends_host: None }, Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: Some(8443), sends_host: None }];
     for s in setups {
-        let c = tunnel::command(&s, "tailscale", 4321).unwrap();
+        let c = tunnel::command(&s, "tailscale", 4321, std::path::Path::new("/nonexistent")).unwrap();
         assert!(!c.iter().any(|a| a.starts_with("--bg")), "{c:?}");
         assert_eq!(c[1], "funnel");
         assert!(c.contains(&"127.0.0.1:4321".to_string()));
     }
     // every provider's command targets this listener alone, with fixed arguments
     for p in [Provider::Cloudflare, Provider::Ngrok, Provider::Zrok] {
-        let c = tunnel::command(&Setup { provider: p, name: "agents.example.com".into(), funnel_port: None, sends_host: None }, "x", 4321).unwrap();
+        let c = tunnel::command(&Setup { provider: p, name: "agents.example.com".into(), funnel_port: None, sends_host: None }, "x", 4321, std::path::Path::new("/nonexistent")).unwrap();
         assert!(c.iter().any(|a| a.contains("127.0.0.1:4321")), "{p:?}: {c:?}");
     }
-    assert!(tunnel::command(&Setup { provider: Provider::Own, name: "a.example.com".into(), funnel_port: None, sends_host: None }, "x", 1).is_none());
+    assert!(tunnel::command(&Setup { provider: Provider::Own, name: "a.example.com".into(), funnel_port: None, sends_host: None }, "x", 1, std::path::Path::new("/nonexistent")).is_none());
     use tunnel::{Provider, Setup};
 }
 
@@ -1206,8 +1341,8 @@ fn the_tailscale_command_never_runs_in_the_background() {
 fn a_second_tunnel_start_is_refused_naming_the_first() {
     let mut t = tunnel::Tunnels::default();
     let stand_in = if cfg!(windows) { vec!["cmd".to_string(), "/c".into(), "ping -n 30 127.0.0.1".into()] } else { vec!["sleep".to_string(), "30".into()] };
-    t.start(tunnel::Provider::Ngrok, (stand_in.clone(), vec![]), Arc::new(|| {})).unwrap();
-    let said = t.start(tunnel::Provider::Zrok, (stand_in, vec![]), Arc::new(|| {})).unwrap_err();
+    t.start(tunnel::Provider::Ngrok, (stand_in.clone(), vec![]), Arc::new(|| {}), Arc::new(|_| {})).unwrap();
+    let said = t.start(tunnel::Provider::Zrok, (stand_in, vec![]), Arc::new(|| {}), Arc::new(|_| {})).unwrap_err();
     assert!(said.contains("Ngrok"), "{said}");
     t.stop();
     assert!(t.state().running.is_none());
@@ -1219,8 +1354,7 @@ fn switching_off_closes_the_listener_and_refuses_every_agent_at_once() {
     let h = harness();
     let agents = Agents::default();
     let ctx = Ctx {
-        host: std::sync::RwLock::new(HOST.into()),
-        receives: Default::default(),
+        sites: std::sync::RwLock::new(vec![Site::new(HOST, None)]),
         store: h.ctx.store.clone(),
         read: h.ctx.read.clone(),
         now: h.ctx.now.clone(),
@@ -1317,7 +1451,7 @@ fn reach_through(system: &str, public: Option<&str>, funnel: bool, provider: tun
     let h = harness_with(Outside { resolve: Arc::new(PublicAnswer(system.parse().unwrap())), get: Arc::new(Late(slot.clone())), public_dns }, Arc::new(|| Err("none".into())));
     let through = Arc::new(Through { ctx: h.ctx.clone(), funnel, went: Mutex::new(vec![]), closed: closed.iter().map(|a| a.parse().unwrap()).collect() });
     *slot.lock().unwrap() = Some(through.clone());
-    let ready = tunnel::reach(&h.ctx, provider);
+    let ready = tunnel::reach(&h.ctx, HOST, provider);
     let went = through.went.lock().unwrap().clone();
     (ready, went)
 }
@@ -1417,7 +1551,8 @@ fn the_openapi_description_matches_its_routes() {
 #[test]
 fn each_described_route_answers_with_its_described_arguments() {
     let d = tempfile::tempdir().unwrap();
-    crate::capacity::build(d.path(), bagholder_wealthsimple::generated::Size { accounts: 4, instruments: 10, trades: 30, months: 4, seed: 3, deep: 0 }, 2).unwrap();
+    // six accounts: the investment ones, crypto, a chequing account and a credit card
+    crate::capacity::build(d.path(), bagholder_wealthsimple::generated::Size { accounts: 6, instruments: 10, trades: 30, months: 4, seed: 3, deep: 0 }, 2).unwrap();
     let served = crate::tests_mcp::served_for(d.path());
     let base = format!("http://127.0.0.1:{}", served.port);
     let h = harness_with(Outside::network(), Arc::new(move || Ok(crate::mcp::ReadOnly::own(&base))));
@@ -1434,6 +1569,34 @@ fn each_described_route_answers_with_its_described_arguments() {
     assert_eq!(one.json()["trade"]["id"], first);
     let pos = h.ask("GET", "/api/agents/positions", &[("authorization", &auth)], vec![]);
     assert_eq!(pos.status, StatusCode::OK, "{}", pos.text());
+    // an account is named by its name alone: its id at the broker names nothing an agent does
+    assert!(lists.json()["accounts"].as_array().unwrap().iter().all(|a| a.get("brokerAccount").is_none() && a.get("name").is_some()), "{}", lists.text());
+    // each account's type, as the screens name one the person has not
+    let types: Vec<String> = lists.json()["accounts"].as_array().unwrap().iter().map(|a| a["type"].as_str().unwrap().to_string()).collect();
+    for t in ["TFSA", "RRSP", "Spending", "Credit card"] {
+        assert!(types.iter().any(|x| x == t), "{t} in {types:?}");
+    }
+    // the net worth's history, one point a month
+    let nw = h.ask("GET", "/api/agents/net-worth", &[("authorization", &auth)], vec![]).json();
+    let months: Vec<String> = nw["history"].as_array().unwrap().iter().map(|p| p["d"].as_str().unwrap()[..7].to_string()).collect();
+    assert!(!months.is_empty() && months.windows(2).all(|w| w[0] < w[1]), "{months:?}");
+    assert!(nw["assets"].is_array() && nw["liabilities"].is_array());
+    // the income's payments, a page at a time
+    let inc = h.ask("GET", "/api/agents/income?size=2", &[("authorization", &auth)], vec![]).json();
+    assert!(inc["payments"].as_array().unwrap().len() <= 2 && inc["total"].is_u64() && inc.get("asked").is_none(), "{inc}");
+    assert!(inc["months"].is_array() && inc["tiles"].is_array());
+    // the stats, the exposure and the markets as their pages have them; no directory of listings
+    assert!(h.ask("GET", "/api/agents/stats", &[("authorization", &auth)], vec![]).json()["kpi"].is_object());
+    assert!(h.ask("GET", "/api/agents/exposure", &[("authorization", &auth)], vec![]).json()["sectors"].is_array());
+    let mk = h.ask("GET", "/api/agents/markets", &[("authorization", &auth)], vec![]).json();
+    assert!(mk.get("directory").is_none() && mk["watchlist"].is_array(), "{mk}");
+    // the chequing and credit card accounts' money, each card purchase with its merchant
+    let tx = h.ask("GET", "/api/agents/transactions?size=500", &[("authorization", &auth)], vec![]).json();
+    let rows = tx["transactions"].as_array().unwrap();
+    assert!(!rows.is_empty() && tx["total"].as_u64().unwrap() as usize >= rows.len(), "{tx}");
+    let purchases: Vec<&Value> = rows.iter().filter(|r| r["kind"] == "card-purchase").collect();
+    assert!(!purchases.is_empty() && purchases.iter().all(|r| r["company"].as_str().is_some_and(|c| c.starts_with("gen-merchant-"))), "{purchases:?}");
+    assert!(rows.windows(2).all(|w| w[0]["date"].as_str() >= w[1]["date"].as_str()), "newest first");
     // every route as the served description lists it, called with each parameter it
     // lists, and each parameter shown to be read: a wrong value refused, or another
     // value changing the answer (brief 80, round 3, 4). Built from what is served,
@@ -1443,7 +1606,7 @@ fn each_described_route_answers_with_its_described_arguments() {
     assert_eq!(served_doc.status, StatusCode::OK, "{}", served_doc.text());
     let described = served_doc.json();
     let paths = described["paths"].as_object().unwrap().clone();
-    assert_eq!(paths.len(), 4, "every route is described");
+    assert_eq!(paths.len(), 10, "every route is described");
     for (path, item) in &paths {
         let params = item["get"]["parameters"].as_array().unwrap().clone();
         // what a call must carry: its required parameters, each a value that answers
@@ -1497,4 +1660,371 @@ fn each_described_route_answers_with_its_described_arguments() {
     assert_eq!(via_api, page);
     drop(served);
     let _ = &h.home;
+}
+
+// ---- Cloudflare and ngrok set up by Bagholder (brief 81 §3) ----
+
+/// A stand-in program at `dir/name` that writes each call (its arguments, and its
+/// HOME) to `dir/calls`, then runs `body`, a shell script given the arguments.
+#[cfg(unix)]
+fn stand_in(dir: &std::path::Path, name: &str, body: &str) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let p = dir.join(name);
+    std::fs::write(&p, format!("#!/bin/sh\necho \"HOME=$HOME $*\" >> '{}'\n{body}\n", dir.join("calls").display())).unwrap();
+    std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    p.display().to_string()
+}
+
+#[cfg(unix)]
+fn calls(dir: &std::path::Path) -> Vec<String> {
+    std::fs::read_to_string(dir.join("calls")).unwrap_or_default().lines().map(str::to_string).collect()
+}
+
+#[cfg(unix)]
+#[test]
+fn cloudflare_is_set_up_in_bagholder_s_own_folder_never_the_computer_s_other_cloudflare() {
+    use super::tunnel::{Provider, Setup};
+    let home = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    // login writes its sign-in under the home it is given; create writes the credentials it is named
+    let program = stand_in(
+        bin.path(),
+        "cloudflared",
+        r#"case "$*" in
+  *" login") echo "Please open the following URL and log in with your Cloudflare account:"; echo; echo "https://dash.cloudflare.com/argotunnel?aud=&callback=https%3A%2F%2Flogin.cloudflareaccess.org%2Fx"; mkdir -p "$HOME/.cloudflared"; echo cert > "$HOME/.cloudflared/cert.pem";;
+  *" create "*) shift 5; while [ "$1" != "--credentials-file" ]; do shift; done; echo '{}' > "$2";;
+  *" route dns "*) case "$*" in *taken.example.com*) echo "Failed to add route: code: 1003, reason: Failed to create record agents.example.com with err An A, AAAA, or CNAME record with that host already exists." >&2; exit 1;; esac
+    for h in "$@"; do last="$h"; done; case "$last" in *.*) ;; *) last="$last.example.com";; esac
+    echo "2026-10-28T20:00:00Z INF Added CNAME $last which will route to this tunnel tunnelID=00000000-0000-0000-0000-000000000000" >&2;;
+esac"#,
+    );
+    let files = cloudflare::Files::new(home.path());
+    let folder = home.path().join("agents-cloudflare").display().to_string();
+    assert!(!files.signed_in());
+    assert_eq!(files.set_up(&program, "agents.example.com").unwrap_err(), "Sign in to Cloudflare first.");
+
+    // the sign-in: the page it names, and the sign-in written in Bagholder's folder
+    let login = files.sign_in(&program).unwrap();
+    let out = tunnel::run::output(&login[0], &login[1..], &files.env(), tunnel::run::WAIT).unwrap();
+    assert_eq!(out.lines().find_map(cloudflare::sign_in_url).as_deref(), Some("https://dash.cloudflare.com/argotunnel?aud=&callback=https%3A%2F%2Flogin.cloudflareaccess.org%2Fx"));
+    assert!(files.signed_in());
+    assert!(files.cert().starts_with(&folder));
+
+    // the tunnel made once, the address routed each time: a bare name lands on the
+    // domain the person authorized, and the address is the one Cloudflare says it made
+    assert_eq!(files.set_up(&program, "agents").unwrap(), "agents.example.com");
+    assert_eq!(files.set_up(&program, "agents2.example.com").unwrap(), "agents2.example.com");
+    let c = calls(bin.path());
+    assert_eq!(c.iter().filter(|l| l.contains(" create ")).count(), 1, "{c:?}");
+    let name = files.tunnel().expect("the tunnel Bagholder made");
+    assert!(name.starts_with("bagholder-"), "{name}");
+    assert!(c.iter().any(|l| l.ends_with(&format!("route dns {name} agents"))), "{c:?}");
+    assert!(c.iter().any(|l| l.ends_with(&format!("route dns {name} agents2.example.com"))), "{c:?}");
+    // the sign-in and the tunnel's credentials, readable by the person alone
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&files.cert()), 0o600);
+        assert_eq!(mode(&home.path().join("agents-cloudflare").join("tunnel.json")), 0o600);
+        assert_eq!(mode(&home.path().join("agents-cloudflare")), 0o700);
+        assert_eq!(mode(&home.path().join("agents-cloudflare").join(".cloudflared")), 0o700);
+    }
+    // every call: Bagholder's folder as home, its own config and sign-in, never another
+    for l in &c {
+        assert!(l.starts_with(&format!("HOME={folder} --config {folder}/config.yml tunnel --origincert {folder}/.cloudflared/cert.pem ")), "{l}");
+    }
+    // an address already used on the domain, said plainly
+    assert_eq!(cloudflare::made("x INF agents.example.com is already configured to route to your tunnel tunnelID=y").as_deref(), Some("agents.example.com"));
+    assert_eq!(files.set_up(&program, "taken.example.com").unwrap_err(), "That address is already used on your Cloudflare domain: pick another name, such as agents2.yourdomain.com.");
+
+    // run: the tunnel Bagholder made, from its folder
+    let s = Setup { provider: Provider::Cloudflare, name: "agents.example.com".into(), funnel_port: None, sends_host: None };
+    let run = tunnel::command(&s, &program, 4321, home.path()).unwrap();
+    assert_eq!(run[1..], [
+        "--config".to_string(), format!("{folder}/config.yml"), "tunnel".into(), "--origincert".into(), format!("{folder}/.cloudflared/cert.pem"),
+        "run".into(), "--credentials-file".into(), format!("{folder}/tunnel.json"), "--url".into(), "http://127.0.0.1:4321".into(), name,
+    ]);
+    // a Cloudflare the person set up themselves, as 2.13 had them: run as before
+    let theirs = tempfile::tempdir().unwrap();
+    assert_eq!(tunnel::command(&s, "cloudflared", 4321, theirs.path()).unwrap()[1..4], ["tunnel".to_string(), "run".into(), "--url".into()]);
+}
+
+#[cfg(unix)]
+#[test]
+fn ngrok_keeps_the_authtoken_in_bagholder_s_config_and_its_address_is_read_as_it_starts() {
+    use super::tunnel::{Provider, Setup};
+    let home = tempfile::tempdir().unwrap();
+    let bin = tempfile::tempdir().unwrap();
+    let program = stand_in(bin.path(), "ngrok", r#"case "$*" in config\ add-authtoken*) printf 'version: "3"\nagent:\n  authtoken: x\n' > "$5";; esac"#);
+    let files = ngrok::Files::new(home.path());
+    let s = Setup { provider: Provider::Ngrok, name: String::new(), funnel_port: None, sends_host: None };
+    assert!(files.run(&program, "127.0.0.1:1").is_none());
+    assert_eq!(files.save_token(&program, "not a token!").unwrap_err(), "That isn't an ngrok authtoken: copy it from ngrok’s page again.");
+    files.save_token(&program, " 2abcDEF_ghi123 ").unwrap();
+    assert!(files.has_token());
+    // the authtoken, readable by the person alone
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&home.path().join("agents-ngrok").join("ngrok.yml")), 0o600);
+        assert_eq!(mode(&home.path().join("agents-ngrok")), 0o700);
+    }
+    let config = home.path().join("agents-ngrok").join("ngrok.yml").display().to_string();
+    assert!(calls(bin.path()).iter().any(|l| l.ends_with(&format!("config add-authtoken 2abcDEF_ghi123 --config {config}"))));
+    // no address asked: the account's dev domain, read from ngrok's log
+    let run = tunnel::command(&s, &program, 4321, home.path()).unwrap();
+    assert_eq!(run[1..], ["http".to_string(), "--config".into(), config, "--log".into(), "stdout".into(), "--log-format".into(), "logfmt".into(), "http://127.0.0.1:4321".into()]);
+    assert_eq!(ngrok::address(r#"t=2026-10-28T20:00:00+0000 lvl=info msg="started tunnel" obj=tunnels name=command_line addr=http://127.0.0.1:4321 url=https://quiet-river-1234.ngrok-free.dev"#).as_deref(), Some("quiet-river-1234.ngrok-free.dev"));
+    assert_eq!(ngrok::address("t=… lvl=info msg=\"client session established\""), None);
+}
+
+// ---- several addresses (brief 81 §3) ----
+
+/// Two addresses at once: each answers as itself (its own resource and issuer),
+/// a name set up for neither is refused, and a sign-in made at one is never taken
+/// at the other: an agent reaches Bagholder at the address it was set up with.
+#[test]
+fn each_address_answers_as_itself_and_a_sign_in_is_taken_only_where_it_was_made() {
+    const OTHER: &str = "agents.example.com";
+    let h = harness();
+    *h.ctx.sites.write().unwrap() = vec![Site::new(HOST, None), Site::new(OTHER, None)];
+    for host in [HOST, OTHER] {
+        let meta = h.ask("GET", "/.well-known/oauth-protected-resource", &[("host", host)], vec![]).json();
+        assert_eq!(meta["resource"], format!("https://{host}/mcp"));
+        assert_eq!(meta["authorization_servers"][0], format!("https://{host}"));
+        let challenge = h.ask("POST", "/mcp", &[("host", host), ("content-type", "application/json")], b"{}".to_vec()).header("www-authenticate");
+        assert!(challenge.contains(&format!("https://{host}/.well-known/oauth-protected-resource")), "{challenge}");
+    }
+    assert_eq!(h.ask("GET", "/.well-known/oauth-protected-resource", &[("host", "elsewhere.example.com")], vec![]).status, StatusCode::MISDIRECTED_REQUEST);
+    // signed in at HOST: its token reads there, and is refused at the other address
+    let (access, _, _) = h.sign_in();
+    assert_eq!(h.mcp("/mcp", Some(&access)).status, StatusCode::OK);
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } } });
+    let auth = format!("Bearer {access}");
+    let elsewhere = h.ask("POST", "/mcp", &[("host", OTHER), ("authorization", &auth), ("content-type", "application/json"), ("accept", "application/json, text/event-stream")], body.to_string().into_bytes());
+    assert_eq!(elsewhere.status, StatusCode::UNAUTHORIZED);
+    // an address given up: nothing answers for it any more
+    *h.ctx.sites.write().unwrap() = vec![Site::new(OTHER, None)];
+    assert_eq!(h.mcp("/mcp", Some(&access)).status, StatusCode::MISDIRECTED_REQUEST);
+}
+
+/// A key is made for one server: it is taken there and refused at the other, and
+/// its agent is listed at that server. A server that is not Bagholder's is refused
+/// as the key is made. A key made before keys named their server is given the
+/// first one it is used through, and is refused at the other from then on.
+#[test]
+fn a_key_is_taken_only_at_the_server_it_was_made_for() {
+    const OTHER: &str = "agents.example.com";
+    let h = harness();
+    *h.ctx.sites.write().unwrap() = vec![Site::new(HOST, None), Site::new(OTHER, None)];
+    let servers = [format!("https://{HOST}"), format!("https://{OTHER}")];
+    let make = |at: &str| approve::make_key(&h.store(), &approve::KeyAsked { name: "Muse".into(), way: "mcp".into(), at: at.into() }, &servers, h.ctx.now());
+    assert!(make("https://elsewhere.example.com").is_err(), "a server not Bagholder's");
+    let used = |key: &str, host: &str| {
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": { "protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": { "name": "t", "version": "1" } } });
+        let auth = format!("Bearer {key}");
+        h.ask("POST", "/mcp/key", &[("host", host), ("authorization", &auth), ("content-type", "application/json"), ("accept", "application/json, text/event-stream")], body.to_string().into_bytes()).status
+    };
+    let made = make(&servers[1]).unwrap();
+    assert_eq!(used(&made.key, HOST), StatusCode::UNAUTHORIZED, "at a server it was not made for");
+    assert_eq!(used(&made.key, OTHER), StatusCode::OK);
+    let at = |id: &str| approve::connected(&h.store()).unwrap().into_iter().find(|c| c.id == id).unwrap().at;
+    assert_eq!(at(&made.id), servers[1]);
+    // a key made before keys named their server
+    let old = make(&servers[0]).unwrap();
+    rusqlite::Connection::open(h.home.path().join(bagholder_book::BOOK_FILE)).unwrap().execute("UPDATE agent_keys SET at = NULL WHERE id = ?1", [&old.id]).unwrap();
+    assert_eq!(at(&old.id), "", "not used yet: no server");
+    assert_eq!(used(&old.key, OTHER), StatusCode::OK);
+    assert_eq!(at(&old.id), servers[1], "its first server is its own");
+    assert_eq!(used(&old.key, HOST), StatusCode::UNAUTHORIZED);
+}
+
+/// The computer is named as its owner named it, without a domain: the panel says
+/// what is missing on it by that name.
+#[test]
+fn the_computer_bagholder_runs_on_is_named_by_its_own_name() {
+    let c = tunnel::computer();
+    assert!(!c.is_empty() && !c.contains('.'), "{c:?}");
+}
+
+// ---- a way's program, installed by Bagholder ----
+
+/// Each way's build is its maker's own, from its maker's host, for the system and
+/// processor Bagholder runs on; one there is none for is told so; a download
+/// follows a redirect only to the source's hosts.
+#[test]
+fn a_program_is_its_maker_s_own_build_from_its_maker_s_own_host() {
+    use install::{allowed, source, Packed};
+    let s = source(tunnel::Provider::Ngrok, "linux", "x86_64").unwrap();
+    assert_eq!((s.url.as_str(), s.packed), ("https://bin.equinox.io/c/bNyj1mQVY4c/ngrok-v3-stable-linux-amd64.tgz", Packed::Tgz));
+    let c = source(tunnel::Provider::Cloudflare, "linux", "aarch64").unwrap();
+    assert_eq!((c.url.as_str(), c.packed), ("https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-arm64", Packed::Bare));
+    assert_eq!(source(tunnel::Provider::Ngrok, "macos", "aarch64").unwrap().packed, Packed::Zip);
+    assert_eq!(source(tunnel::Provider::Cloudflare, "macos", "x86_64").unwrap().packed, Packed::Tgz);
+    assert!(source(tunnel::Provider::Cloudflare, "windows", "aarch64").is_err(), "Cloudflare builds none for Windows on ARM");
+    assert!(source(tunnel::Provider::Ngrok, "linux", "riscv64").is_err());
+    assert!(source(tunnel::Provider::Tailscale, "linux", "x86_64").is_err(), "Tailscale is the system's to install");
+    assert!(allowed(&s, "bin.equinox.io") && !allowed(&s, "github.com") && !allowed(&s, "bin.equinox.io.example.com"));
+    assert!(allowed(&c, "github.com") && allowed(&c, "release-assets.githubusercontent.com") && !allowed(&c, "bin.equinox.io") && !allowed(&c, "notgithub.com"));
+}
+
+/// A program is put in Bagholder's folder for its way, runnable, and found before
+/// the computer's own; an archive holding anything but the program, or a download
+/// that fails, installs nothing and leaves nothing behind.
+#[cfg(unix)]
+#[test]
+fn a_program_is_installed_in_bagholder_s_folder_from_its_archive_alone_and_found_first() {
+    use install::{install, path, Packed, Source};
+    use std::os::unix::fs::PermissionsExt;
+    let work = tempfile::tempdir().unwrap();
+    let tgz = |name: &str, files: &[&str]| {
+        for f in files {
+            std::fs::write(work.path().join(f), "#!/bin/sh\necho here\n").unwrap();
+        }
+        let out = work.path().join(name);
+        let made = std::process::Command::new("tar").arg("-czf").arg(&out).arg("-C").arg(work.path()).args(files).status().unwrap();
+        assert!(made.success());
+        out
+    };
+    let from = |archive: std::path::PathBuf| move |_: &Source, f: &mut std::fs::File| std::io::copy(&mut std::fs::File::open(&archive).unwrap(), f).map(|_| ()).map_err(|e| e.to_string());
+    let left = |home: &std::path::Path, dir: &str| -> Vec<String> { std::fs::read_dir(home.join(dir)).map(|d| d.map(|e| e.unwrap().file_name().to_string_lossy().to_string()).collect()).unwrap_or_default() };
+    let packed = Source { url: "https://bin.equinox.io/ngrok.tgz".into(), packed: Packed::Tgz, hosts: &["bin.equinox.io"] };
+
+    let home = tempfile::tempdir().unwrap();
+    let got = install(home.path(), tunnel::Provider::Ngrok, &packed, &from(tgz("one.tgz", &["ngrok"]))).unwrap();
+    assert_eq!(got, path(home.path(), tunnel::Provider::Ngrok).unwrap());
+    assert!(std::fs::metadata(&got).unwrap().permissions().mode() & 0o111 != 0, "runnable");
+    assert_eq!(tunnel::find_here(home.path(), tunnel::Provider::Ngrok), Some(got.clone()), "Bagholder's own copy first");
+    assert_eq!(left(home.path(), "agents-ngrok"), vec!["ngrok".to_string()], "nothing else left");
+
+    let home = tempfile::tempdir().unwrap();
+    let e = install(home.path(), tunnel::Provider::Ngrok, &packed, &from(tgz("two.tgz", &["ngrok", "extra"]))).unwrap_err();
+    assert!(e.contains("something other than ngrok"), "{e}");
+    assert_eq!(left(home.path(), "agents-ngrok"), Vec::<String>::new(), "nothing installed, nothing left");
+
+    let home = tempfile::tempdir().unwrap();
+    assert!(install(home.path(), tunnel::Provider::Ngrok, &packed, &|_: &Source, _: &mut std::fs::File| Err("offline".to_string())).is_err());
+    assert_eq!(left(home.path(), "agents-ngrok"), Vec::<String>::new());
+
+    // a bare build, as Cloudflare's for Linux, is the program itself
+    let home = tempfile::tempdir().unwrap();
+    let bare = Source { url: "https://github.com/cloudflared".into(), packed: Packed::Bare, hosts: &["github.com"] };
+    let got = install(home.path(), tunnel::Provider::Cloudflare, &bare, &|_: &Source, f: &mut std::fs::File| std::io::Write::write_all(f, b"#!/bin/sh\n").map_err(|e| e.to_string())).unwrap();
+    assert_eq!(got, home.path().join("agents-cloudflare").join("cloudflared"));
+    assert!(std::fs::metadata(&got).unwrap().permissions().mode() & 0o111 != 0);
+}
+
+/// A net worth item reaches an agent by its kind, never by the name the person gave
+/// it (a home named by its street address); Bagholder's own rows keep their labels.
+#[test]
+fn a_net_worth_item_is_named_by_its_kind_never_the_person_s_name_for_it() {
+    let mut nw = json!({
+        "assets": [
+            { "kind": "", "name": "Holdings", "institution": "Wealthsimple", "amount": "1" },
+            { "kind": "Real estate", "name": "12 Example Street", "institution": "", "amount": "2" }
+        ],
+        "liabilities": [{ "kind": "Mortgage", "name": "Our house loan", "institution": "A Bank", "amount": "3" }]
+    });
+    tools::unnamed(&mut nw);
+    assert_eq!(nw["assets"][0]["name"], "Holdings");
+    assert_eq!(nw["assets"][1]["name"], "Real estate");
+    assert_eq!(nw["liabilities"][0]["name"], "Mortgage");
+    assert_eq!(nw["liabilities"][0]["institution"], "A Bank");
+    assert!(!nw.to_string().contains("Example Street") && !nw.to_string().contains("house loan"));
+}
+
+/// A tunnel Tailscale refused because another program changed its settings at the
+/// same moment ("Another client is changing the serve config") is started again;
+/// one that failed otherwise, one the person stopped, and an earlier start's end
+/// never are.
+#[cfg(unix)]
+#[test]
+fn a_tunnel_refused_for_a_clash_in_tailscale_s_settings_is_started_again() {
+    let run_of = |script: &str| -> (tunnel::Tunnels, u64) {
+        let (tx, rx) = std::sync::mpsc::channel::<u64>();
+        let tx = Mutex::new(tx);
+        let mut t = tunnel::Tunnels::default();
+        t.start(tunnel::Provider::Tailscale, (vec!["sh".into(), "-c".into(), script.into()], vec![]), Arc::new(|| {}), Arc::new(move |run| tx.lock().unwrap().send(run).unwrap())).unwrap();
+        let run = rx.recv().unwrap();
+        (t, run)
+    };
+    let (mut t, run) = run_of("echo 'Another client is changing the serve config; please try again.' >&2; echo 'sending serve config: Preconditions failed: etag mismatch' >&2; exit 1");
+    assert!(t.start_again(run), "a clash");
+    assert!(t.state().exited.is_some() && t.state().running.is_none());
+    let (mut t, run) = run_of("echo 'funnel is not enabled on your tailnet' >&2; exit 1");
+    assert!(!t.start_again(run), "any other failure");
+    // stopped by the person: its end is theirs, never started again
+    let (tx, rx) = std::sync::mpsc::channel::<u64>();
+    let tx = Mutex::new(tx);
+    let mut t = tunnel::Tunnels::default();
+    t.start(tunnel::Provider::Tailscale, (vec!["sh".into(), "-c".into(), "echo 'etag mismatch' >&2; sleep 30".into()], vec![]), Arc::new(|| {}), Arc::new(move |run| tx.lock().unwrap().send(run).unwrap())).unwrap();
+    t.stop();
+    let run = rx.recv().unwrap();
+    assert!(!t.start_again(run), "stopped");
+    // an earlier start's end, told after another started: not this one's
+    assert!(!t.start_again(run.wrapping_sub(1)));
+}
+
+/// The sign-in page says everything an agent reads: each tool has its words, and
+/// the sentence the person allows on says each.
+#[test]
+fn the_sign_in_page_says_everything_an_agent_reads() {
+    // what each tool reads, in the words the sign-in page uses
+    const READS: [(&str, &str); 10] = [
+        ("trades", "trades"),
+        ("trade", "trades"),
+        ("positions", "holdings"),
+        ("lists", "accounts"),
+        ("stats", "stats"),
+        ("income", "income"),
+        ("exposure", "holdings"),
+        ("net_worth", "net worth"),
+        ("transactions", "chequing and credit card transactions"),
+        ("markets", "watchlist"),
+    ];
+    for (_, tool, _, _) in api::routes() {
+        let words = READS.iter().find(|(t, _)| *t == tool).map(|(_, w)| *w).unwrap_or_else(|| panic!("{tool} reads nothing the sign-in page says"));
+        assert!(tools::READ.contains(words), "{tool}: {words} is not in \"{}\"", tools::READ);
+    }
+    let h = harness();
+    assert!(h.authorize(CIMD, CALLBACK, &[]).text().contains(tools::READ));
+}
+
+/// The sign-in pages say only plain words: the page that asks for the code, what
+/// it says as the code is typed, and every refusal. No error code, no raw error, no
+/// term of the protocol: the code goes to the agent in a header, and why to the log.
+#[test]
+fn the_sign_in_pages_say_only_plain_words() {
+    let h = harness();
+    let code = regex::Regex::new(r"(?i)\b[a-z0-9]+_[a-z0-9_]+\b|\bpkce\b|\bs256\b|\boauth\b|\bclient_id\b|\bredirect\b|\bresource\b|\binvalid\b|\berror\b").unwrap();
+    let style = regex::Regex::new(r"(?s)<style>.*?</style>").unwrap();
+    let script = regex::Regex::new(r"(?s)<script>(.*?)</script>").unwrap();
+    let tag = regex::Regex::new(r"<[^>]*>").unwrap();
+    let said = regex::Regex::new(r"(?:say|over)\('((?:[^'\\]|\\.)*)'").unwrap();
+    let shown = |html: &str| -> Vec<String> {
+        let html = style.replace_all(html, "");
+        let mut out: Vec<String> = script.captures_iter(&html).flat_map(|c| said.captures_iter(&c[1]).map(|m| m[1].to_string()).collect::<Vec<_>>()).collect();
+        out.push(tag.replace_all(&script.replace_all(&html, ""), " ").to_string());
+        out
+    };
+    let pages = [
+        ("the page that asks for the code", h.authorize(CIMD, CALLBACK, &[])),
+        ("PKCE missing", h.authorize(CIMD, CALLBACK, &[("code_challenge", "")])),
+        ("a client no one registered", h.authorize("nope", CALLBACK, &[])),
+        ("another response type", h.authorize(CIMD, CALLBACK, &[("response_type", "token")])),
+        ("another resource", h.authorize(CIMD, CALLBACK, &[("resource", "https://elsewhere.example/mcp")])),
+        ("nothing asked", h.get("/oauth/authorize")),
+    ];
+    for (what, page) in pages {
+        let text = page.text();
+        for t in shown(&text) {
+            assert!(!code.is_match(&t), "{what}: {:?} in {t:?}", code.find(&t).map(|m| m.as_str()));
+        }
+        if page.status != StatusCode::OK {
+            assert!(text.contains("This sign-in link doesn’t work. Start again from your agent."), "{what}: {text}");
+            assert!(!page.header("x-refused").is_empty(), "{what}: the agent is told why in a header");
+        }
+    }
 }

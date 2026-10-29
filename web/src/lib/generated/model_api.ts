@@ -83,6 +83,54 @@ params: string | null, };
 
 export type ViewAnswer = unknown;
 
+export type TransactionsQuery = { 
+/**
+ * The first day, `YYYY-MM-DD`.
+ */
+from: string | null, 
+/**
+ * The last day, `YYYY-MM-DD`.
+ */
+to: string | null, 
+/**
+ * One chequing or credit card account's id, as the book's accounts give it.
+ */
+account: string | null, 
+/**
+ * Where the page starts: the `next` the previous page gave, 0 for the first.
+ */
+offset: string | null, 
+/**
+ * How many rows the page holds, 1 to 1,000.
+ */
+size: string | null, };
+
+export type TransactionsAnswer = { total: number, offset: number, next: number | null, transactions: Array<TransactionRow>, };
+
+export type TransactionRow = { 
+/**
+ * The day the account files it under, `YYYY-MM-DD`.
+ */
+date: string, 
+/**
+ * The account's name, as the page names it, and its id.
+ */
+account: string, accountId: string, 
+/**
+ * What it is: `card-purchase`, `card-refund`, `cashback`, `deposit`, `withdrawal`, `transfer-in`,
+ * `transfer-out`, `interest`, `interest-charge`, `fee` and the like.
+ */
+kind: string, 
+/**
+ * The company it names: a card purchase's merchant, a bill payment's company, a pre-authorized
+ * debit's originator. Never a person's name.
+ */
+company: string | null, 
+/**
+ * Into the account (positive) or out of it (negative), as the account states it.
+ */
+amount: string, currency: string, };
+
 export type EntryRequest = { "entry": "trade", account: string, instrument: string | null, symbol: string, exchange: string, currency: string, day: string, side: string, quantity: string, price: string, fee: string, } | { "entry": "cost-of-arrival", arrival: string, cost: string, acquired: string, } | { "entry": "spin-off", event: string, parent: string, children: Array<ChildShare>, } | { "entry": "return-of-capital", distribution: string, perUnit: string, };
 
 export type ChildShare = { instrument: string, costShare: string, };

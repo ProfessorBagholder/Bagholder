@@ -6,19 +6,20 @@
 //! tokens rotated on every use (RFC 9700 §4.14.2).
 //!
 //! Nothing reachable here grants anything by itself. The public page shows who is
-//! asking and a code, and waits; the person allows it on their own page, on the
-//! main listener (`approve`). Only then does the agent's page get its code.
+//! asking and asks for the code Bagholder shows the person on their own page, on
+//! the main listener (`approve`); typed right, the agent's page gets its code. The
+//! code's bounds are what make that safe (`enter_code`; brief 81 §2).
 
 use std::sync::Arc;
 
-use axum::extract::{Query, State};
+use axum::extract::{Extension, Query, State};
 use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{Html, IntoResponse, Response};
 use serde::Deserialize;
 use serde_json::{json, Value};
 
 use super::listener::{refused, said};
-use super::{fetch, secret, Ctx};
+use super::{fetch, secret, Ctx, Site};
 use bagholder_book::agents::{Client, NewRequest};
 use bagholder_core::jiff::Timestamp;
 
@@ -34,10 +35,10 @@ async fn blocking(work: impl FnOnce() -> Response + Send + 'static) -> Response 
 // ---- metadata ----
 
 /// RFC 9728: the resource `/mcp`, signed in to at this address.
-pub async fn protected_resource(State(ctx): State<Arc<Ctx>>) -> Response {
+pub async fn protected_resource(Extension(site): Extension<Site>) -> Response {
     axum::Json(json!({
-        "resource": ctx.resource(),
-        "authorization_servers": [ctx.base()],
+        "resource": site.resource(),
+        "authorization_servers": [site.base()],
         "bearer_methods_supported": ["header"],
         "resource_name": "Bagholder",
     }))
@@ -45,8 +46,8 @@ pub async fn protected_resource(State(ctx): State<Arc<Ctx>>) -> Response {
 }
 
 /// RFC 8414.
-pub async fn authorization_server(State(ctx): State<Arc<Ctx>>) -> Response {
-    let base = ctx.base();
+pub async fn authorization_server(Extension(site): Extension<Site>) -> Response {
+    let base = site.base();
     axum::Json(json!({
         "issuer": base,
         "authorization_endpoint": format!("{base}/oauth/authorize"),
@@ -63,9 +64,9 @@ pub async fn authorization_server(State(ctx): State<Arc<Ctx>>) -> Response {
 }
 
 /// The `WWW-Authenticate` that sends a client with no good token to sign in.
-fn challenge(ctx: &Ctx, error: Option<&str>) -> Response {
+fn challenge(site: &Site, error: Option<&str>) -> Response {
     let mut r = said(StatusCode::UNAUTHORIZED, error.unwrap_or("unauthorized"), "Sign in to Bagholder first.");
-    let mut v = format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"", ctx.base());
+    let mut v = format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource\"", site.base());
     if let Some(e) = error {
         v.push_str(&format!(", error=\"{e}\""));
     }
@@ -76,20 +77,23 @@ fn challenge(ctx: &Ctx, error: Option<&str>) -> Response {
 }
 
 /// An access token of a grant still standing, for this address's `/mcp`: the grant's id.
-pub fn access(ctx: &Ctx, token: Option<&str>) -> Result<String, Response> {
-    let Some(token) = token else { return Err(challenge(ctx, None)) };
+pub fn access(ctx: &Ctx, site: &Site, token: Option<&str>) -> Result<String, Response> {
+    let Some(token) = token else { return Err(challenge(site, None)) };
     let store = ctx.store().map_err(unavailable)?;
     let Some(t) = store.token(&secret::hash(token)).map_err(unavailable)? else {
         super::listener::stranger(ctx, "with a wrong token");
-        return Err(challenge(ctx, Some("invalid_token")));
+        return Err(challenge(site, Some("invalid_token")));
     };
+    // an access token run out is the agent's sign to refresh it (RFC 6750 §3.1),
+    // routine every hour: refused, never logged as the agent's doing
+    if !t.refresh && t.expires_at <= ctx.now() {
+        return Err(challenge(site, Some("invalid_token")));
+    }
     let why = if t.refresh {
         Some("a refresh token sent as an access token")
-    } else if t.expires_at <= ctx.now() {
-        Some("an expired token")
     } else if t.grant.withdrawn_at.is_some() {
         Some("a token of a grant cut off")
-    } else if t.grant.resource != ctx.resource() {
+    } else if t.grant.resource != site.resource() {
         Some("a token for another resource")
     } else {
         None
@@ -97,7 +101,7 @@ pub fn access(ctx: &Ctx, token: Option<&str>) -> Result<String, Response> {
     match why {
         Some(why) => {
             refused(ctx, &t.grant.id, why);
-            Err(challenge(ctx, Some("invalid_token")))
+            Err(challenge(site, Some("invalid_token")))
         }
         None => Ok(t.grant.id),
     }
@@ -105,16 +109,52 @@ pub fn access(ctx: &Ctx, token: Option<&str>) -> Result<String, Response> {
 
 // ---- redirect URIs and clients ----
 
-/// A redirect URI an agent may be sent back to: https, to a public name or address,
-/// never this machine (brief 73, 3: a cloud agent never redirects here, and a local
-/// one uses stdio). Its host is a DNS name of letters, digits and hyphens with a dot
-/// and a last label a browser does not read as a number (the WHATWG URL standard's
-/// "ends in a number": all digits, or `0x` followed by hex digits or by nothing;
-/// `fetch::dns_name`), or a public IP address written as it is canonically: every
-/// other spelling (a number, `127.1`, `0x7f.1`, `127.0x`, a trailing dot, a percent
-/// escape, a backslash a browser ends the host at) is refused, as a browser may
-/// read it as this machine.
+/// A desktop app's loopback redirect (RFC 8252 §7.3; the MCP specification's
+/// "All redirect URIs MUST be either localhost or use HTTPS"; brief 81 §1):
+/// `http://localhost`, `http://127.0.0.1` or `http://[::1]`, written exactly so,
+/// with any port, then a path. Every other spelling of this machine (a name under
+/// `localhost`, another address, a number form, a trailing dot, a percent escape,
+/// a backslash, a user part) is none. Its host, and the URI without its port, which
+/// is what an exact match compares (the port may vary, §7.3).
+pub fn loopback(uri: &str) -> Option<(&'static str, String)> {
+    let rest = uri.strip_prefix("http://")?;
+    let end = rest.find(['/', '?', '#']).unwrap_or(rest.len());
+    let (authority, tail) = rest.split_at(end);
+    if uri.contains('#') || uri.contains('\\') || authority.contains('@') || authority.contains('%') {
+        return None;
+    }
+    let (host, port) = [("[::1]", "[::1]"), ("localhost", "localhost"), ("127.0.0.1", "127.0.0.1")].into_iter().find_map(|(name, h)| authority.strip_prefix(name).map(|p| (h, p)))?;
+    match port.strip_prefix(':') {
+        None if port.is_empty() => {}
+        Some(p) if (1..=5).contains(&p.len()) && p.bytes().all(|b| b.is_ascii_digit()) && p.parse::<u16>().is_ok_and(|n| n > 0) => {}
+        _ => return None,
+    }
+    Some((host, format!("http://{host}{tail}")))
+}
+
+/// Whether `asked` is the registered `uri`: exactly, character for character, or,
+/// both loopback, the same but for the port (RFC 8252 §7.3).
+pub fn same_redirect(uri: &str, asked: &str) -> bool {
+    uri == asked || matches!((loopback(uri), loopback(asked)), (Some((_, a)), Some((_, b))) if a == b)
+}
+
+/// The host a redirect sends the person back to: who a registered agent is.
+pub fn redirect_shown(uri: &str) -> String {
+    loopback(uri).map(|(h, _)| h.to_string()).or_else(|| fetch::https_host(uri).ok().map(|h| h.0)).unwrap_or_else(|| uri.to_string())
+}
+
+/// A redirect URI an agent may be sent back to: a desktop app's loopback
+/// (`loopback`), or https to a public name or address. That host is a DNS name of
+/// letters, digits and hyphens with a dot and a last label a browser does not read
+/// as a number (the WHATWG URL standard's "ends in a number": all digits, or `0x`
+/// followed by hex digits or by nothing; `fetch::dns_name`), or a public IP address
+/// written as it is canonically: every other spelling (a number, `127.1`, `0x7f.1`,
+/// `127.0x`, a trailing dot, a percent escape, a backslash a browser ends the host
+/// at) is refused, as a browser may read it as this machine.
 pub fn redirect_ok(uri: &str) -> Result<(), String> {
+    if loopback(uri).is_some() {
+        return Ok(());
+    }
     let (host, _) = fetch::https_host(uri)?;
     if uri.contains('#') {
         return Err(format!("{uri} carries a fragment"));
@@ -177,13 +217,14 @@ pub async fn register(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> R
     .await
 }
 
+/// Who a client is, shown, whose redirect is this computer's loopback.
+pub const LOCAL_APP: &str = "An app on your computer";
+
 /// Who is asking, as both pages show it (brief 73, 4).
 struct Asking {
     client: Client,
     /// The host shown as who it is: the metadata document's, or the redirect's.
     who: String,
-    /// The host the agent is sent back to, shown whoever asks (plan §3).
-    redirect_host: String,
 }
 
 /// The client `client_id` names, and that `redirect_uri` is exactly one of its own.
@@ -203,13 +244,20 @@ fn asking(ctx: &Ctx, client_id: &str, redirect_uri: &str) -> Result<Asking, Stri
     } else {
         store.client(client_id).map_err(|e| e.to_string())?.filter(|c| !c.metadata).ok_or_else(|| format!("no client {client_id} is registered here"))?
     };
-    // exactly, character for character: no prefix, no pattern
-    if !client.redirect_uris.iter().any(|u| u == redirect_uri) {
+    // exactly, character for character, but a loopback's port: no prefix, no pattern
+    if !client.redirect_uris.iter().any(|u| same_redirect(u, redirect_uri)) {
         return Err(format!("{redirect_uri} is not a redirect URI of this client"));
     }
-    let redirect_host = fetch::https_host(redirect_uri)?.0;
-    let who = if client.metadata { fetch::https_host(client_id)?.0 } else { redirect_host.clone() };
-    Ok(Asking { client, who, redirect_host })
+    // an app on the person's own computer names itself, unchecked: any app can
+    // claim any name (the specification's "Localhost Redirect URI Risks")
+    let who = if client.metadata {
+        fetch::https_host(client_id)?.0
+    } else if loopback(redirect_uri).is_some() {
+        LOCAL_APP.to_string()
+    } else {
+        redirect_shown(redirect_uri)
+    };
+    Ok(Asking { client, who })
 }
 
 #[derive(Deserialize, Default)]
@@ -226,8 +274,15 @@ pub struct AuthorizeQuery {
 /// A page that says what is wrong, sent to no one: a request whose client or
 /// redirect cannot be trusted is never redirected.
 fn error_page(status: StatusCode, error: &str, why: &str) -> Response {
-    let body = format!("<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title><body style='font:16px system-ui;margin:40px auto;max-width:520px;padding:0 16px'><h1 style='font-size:20px'>This sign-in can't go ahead</h1><p>{}</p><p style='opacity:.6'>{}</p>", escape(why), escape(error));
+    // the person is told what to do, in plain words; why is for whoever reads the
+    // log, and the code for the agent's developer, in a header the page never shows
+    crate::app::log(&format!("bagholder: a sign-in was refused ({error}): {why}"));
+    let said = if status == StatusCode::TOO_MANY_REQUESTS { "Too many sign-ins are waiting on Bagholder. Try again once one is answered." } else { "This sign-in link doesn’t work. Start again from your agent." };
+    let body = format!("{HEAD}<main><div class=dim style='font-size:13px'>Bagholder</div><h1>This sign-in can’t go ahead</h1><p>{said}</p></main>");
     let mut r = (status, Html(body)).into_response();
+    if let Ok(v) = HeaderValue::from_str(error) {
+        r.headers_mut().insert("x-refused", v);
+    }
     page_headers(r.headers_mut());
     r
 }
@@ -243,9 +298,9 @@ pub fn escape(s: &str) -> String {
 }
 
 /// `/oauth/authorize`: the public page. A waiting request is recorded, and the
-/// page shows who is asking and the code, and waits for the person's answer on
-/// their computer. It has nothing that grants anything.
-pub async fn authorize(State(ctx): State<Arc<Ctx>>, Query(q): Query<AuthorizeQuery>) -> Response {
+/// page asks for the code Bagholder shows the person, saying who wants to read
+/// (brief 81 §2).
+pub async fn authorize(State(ctx): State<Arc<Ctx>>, Extension(site): Extension<Site>, Query(q): Query<AuthorizeQuery>) -> Response {
     blocking(move || {
         let (Some(client_id), Some(redirect_uri)) = (q.client_id.as_deref(), q.redirect_uri.as_deref()) else {
             return error_page(StatusCode::BAD_REQUEST, "invalid_request", "The agent did not say who it is, or where to go back to.");
@@ -261,9 +316,9 @@ pub async fn authorize(State(ctx): State<Arc<Ctx>>, Query(q): Query<AuthorizeQue
         if q.code_challenge_method.as_deref() != Some("S256") || !(43..=128).contains(&challenge.len()) {
             return error_page(StatusCode::BAD_REQUEST, "invalid_request", "PKCE with S256 is required.");
         }
-        let resource = q.resource.unwrap_or_else(|| ctx.resource());
-        if resource != ctx.resource() {
-            return error_page(StatusCode::BAD_REQUEST, "invalid_target", &format!("This address signs in to {} alone.", ctx.resource()));
+        let resource = q.resource.unwrap_or_else(|| site.resource());
+        if resource != site.resource() {
+            return error_page(StatusCode::BAD_REQUEST, "invalid_target", &format!("This address signs in to {} alone.", site.resource()));
         }
         let now = ctx.now();
         let store = match ctx.store() {
@@ -284,33 +339,55 @@ pub async fn authorize(State(ctx): State<Arc<Ctx>>, Query(q): Query<AuthorizeQue
             }
             Err(e) => return unavailable(e),
         }
-        let mut r = Html(waiting_page(&asking, &code, &id)).into_response();
+        let mut r = Html(waiting_page(&asking, &id)).into_response();
         page_headers(r.headers_mut());
         r
     })
     .await
 }
 
-fn waiting_page(a: &Asking, code: &str, id: &str) -> String {
+/// The head both public pages share: Bagholder's colours, light or dark as the
+/// person's device is, and its card.
+const HEAD: &str = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title><style>:root{color-scheme:light dark;--bg:#eef0f5;--card:#fafafc;--ink:#1b1d27;--dim:rgba(27,29,39,.72);--line:rgba(27,29,39,.12);--accent:#6b5cd6;--on:#eef0f5;--err:#c0505f}\
+@media (prefers-color-scheme:dark){:root{--bg:#101220;--card:#161826;--ink:#e9e9ed;--dim:rgba(233,233,237,.68);--line:rgba(233,233,237,.14);--accent:#9184d9;--on:#161826;--err:#e0778a}}\
+body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Inter,system-ui,-apple-system,Segoe UI,sans-serif}\
+main{max-width:440px;margin:48px auto;padding:28px;background:var(--card);border:1px solid var(--line);border-radius:12px}\
+.dim{color:var(--dim)}h1{font-size:20px;margin:6px 0 10px}form{margin-top:18px}\
+input{box-sizing:border-box;width:100%;padding:12px 14px;border-radius:8px;border:1px solid var(--line);background:var(--bg);color:var(--ink);font:600 24px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.25em}\
+button{margin-top:14px;width:100%;padding:12px;border:0;border-radius:8px;background:var(--accent);color:var(--on);font:600 15px Inter,system-ui,sans-serif;cursor:pointer}\
+button:disabled{opacity:.5;cursor:default}#s{min-height:24px;margin:12px 0 0;font-size:14px}.err{color:var(--err)}\
+</style>";
+
+fn waiting_page(a: &Asking, id: &str) -> String {
+    // a name the agent gave itself is said to be so: any app can claim any name
     let name = if a.client.metadata {
-        if a.client.name.is_empty() { String::new() } else { format!(" <span style='opacity:.7'>({})</span>", escape(&a.client.name)) }
+        if a.client.name.is_empty() { String::new() } else { format!(" <span class=dim>({})</span>", escape(&a.client.name)) }
     } else {
-        format!(" <span style='opacity:.7'>(“{}”, name given by the agent, not checked)</span>", escape(&a.client.name))
+        format!(" <span class=dim>(calls itself “{}”)</span>", escape(&a.client.name))
     };
     #[expect(clippy::disallowed_methods, reason = "a string always serializes")]
     let id_json = serde_json::to_string(id).unwrap_or_default();
     format!(
-        "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title>\
-<body style='font:16px system-ui;margin:40px auto;max-width:520px;padding:0 16px'>\
-<h1 style='font-size:20px'>Approve this in Bagholder on your computer</h1>\
-<p><b>{who}</b>{name} is asking to read your trade history. It sends you back to <b>{back}</b>.</p>\
-<p>Its code is</p><p style='font:600 32px ui-monospace,monospace;letter-spacing:.2em'>{code}</p>\
-<p id=s style='opacity:.7'>Waiting for your answer in Bagholder…</p>\
-<script>(function(){{var id={id};function ask(){{fetch('/oauth/authorize/status?request='+id).then(function(r){{return r.json()}}).then(function(j){{if(j.redirect){{location.replace(j.redirect)}}else if(j.state==='waiting'){{setTimeout(ask,2000)}}else{{document.getElementById('s').textContent='This sign-in has ended. Start again from your agent.'}}}}).catch(function(){{setTimeout(ask,4000)}})}}ask()}})()</script>",
+        "{head}<main><div class=dim style='font-size:13px'>Bagholder</div>\
+<h1 id=t>Enter the code shown in Bagholder</h1>\
+<p><b>{who}</b>{name} wants to read {read}.</p>\
+<form id=f><input id=c aria-labelledby=t inputmode=numeric autocomplete=one-time-code maxlength=7 placeholder='000 000' autofocus>\
+<button id=b>Allow</button></form><p id=s class=dim></p></main>\
+<script>(function(){{var id={id},s=document.getElementById('s'),b=document.getElementById('b'),c=document.getElementById('c');\
+function say(t,e){{s.textContent=t;s.className=e?'err':'dim'}}\
+function over(t){{say(t,true);b.disabled=true;c.disabled=true}}\
+function ask(){{fetch('/oauth/authorize/status?request='+id).then(function(r){{return r.json()}}).then(function(j){{if(j.redirect){{location.replace(j.redirect)}}else if(j.state==='waiting'){{setTimeout(ask,2000)}}else{{over('This sign-in has ended. Start again from your agent.')}}}}).catch(function(){{setTimeout(ask,4000)}})}}\
+document.getElementById('f').addEventListener('submit',function(e){{e.preventDefault();var v=c.value.replace(/\\D/g,'');if(v.length!==6){{say('The code is six digits.',true);return}}b.disabled=true;say('Checking…');\
+fetch('/oauth/authorize/code',{{method:'POST',headers:{{'content-type':'application/json'}},body:JSON.stringify({{request:id,code:v}})}}).then(function(r){{return r.json()}}).then(function(j){{\
+if(j.state==='allowed'){{say('Allowed. Taking you back to your agent…');ask()}}\
+else if(j.state==='wrong'){{b.disabled=false;c.value='';say(j.left===1?'That code doesn\\u2019t match. One try left.':'That code doesn\\u2019t match. '+j.left+' tries left.',true)}}\
+else if(j.state==='paused'){{over('Sign-in is paused: the code was entered wrong too many times. Resume it in Bagholder, then start again from your agent.')}}\
+else{{over('This sign-in has ended. Start again from your agent.')}}}}).catch(function(){{b.disabled=false;say('Bagholder didn\\u2019t answer. Try again.',true)}})}});\
+ask()}})()</script>",
+        head = HEAD,
+        read = super::tools::READ,
         who = escape(&a.who),
-        back = escape(&a.redirect_host),
         name = name,
-        code = escape(code),
         id = id_json,
     )
 }
@@ -347,7 +424,7 @@ pub fn ended(r: &bagholder_book::agents::Request, now: Timestamp) -> bool {
 /// waiting page never uses it up, and is answered at most once a `POLL_EVERY`; one
 /// naming none takes a call, as any stranger's. An answer ends the request: a
 /// denial once its page has read it, an allowed one's code is handed once.
-pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -> Response {
+pub async fn status(State(ctx): State<Arc<Ctx>>, Extension(site): Extension<Site>, Query(q): Query<StatusQuery>) -> Response {
     blocking(move || {
         let not = || super::listener::spend_before_sign_in(&ctx).err().unwrap_or_else(|| said(StatusCode::NOT_FOUND, "not_found", "No such sign-in."));
         // an id is 32 hex digits: anything else, the code among them, names nothing
@@ -366,7 +443,7 @@ pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -
             Err(e) => return unavailable(e),
         };
         super::listener::polled(&ctx, &r.id, now);
-        let iss = ctx.base();
+        let iss = site.base();
         match r.answer {
             None => axum::Json(json!({ "state": "waiting" })).into_response(),
             Some(false) => match store.drop_request(&r.id) {
@@ -384,6 +461,79 @@ pub async fn status(State(ctx): State<Arc<Ctx>>, Query(q): Query<StatusQuery>) -
         }
     })
     .await
+}
+
+#[derive(Deserialize)]
+pub struct Entered {
+    request: Option<String>,
+    code: Option<String>,
+}
+
+/// `/oauth/authorize/code`: the code the person typed on the sign-in page (brief
+/// 81 §2), counted against the allowance before sign-in as every call here is.
+/// The code is shown only in the person's own panel, on the page's listener, which
+/// no tunnel reaches. Typed right, the request is allowed, and the page's next poll
+/// takes the agent back with its code. Its bounds: a request ends after
+/// `CODE_TRIES` wrong entries; after `WRONG_CODES_PAUSE` wrong entries in all, on
+/// every request, no code is taken until the person resumes sign-in in their
+/// panel. A stranger who reaches the address therefore gets at most
+/// `WRONG_CODES_PAUSE` guesses at six digits before the person sees it: 5 in a
+/// million. A code also ends with its request, `REQUEST_LIFE` after it was shown.
+pub async fn enter_code(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Response {
+    blocking(move || {
+        let state = |s: &str| axum::Json(json!({ "state": s })).into_response();
+        let entered: Entered = serde_json::from_slice(&body).unwrap_or(Entered { request: None, code: None });
+        let Some(id) = entered.request.filter(|i| i.len() == 32 && i.bytes().all(|b| b.is_ascii_hexdigit())) else { return state("ended") };
+        let code = entered.code.unwrap_or_default();
+        let now = ctx.now();
+        let store = match ctx.store() {
+            Ok(s) => s,
+            Err(e) => return unavailable(e),
+        };
+        // the whole entry in one transaction, which waits for any other's: entries
+        // sent together are taken one at a time, each seeing the counts the one
+        // before it left, so no more are compared than the pause allows
+        let refused = |e: String| bagholder_book::BookError::Refused(e);
+        let entry = store.atomically(|| {
+            if super::wrong_codes(&store).map_err(refused)? >= super::WRONG_CODES_PAUSE {
+                return Ok(Entry::Paused);
+            }
+            let r = match store.request(&id)? {
+                Some(r) if r.answer.is_none() && !ended(&r, now) => r,
+                _ => return Ok(Entry::Ended),
+            };
+            if secret::same(code.as_bytes(), r.code.as_bytes()) {
+                super::approve::answer(&store, &id, true, now).map_err(refused)?;
+                return Ok(Entry::Allowed);
+            }
+            let wrong = super::wrong_codes(&store).map_err(refused)? + 1;
+            store.set_setting(super::WRONG_CODES, Some(&wrong.to_string()), now)?;
+            let tries = store.add_wrong_code(&id)?;
+            let paused = wrong >= super::WRONG_CODES_PAUSE;
+            if tries >= u32::from(super::CODE_TRIES) {
+                super::approve::answer(&store, &id, false, now).map_err(refused)?;
+                return Ok(if paused { Entry::Paused } else { Entry::Ended });
+            }
+            Ok(if paused { Entry::Paused } else { Entry::Wrong(u32::from(super::CODE_TRIES) - tries) })
+        });
+        match entry {
+            Ok(Entry::Allowed) => state("allowed"),
+            Ok(Entry::Ended) => state("ended"),
+            Ok(Entry::Paused) => state("paused"),
+            Ok(Entry::Wrong(left)) => axum::Json(json!({ "state": "wrong", "left": left })).into_response(),
+            Err(e) => unavailable(e),
+        }
+    })
+    .await
+}
+
+/// What a typed code came to.
+enum Entry {
+    Allowed,
+    /// Wrong, with the entries its request has left.
+    Wrong(u32),
+    Ended,
+    Paused,
 }
 
 fn grant_error(error: &str, why: &str) -> Response {
@@ -407,7 +557,7 @@ fn tokens(ctx: &Ctx, store: &bagholder_book::agents::AgentsBook, grant: &str) ->
 
 /// `/oauth/token`: a code exchanged once, with its verifier, for the redirect and
 /// the resource it was asked with; or a refresh token used once.
-pub async fn token(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Response {
+pub async fn token(State(ctx): State<Arc<Ctx>>, Extension(site): Extension<Site>, body: axum::body::Bytes) -> Response {
     let form: std::collections::BTreeMap<String, String> = match serde_urlencoded::from_bytes(&body) {
         Ok(f) => f,
         Err(e) => return grant_error("invalid_request", &format!("Not a token request: {e}")),
@@ -433,7 +583,7 @@ pub async fn token(State(ctx): State<Arc<Ctx>>, body: axum::body::Bytes) -> Resp
                     && get("client_id") == Some(r.client_id.as_str())
                     && get("redirect_uri") == Some(r.redirect_uri.as_str())
                     && get("resource").is_none_or(|x| x == r.resource)
-                    && r.resource == ctx.resource()
+                    && r.resource == site.resource()
                     && secret::pkce_ok(verifier, &r.challenge);
                 if !fits {
                     return grant_error("invalid_grant", "The code does not fit this request.");

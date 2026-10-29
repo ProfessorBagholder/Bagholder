@@ -299,7 +299,7 @@ mod tests {
             assert!(a.add_request(&r, t, 5).unwrap());
             a.add_grant("grant-1", &client.id, "An agent", "agent.example", "https://example.ts.net/mcp", t).unwrap();
             a.add_token(&[1; 32], false, "grant-1", t).unwrap();
-            a.add_key("key-1", "Grok Bot", "mcp", &[2; 32], t).unwrap();
+            a.add_key("key-1", "Grok Bot", "mcp", &[2; 32], "https://example.ts.net", t).unwrap();
             a.log(&bagholder_book::agents::Read { agent: "key-1".into(), at: t, tool: Some("trades".into()), arguments: Some("{}".into()), refusal: None }).unwrap();
             a.set_setting("agents.on", Some("1"), t).unwrap();
         }

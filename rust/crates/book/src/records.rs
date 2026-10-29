@@ -232,6 +232,18 @@ impl Book {
         Ok(())
     }
 
+    /// Each of `records`' newest payload, as the source sent it: those the book holds.
+    pub fn newest_payloads(&self, records: &[RecordId]) -> Result<std::collections::BTreeMap<RecordId, String>> {
+        let mut stmt = self.conn().prepare_cached("SELECT payload FROM record_revisions WHERE record_id = ? ORDER BY revision DESC LIMIT 1")?;
+        let mut out = std::collections::BTreeMap::new();
+        for r in records {
+            if let Some(p) = stmt.query_row([r.to_string()], |row| row.get::<_, String>(0)).optional()? {
+                out.insert(*r, p);
+            }
+        }
+        Ok(out)
+    }
+
     pub(crate) fn latest_revision(&self, id: RecordId) -> Result<(String, u32)> {
         self.conn()
             .query_row(

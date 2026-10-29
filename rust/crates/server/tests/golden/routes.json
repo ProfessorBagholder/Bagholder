@@ -16,7 +16,7 @@
       "summaryReady": false,
       "protocol": "2026-09-26.2",
       "startedAt": "<startedAt>",
-      "version": "2.13.0",
+      "version": "2.14.0",
       "latestVersion": "",
       "updateAvailable": false,
       "updateUrl": "https://github.com/ProfessorBagholder/Bagholder",
@@ -50,8 +50,7 @@
       "agents": {
         "on": false,
         "port": null,
-        "setup": null,
-        "address": "",
+        "addresses": [],
         "programs": [
           {
             "provider": "tailscale",
@@ -70,17 +69,20 @@
             "path": "<this machine's>"
           }
         ],
+        "computer": "<this machine's>",
+        "os": "<this machine's>",
+        "installing": [],
         "tailscale": null,
-        "tunnel": {
-          "running": null,
-          "command": [],
-          "lines": [],
-          "exited": null
+        "cloudflare": {
+          "signedIn": false,
+          "signingIn": false,
+          "signInUrl": null,
+          "said": ""
         },
-        "ready": null,
         "waiting": [],
         "allowed": [],
         "refused": [],
+        "codesPaused": false,
         "error": ""
       },
       "dataVersion": "exposures:0|filings:0|news:0|universes:0|<today>",

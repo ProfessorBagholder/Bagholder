@@ -259,9 +259,9 @@
   $effect(() => {
     document.documentElement.classList.toggle('display-heat', !!route.heat)
   })
-  // the wheel over an open panel must not move the page behind it
+  // the wheel over an open panel or dialog must not move the page behind it
   $effect(() => {
-    document.documentElement.classList.toggle('panel-open', !!(ticketStore.t || ui.ordersOpen || ui.notesOpen))
+    document.documentElement.classList.toggle('panel-open', !!(ticketStore.t || ui.ordersOpen || ui.notesOpen || ui.modal || ui.confirm))
   })
   // nothing to show yet: every tab is the first-run page, which carries a sync error itself
   const showingEmpty = $derived(!!book.data && !book.data.activityCount)

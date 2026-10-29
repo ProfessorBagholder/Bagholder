@@ -54,6 +54,8 @@ pub struct Request {
     pub answer: Option<bool>,
     pub code_at: Option<jiff::Timestamp>,
     pub code_used: bool,
+    /// The wrong codes typed on its page.
+    pub wrong_codes: u32,
 }
 
 /// What a new request states.
@@ -92,6 +94,9 @@ pub struct Key {
     pub made_at: jiff::Timestamp,
     pub last_used_at: Option<jiff::Timestamp>,
     pub withdrawn_at: Option<jiff::Timestamp>,
+    /// The server it was made for (`https://{host}`); None for a key made before
+    /// keys named theirs, until its first use.
+    pub at: Option<String>,
 }
 
 /// A token, as its hash finds it.
@@ -219,7 +224,7 @@ impl AgentsBook {
 
     fn requests_where<P: rusqlite::Params>(&self, filter: &str, p: P) -> Result<Vec<Request>> {
         let sql = format!(
-            "SELECT id, code, client_id, client_name, who, redirect_uri, state, challenge, resource, made_at, answer, code_at, code_used
+            "SELECT id, code, client_id, client_name, who, redirect_uri, state, challenge, resource, made_at, answer, code_at, code_used, wrong_codes
              FROM agent_requests WHERE {filter} ORDER BY made_at, rowid"
         );
         let mut stmt = self.conn().prepare(&sql)?;
@@ -238,11 +243,12 @@ impl AgentsBook {
                 r.get::<_, Option<String>>(10)?,
                 r.get::<_, Option<String>>(11)?,
                 r.get::<_, i64>(12)?,
+                r.get::<_, u32>(13)?,
             ))
         })?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, code, client_id, client_name, who, redirect_uri, state, challenge, resource, made, answer, code_at, used) = row?;
+            let (id, code, client_id, client_name, who, redirect_uri, state, challenge, resource, made, answer, code_at, used, wrong_codes) = row?;
             out.push(Request {
                 id,
                 code,
@@ -257,6 +263,7 @@ impl AgentsBook {
                 answer: answer.map(|a| a == "allowed"),
                 code_at: when("agent_requests", "code_at", code_at)?,
                 code_used: used == 1,
+                wrong_codes,
             });
         }
         Ok(out)
@@ -295,6 +302,11 @@ impl AgentsBook {
             params![id, hash, at_text(at)],
         )?;
         Ok(n == 1)
+    }
+
+    /// A wrong code typed on request `id`'s page, counted: the count now.
+    pub fn add_wrong_code(&self, id: &str) -> Result<u32> {
+        Ok(self.conn().query_row("UPDATE agent_requests SET wrong_codes = wrong_codes + 1 WHERE id = ?1 RETURNING wrong_codes", [id], |r| r.get(0))?)
     }
 
     /// A code exchanged: true the first time, false ever after.
@@ -389,9 +401,15 @@ impl AgentsBook {
 
     // ---- keys ----
 
-    pub fn add_key(&self, id: &str, name: &str, way: &str, hash: &[u8], at: jiff::Timestamp) -> Result<()> {
-        self.conn().execute("INSERT INTO agent_keys(id, name, way, hash, made_at) VALUES (?1, ?2, ?3, ?4, ?5)", params![id, name, way, hash, at_text(at)])?;
+    pub fn add_key(&self, id: &str, name: &str, way: &str, hash: &[u8], server: &str, at: jiff::Timestamp) -> Result<()> {
+        self.conn().execute("INSERT INTO agent_keys(id, name, way, hash, made_at, at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)", params![id, name, way, hash, at_text(at), server])?;
         Ok(())
+    }
+
+    /// A key made before keys named their server given the one it is first used
+    /// through. False when it already has one.
+    pub fn key_found_at(&self, id: &str, server: &str) -> Result<bool> {
+        Ok(self.conn().execute("UPDATE agent_keys SET at = ?2 WHERE id = ?1 AND at IS NULL", params![id, server])? == 1)
     }
 
     pub fn keys(&self) -> Result<Vec<Key>> {
@@ -404,15 +422,23 @@ impl AgentsBook {
     }
 
     fn keys_where<P: rusqlite::Params>(&self, filter: &str, p: P) -> Result<Vec<Key>> {
-        let sql = format!("SELECT id, name, way, made_at, last_used_at, withdrawn_at FROM agent_keys WHERE {filter} ORDER BY made_at, rowid");
+        let sql = format!("SELECT id, name, way, made_at, last_used_at, withdrawn_at, at FROM agent_keys WHERE {filter} ORDER BY made_at, rowid");
         let mut stmt = self.conn().prepare(&sql)?;
-        let rows = stmt.query_map(p, |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?)))?;
+        let rows = stmt.query_map(p, |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?, r.get::<_, Option<String>>(4)?, r.get::<_, Option<String>>(5)?, r.get::<_, Option<String>>(6)?)))?;
         let mut out = Vec::new();
         for row in rows {
-            let (id, name, way, made, used, withdrawn) = row?;
-            out.push(Key { id, name, way, made_at: instant("agent_keys", "made_at", &made)?, last_used_at: when("agent_keys", "last_used_at", used)?, withdrawn_at: when("agent_keys", "withdrawn_at", withdrawn)? });
+            let (id, name, way, made, used, withdrawn, at) = row?;
+            out.push(Key { id, name, way, made_at: instant("agent_keys", "made_at", &made)?, last_used_at: when("agent_keys", "last_used_at", used)?, withdrawn_at: when("agent_keys", "withdrawn_at", withdrawn)?, at });
         }
         Ok(out)
+    }
+
+    /// A connected agent named again by the person: its grant or its key. False when
+    /// no agent connected has that id.
+    pub fn rename_agent(&self, id: &str, name: &str) -> Result<bool> {
+        let grants = self.conn().execute("UPDATE agent_grants SET name = ?2 WHERE id = ?1 AND withdrawn_at IS NULL", params![id, name])?;
+        let keys = self.conn().execute("UPDATE agent_keys SET name = ?2 WHERE id = ?1 AND withdrawn_at IS NULL", params![id, name])?;
+        Ok(grants + keys == 1)
     }
 
     pub fn withdraw_key(&self, id: &str, at: jiff::Timestamp) -> Result<bool> {
@@ -471,7 +497,7 @@ impl AgentsBook {
 /// The agents' own settings, the only ones their handle reads or writes: on or
 /// off, the listener's port, the tunnel chosen, the public name, and whether the
 /// person's last Start or Stop of the tunnel was a Start.
-pub const SETTINGS: [&str; 5] = ["agents.on", "agents.port", "agents.tunnel", "agents.host", "agents.running"];
+pub const SETTINGS: [&str; 8] = ["agents.on", "agents.port", "agents.tunnel", "agents.host", "agents.running", "agents.wrong_codes", "agents.tunnels", "agents.hosts"];
 
 fn own(key: &str) -> Result<()> {
     if SETTINGS.contains(&key) {

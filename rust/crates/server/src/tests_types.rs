@@ -191,7 +191,7 @@ fn agents_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![Provider, Setup, TailscaleSays, TunnelState, Ready, Waiting, Connected, ProgramFound, RefusedCount, AgentsStatus, SwitchAsked, AgentId, KeyAsked, MadeKey, LogAsked, LogLine, AgentLog];
+    let decls: Vec<String> = decls![Provider, Setup, Address, CloudflareSays, Installing, TailscaleSays, TunnelState, Ready, Waiting, Connected, ProgramFound, RefusedCount, AgentsStatus, SwitchAsked, ProviderAsked, AgentId, Renamed, NgrokToken, KeyAsked, MadeKey, LogAsked, LogLine, AgentLog];
     let mut out = String::from("// Generated from the server's agents module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_agents_types`.\n\n");
     for d in decls {
         out.push_str("export ");
@@ -320,6 +320,7 @@ fn model_api_declarations() -> String {
         crate::http::model::TradeQuery, crate::http::model::Clear, crate::http::model::ClearAnswer, crate::clear::Kind,
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer, crate::http::model::DebtAnswerRequest, crate::http::model::DebtAnswer,
         crate::http::stream::Resync, crate::http::model::TradesQuery, crate::http::model::ViewQuery, crate::http::model::ViewAnswer,
+        crate::http::model::TransactionsQuery, crate::http::model::TransactionsAnswer, crate::http::model::TransactionRow,
         crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
         crate::http::model::ImportQuery, crate::csv_import::RowNote, crate::csv_import::ImportReport, crate::csv_import::ImportAccepted, crate::http::model::ImportTold,
         crate::csv_import::WatchRequest, crate::csv_import::WatchStatus, crate::csv_import::WatchedFile, crate::csv_import::FileOutcome,
@@ -362,8 +363,8 @@ fn generated_file_of(name: &str) -> &'static str {
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "Resolve" | "ResolvedListing" | "ResolveAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",
         "TradesDoc" | "Detail" | "Details" => "figures",
-        "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" => "model_api",
-        "SwitchAsked" | "Setup" | "AgentId" | "KeyAsked" | "MadeKey" | "LogAsked" | "AgentLog" => "agents",
+        "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" | "TransactionsQuery" | "TransactionsAnswer" => "model_api",
+        "SwitchAsked" | "ProviderAsked" | "Setup" | "AgentId" | "Renamed" | "NgrokToken" | "KeyAsked" | "MadeKey" | "LogAsked" | "AgentLog" => "agents",
         other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
     }
 }

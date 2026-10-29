@@ -71,7 +71,7 @@ pub struct ReadOnly {
 /// The routes `ReadOnly` reads, by path: what the tests hold to the route table.
 #[cfg(test)]
 pub fn routes() -> Vec<&'static str> {
-    vec![status().path, view().path, detail().path]
+    vec![status().path, view().path, detail().path, transactions().path]
 }
 
 fn status() -> GetRoute<NoQuery, crate::status::StatusAnswer> {
@@ -84,6 +84,10 @@ fn view() -> GetRoute<ViewQuery, crate::http::model::ViewAnswer> {
 
 fn detail() -> GetRoute<TradeQuery, crate::wire::figures::Detail> {
     GetRoute::of(crate::http::model::figures_detail, "/api/figures/detail")
+}
+
+fn transactions() -> GetRoute<crate::http::model::TransactionsQuery, crate::http::model::TransactionsAnswer> {
+    GetRoute::of(crate::http::model::transactions, "/api/transactions")
 }
 
 impl ReadOnly {
@@ -123,6 +127,10 @@ impl ReadOnly {
     /// A trade's or holding's fills.
     pub fn detail(&self, id: &str) -> Result<Value, String> {
         self.read(&detail(), &TradeQuery { id: Some(id.to_string()) })
+    }
+
+    pub fn transactions(&self, q: &crate::http::model::TransactionsQuery) -> Result<Value, String> {
+        self.read(&transactions(), q)
     }
 }
 

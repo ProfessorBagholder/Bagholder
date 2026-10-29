@@ -2,7 +2,7 @@ import { expect, test, type Page } from '@playwright/test'
 import { ready, openWithStatus, figures } from './helpers'
 
 // SPEC §3, the header's menu, and §3 "The menu."/"Connecting." for what each item
-// does. Connect, CSV import, the watch folder, Clear data and Disconnect never
+// does. Connect, CSV import, the watch folder, Clear data and Disconnect Wealthsimple never
 // touch anything real: their writes are intercepted with page.route.
 
 const openMenu = async (page: Page) => {
@@ -12,28 +12,28 @@ const openMenu = async (page: Page) => {
 test('the menu offers Connect Wealthsimple when there is no session, and Sync now / Refresh session when there is one', async ({ page, request }) => {
   await openWithStatus(page, request, { connected: false, email: '' })
   await openMenu(page)
-  await expect(page.getByRole('button', { name: 'Connect Wealthsimple' })).toBeVisible()
+  await expect(page.getByRole('button', { name: 'Connect Wealthsimple', exact: true })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Sync now' })).toHaveCount(0)
 
   await openWithStatus(page, request, { connected: true, email: 'someone@example.test' })
   await openMenu(page)
   await expect(page.getByRole('button', { name: 'Sync now' })).toBeVisible()
   await expect(page.getByRole('button', { name: 'Refresh session' })).toBeVisible()
-  await expect(page.getByRole('button', { name: 'Connect Wealthsimple' })).toHaveCount(0)
+  await expect(page.getByRole('button', { name: 'Connect Wealthsimple', exact: true })).toHaveCount(0)
 })
 
-test('Disconnect is live whenever a login is saved, connected or not, and greyed when there is none', async ({ page, request }) => {
+test('Disconnect Wealthsimple is live whenever a login is saved, connected or not, and greyed when there is none', async ({ page, request }) => {
   await openWithStatus(page, request, { connected: false, email: '' })
   await openMenu(page)
-  await expect(page.getByRole('button', { name: 'Disconnect' })).toBeDisabled()
+  await expect(page.getByRole('button', { name: 'Disconnect Wealthsimple' })).toBeDisabled()
 
   await openWithStatus(page, request, { connected: false, email: 'someone@example.test' })
   await openMenu(page)
-  await expect(page.getByRole('button', { name: 'Disconnect' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: 'Disconnect Wealthsimple' })).toBeEnabled()
 
   await openWithStatus(page, request, { connected: true, email: 'someone@example.test' })
   await openMenu(page)
-  await expect(page.getByRole('button', { name: 'Disconnect' })).toBeEnabled()
+  await expect(page.getByRole('button', { name: 'Disconnect Wealthsimple' })).toBeEnabled()
 })
 
 test('the menu closes on a press outside it, and stays open on a press inside it', async ({ page }) => {
@@ -62,7 +62,7 @@ test('Connect opens the streamed sign-in view, forwards keystrokes to it, and Ca
   await openMenu(page)
   // counted once each request is made, never on the click's own timing (#530)
   const start = page.waitForRequest('**/api/login/start')
-  await page.getByRole('button', { name: 'Connect Wealthsimple' }).click()
+  await page.getByRole('button', { name: 'Connect Wealthsimple', exact: true }).click()
   await start
   // the route's handler counts it a moment after the request is made: waited for
   await expect.poll(() => started).toBe(1)
@@ -416,22 +416,34 @@ test('Clear data refused says why in the dialog and leaves it open', async ({ pa
   await expect(page.getByRole('heading', { name: 'Clear data' })).toBeVisible()
 })
 
-test('Disconnect asks once, and Esc keeps the session while the button ends it', async ({ page, request }) => {
+test('Disconnect Wealthsimple asks once, and Esc keeps the session while the button ends it', async ({ page, request }) => {
   let asked = 0
   await page.route('**/api/disconnect', (route) => { asked++; return route.fulfill({ json: { ok: true } }) })
   await openWithStatus(page, request, { connected: true, email: 'someone@example.test' })
   await openMenu(page)
-  await page.getByRole('button', { name: 'Disconnect' }).click()
-  await expect(page.getByRole('heading', { name: 'Disconnect' })).toBeVisible()
+  await page.getByRole('button', { name: 'Disconnect Wealthsimple' }).click()
+  await expect(page.getByRole('heading', { name: 'Disconnect Wealthsimple' })).toBeVisible()
   await expect(page.locator('#confirmDlg')).toContainText('Signs out of Wealthsimple on this machine. Your synced history stays.')
 
   await page.keyboard.press('Escape')
-  await expect(page.getByRole('heading', { name: 'Disconnect' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Disconnect Wealthsimple' })).toHaveCount(0)
   expect(asked).toBe(0)
 
   await openMenu(page)
-  await page.getByRole('button', { name: 'Disconnect' }).click()
-  await page.locator('#confirmDlg').getByRole('button', { name: 'Disconnect' }).click()
+  await page.getByRole('button', { name: 'Disconnect Wealthsimple' }).click()
+  await page.locator('#confirmDlg').getByRole('button', { name: 'Disconnect Wealthsimple' }).click()
   await expect.poll(() => asked).toBe(1)
-  await expect(page.getByRole('heading', { name: 'Disconnect' })).toHaveCount(0)
+  await expect(page.getByRole('heading', { name: 'Disconnect Wealthsimple' })).toHaveCount(0)
+})
+
+test('the page behind a dialog does not scroll, and does again when it closes', async ({ page }) => {
+  await page.goto('/#trades')
+  for (const item of [/^Add trade/, /^Agents/]) {
+    await openMenu(page)
+    await page.getByRole('button', { name: item }).click()
+    await expect(page.locator('html')).toHaveClass(/panel-open/)
+    expect(await page.evaluate(() => getComputedStyle(document.documentElement).overflow)).toBe('hidden')
+    await page.keyboard.press('Escape')
+    await expect(page.locator('html')).not.toHaveClass(/panel-open/)
+  }
 })
