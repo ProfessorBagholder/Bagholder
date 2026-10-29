@@ -124,9 +124,9 @@
   /** the address being set up, once saved: step 3 follows it */
   let settingUp = $state<Provider | null>(null)
   const WAYS: { p: Provider; label: string; note: string }[] = [
-    { p: 'tailscale', label: 'Tailscale', note: 'Free. Recommended' },
+    { p: 'tailscale', label: 'Tailscale', note: 'Free, recommended' },
     { p: 'cloudflare', label: 'Cloudflare', note: 'Free, with a domain you have on Cloudflare' },
-    { p: 'ngrok', label: 'ngrok', note: 'Free: ngrok gives you an address' },
+    { p: 'ngrok', label: 'ngrok', note: 'Free, with an address ngrok gives you' },
     { p: 'own', label: 'Your own proxy', note: 'A web server you run, with your own domain' },
   ]
   /** the server of this kind already set up: connecting picks it as it is */
@@ -142,9 +142,9 @@
     if (!a && p === 'tailscale' && reachFor === 'connect' && kind === 'claude' && port443Taken) return 'Claude.ai needs port 443, which another program is using'
     return ''
   }
-  /** connecting: your servers first, then the kinds not set up yet */
+  /** connecting: your tunnels first, then the kinds not set up yet; adding one: those kinds alone */
   const mine = $derived(reachFor === 'connect' ? WAYS.filter((w) => existing(w.p)) : [])
-  const fresh = $derived(reachFor === 'connect' ? WAYS.filter((w) => !existing(w.p)) : WAYS)
+  const fresh = $derived(WAYS.filter((w) => !existing(w.p)))
   let picked = $state<Provider>('tailscale')
   /** the Cloudflare address's name, before its domain */
   let name = $state('agents')
@@ -514,7 +514,7 @@
         <h5 id="agTitle" class="ag-manage-head">{PROVIDER[viewed.provider]}</h5>
         <span class="ag-pill" class:ok={s === 'Ready'} class:bad={s === 'Stopped'} class:off={s === 'Off' || s === 'Not running'}>{s}</span>
       {:else}
-        <h5 id="agTitle">{view === 'home' || view === '' ? 'Agents' : reachFor !== 'connect' && (view === 'reach' || view === 'ready') ? 'Add a server' : view === 'agent' ? 'Connect an agent' : view === 'done' ? `Connect ${doneName || agentWords}` : moving ? movingTitle : kind === 'other' ? 'Connect an agent' : `Connect ${agentName}`}</h5>
+        <h5 id="agTitle">{view === 'home' || view === '' ? 'Agents' : reachFor !== 'connect' && (view === 'reach' || view === 'ready') ? 'Add a tunnel' : view === 'agent' ? 'Connect an agent' : view === 'done' ? `Connect ${doneName || agentWords}` : moving ? movingTitle : kind === 'other' ? 'Connect an agent' : `Connect ${agentName}`}</h5>
       {/if}
       <button class="tk-x" aria-label="Close" onclick={closeModal}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.x} /></svg></button>
     </div>
@@ -538,6 +538,7 @@
         {#each st?.allowed ?? [] as c (c.id)}
           {@const problem = cantReach(c)}
           <button class="ag-agent ag-rowbtn" onclick={() => manage(c)}>
+            <span class="ag-dot" class:ok={!problem && !!addressOf(c)} class:bad={problem} class:off={!problem && !addressOf(c)} title={problem ? 'Can’t reach Bagholder' : 'Connected'} aria-hidden="true"></span>
             <span class="ag-grow">
               <span class="ag-name ag-block">{c.name}</span>
               {#if problem}<span class="status-err ag-small ag-block">Can’t reach Bagholder</span>
@@ -551,8 +552,8 @@
       </div>
 
       <div class="ag-sechead">
-        <span class="lbl">MCP servers</span>
-        <button class="btn btn-secondary ag-sm" onclick={() => toReach('another', 'home')}>+ Add server</button>
+        <span class="lbl">Tunnels</span>
+        <button class="btn btn-secondary ag-sm" onclick={() => toReach('another', 'home')}>+ Add tunnel</button>
       </div>
       <div class="ag-list">
         {#each addresses as a (a.provider)}
@@ -566,7 +567,7 @@
             <svg class="ag-chev" viewBox="0 0 256 256" fill="currentColor" aria-hidden="true"><path d={ICONS.caret} /></svg>
           </div>
         {:else}
-          <div class="muted ag-small ag-empty">No server yet: agents on the internet can’t reach Bagholder.</div>
+          <div class="muted ag-small ag-empty">No tunnels yet.</div>
         {/each}
       </div>
       {#if st?.on && refusedCount}<div class="muted ag-small">Refused {refusedCount} {refusedCount === 1 ? 'request' : 'requests'} from unknown callers.</div>{/if}
@@ -575,18 +576,18 @@
       {@const c = managed}
       {@const a = addressOf(c)}
         <dl class="ag-facts">
-          <dt>Server</dt>
+          <dt>Tunnel</dt>
           <dd>
             {#if a}
               <span>{PROVIDER[a.provider]}{up(a) ? '' : ' · not answering'}</span>
               {@render urlCopy(a.url + '/mcp', 'its' + a.provider)}
             {:else if c.at}
-              <span class="status-err">Its server is gone</span>
+              <span class="status-err">Its tunnel is gone</span>
             {:else}
               <span class="muted">Not used yet</span>
             {/if}
             {#if cantReach(c)}<button class="btn btn-primary ag-sm ag-fix" onclick={() => reconnect(c, `Reconnect ${c.name}`)}>Reconnect</button>
-            {:else}<button class="ag-link ag-block" onclick={() => reconnect(c, `Change ${c.name}’s server`)}>Change server</button>{/if}
+            {:else}<button class="ag-link ag-block" onclick={() => reconnect(c, `Change ${c.name}’s tunnel`)}>Change tunnel</button>{/if}
           </dd>
           <dt>Added</dt>
           <dd>{longDay(c.madeAt)}{c.way === 'sign-in' && c.who ? `, through ${c.who}` : ''}</dd>
@@ -635,11 +636,11 @@
       </dl>
       <div class="ag-foot">
         {#if removingAddr === a.provider}
-          <span class="ag-grow">Remove {PROVIDER[a.provider]}?{users.length ? ` ${names(users.map((c) => c.name))} will stop reaching Bagholder.` : ''}{a.provider === 'cloudflare' ? ` This also deletes its tunnel and the address ${hostOf(a.url)} at Cloudflare.` : ''}</span>
+          <span class="ag-grow">Remove {PROVIDER[a.provider]}?{users.length ? ` ${names(users.map((c) => c.name))} will stop reaching Bagholder.` : ''}{a.provider === 'cloudflare' ? ` This also deletes the tunnel and its address ${hostOf(a.url)} from your Cloudflare account.` : ''}</span>
           <button class="btn btn-secondary" onclick={() => (removingAddr = null)}>Cancel</button>
           <button class="btn btn-secondary ag-remove" disabled={busy === 'remove'} onclick={async () => { if (await removeAddress(a.provider)) { removingAddr = null; view = 'home' } }}>Remove</button>
         {:else}
-          <button class="ag-link ag-remove" onclick={() => (removingAddr = a.provider)}>Remove server</button>
+          <button class="ag-link ag-remove" onclick={() => (removingAddr = a.provider)}>Remove tunnel</button>
         {/if}
       </div>
 
@@ -665,7 +666,8 @@
           <div class="ag-choices">{#each mine as w (w.p)}{@render way(w, `${existing(w.p)?.url ?? ''}/mcp`)}{/each}</div>
           {#if fresh.length}<div class="lbl">New tunnel</div>{/if}
         {/if}
-        {#if fresh.length}<div class="ag-choices">{#each fresh as w (w.p)}{@render way(w, w.note)}{/each}</div>{/if}
+        {#if fresh.length}<div class="ag-choices">{#each fresh as w (w.p)}{@render way(w, w.note)}{/each}</div>
+        {:else if !mine.length}<div class="muted ag-small ag-empty">Every kind of tunnel is set up already.</div>{/if}
       </div>
       {#if reachFor === 'connect' && existing(picked)}
         <!-- set up already: nothing more to do here -->
@@ -725,7 +727,7 @@
 
     {:else if view === 'ready'}
       {@const a = setting}
-      <div class="ag-q">{a && up(a) && a.ready?.state === 'ready' ? 'Your server is ready' : 'Getting your server ready'}</div>
+      <div class="ag-q">{a && up(a) && a.ready?.state === 'ready' ? 'Your tunnel is ready' : 'Getting your tunnel ready'}</div>
       {#if a?.provider === 'own' && st?.port}
         <div class="ag-field-l"><span>Point your proxy at this, keeping the Host it receives</span>{@render copyBox(`http://127.0.0.1:${st.port}`, 'target')}</div>
       {/if}
@@ -747,7 +749,7 @@
           <div class="ag-step">
             {@render icon(a?.ready?.state === 'ready' ? 'done' : a?.ready ? 'bad' : 'wait')}
             <div class="ag-grow">
-              <div>{a?.ready?.state === 'ready' ? 'Your server answers from the internet' : a?.ready?.state === 'unconfirmed' ? 'Bagholder couldn’t confirm your server answers' : a?.ready?.state === 'failed' ? 'Your server didn’t answer yet' : 'Checking that your server answers'}</div>
+              <div>{a?.ready?.state === 'ready' ? 'Your tunnel answers from the internet' : a?.ready?.state === 'unconfirmed' ? 'Bagholder couldn’t confirm your tunnel answers' : a?.ready?.state === 'failed' ? 'Your tunnel didn’t answer yet' : 'Checking that your tunnel answers'}</div>
               {#if !a?.ready}<div class="muted ag-small">This can take a minute or two the first time.</div>{/if}
               {#if a?.ready?.state === 'unconfirmed'}<div class="muted ag-small">It may still work. Try it from {reachFor === 'connect' ? agentWords : 'your agent'}.</div>{/if}
               {#if a?.ready?.state === 'failed'}<div class="muted ag-small">{a.ready.said}</div>{/if}

@@ -101,7 +101,7 @@ describe('connecting an agent', () => {
     expect((getByRole('button', { name: 'Continue' }) as HTMLButtonElement).disabled).toBe(true)
     set(agents({ tailscale: TS }))
     await fireEvent.click(getByRole('button', { name: 'Continue' }))
-    await vi.waitFor(() => expect(container.textContent).toContain('Getting your server ready'))
+    await vi.waitFor(() => expect(container.textContent).toContain('Getting your tunnel ready'))
     // switched on, Tailscale saved on 443, started
     expect(paths(posted)).toEqual(expect.arrayContaining(['/api/agents/switch', '/api/agents/tunnel', '/api/agents/tunnel/start']))
     expect(posted.find((p) => p.path === '/api/agents/tunnel/start')?.body).toEqual({ provider: 'tailscale' })
@@ -114,7 +114,7 @@ describe('connecting an agent', () => {
     set(up({ addresses: [address({ ready: null, lines: ['To enable, visit:', 'https://login.tailscale.com/f/funnel?node=abc'] })] }))
     expect(container.textContent).toContain('approve this on its site')
     set(up())
-    expect(container.textContent).toContain('Your server is ready')
+    expect(container.textContent).toContain('Your tunnel is ready')
     expect(container.textContent).not.toContain('Details for troubleshooting')
     await fireEvent.click(getByRole('button', { name: 'Continue' }))
     expect(container.textContent).toContain('Now add Bagholder in Grok Bot')
@@ -128,7 +128,7 @@ describe('connecting an agent', () => {
     await vi.waitFor(() => expect(posted.find((p) => p.path === '/api/agents/rename')?.body).toEqual({ id: 'g9', name: 'Grok Bot' }))
   })
 
-  it('asks which server the agent uses: yours first, picked, and a new one offered', async () => {
+  it('asks which tunnel the agent uses: yours first, picked, and a new one offered', async () => {
     server()
     set(up({ allowed: [grant()] }))
     const { container, getByRole } = render(AgentsPanel)
@@ -146,7 +146,7 @@ describe('connecting an agent', () => {
     expect(container.textContent).not.toContain('instead')
   })
 
-  it('picks a server of yours the agent can use, never one it cannot or a new one', async () => {
+  it('picks a tunnel of yours the agent can use, never one it cannot or a new one', async () => {
     server()
     set(up({ allowed: [grant({ name: 'Grok Bot' })], addresses: [address({ provider: 'cloudflare', url: CLOUDFLARE }), address({ port443: false })] }))
     const { getByRole } = render(AgentsPanel)
@@ -198,7 +198,7 @@ describe('an error', () => {
     set(up({ allowed: [grant()], cloudflare: { signedIn: true, signingIn: false, signInUrl: null, said: '' } }))
     const { container, getByRole } = render(AgentsPanel)
     flushSync()
-    await fireEvent.click(getByRole('button', { name: '+ Add server' }))
+    await fireEvent.click(getByRole('button', { name: '+ Add tunnel' }))
     await fireEvent.click(getByRole('radio', { name: /^Cloudflare/ }))
     await fireEvent.click(getByRole('button', { name: 'Continue' }))
     await vi.waitFor(() => expect(container.textContent).toContain('That address is already used'))
@@ -311,11 +311,13 @@ describe('your agents and their addresses', () => {
     const { container, getByRole } = render(AgentsPanel)
     flushSync()
     expect(getByRole('button', { name: /^Claude\s*Connected with Tailscale$/ })).toBeTruthy()
+    // each agent's dot says its state on hover, and stays out of the row's name
+    expect(container.querySelectorAll('button.ag-agent .ag-dot.ok')).toHaveLength(2)
     expect(getByRole('button', { name: /^Muse\s*Connected with Tailscale$/ })).toBeTruthy()
     // the detail lives on the agent's page, not in the list
     expect(container.textContent).not.toContain('Signed in through')
     expect(container.textContent).not.toContain(' ago')
-    expect(container.textContent).toContain('MCP server')
+    expect(container.textContent).toContain('Tunnels')
     expect(container.textContent).toContain(TAILSCALE + '/mcp')
     expect(container.textContent).toContain('Refused 3 requests from unknown callers.')
   })
@@ -381,7 +383,7 @@ describe('your agents and their addresses', () => {
     await vi.waitFor(() => expect(posted.filter((p) => p.path === '/api/agents/rename').map((p) => p.body)).toEqual([{ id: 'g1', name: 'Grok Bot' }]))
   })
 
-  it("an agent's page: connected, its server, when it was added, its activity, and Remove", async () => {
+  it("an agent's page: connected, its tunnel, when it was added, its activity, and Remove", async () => {
     const posted = server()
     set(up({ allowed: [grant({ name: 'Cursor', who: 'www.cursor.com' })] }))
     const { container, getByRole } = render(AgentsPanel)
@@ -394,12 +396,12 @@ describe('your agents and their addresses', () => {
     expect(container.querySelector('.ag-facts')?.textContent).toContain('Added')
     // its reads, asked as the page opens: no button to see them
     await vi.waitFor(() => expect(container.textContent).toContain('No activity yet.'))
-    // while it works: its server can be changed, and nothing needs reconnecting
+    // while it works: its tunnel can be changed, and nothing needs reconnecting
     expect(container.textContent).not.toContain('Reconnect')
-    await fireEvent.click(getByRole('button', { name: 'Change server' }))
-    expect(container.querySelector('h5')?.textContent).toBe('Change Cursor’s server')
+    await fireEvent.click(getByRole('button', { name: 'Change tunnel' }))
+    expect(container.querySelector('h5')?.textContent).toBe('Change Cursor’s tunnel')
     expect(container.textContent).toContain('Which tunnel should make Bagholder’s MCP server reachable for Cursor?')
-    // the server it uses now is not one to change to
+    // the tunnel it uses now is not one to change to
     expect((getByRole('radio', { name: /^Tailscale/ }) as HTMLButtonElement).disabled).toBe(true)
     expect(getByRole('radio', { name: /^Tailscale/ }).textContent).toContain('Cursor uses it now')
     await fireEvent.click(getByRole('button', { name: 'Back' }))
@@ -413,13 +415,13 @@ describe('your agents and their addresses', () => {
     await vi.waitFor(() => expect(posted.find((p) => p.path === '/api/agents/cut-off')?.body).toEqual({ id: 'g1' }))
   })
 
-  it('adding a server shows only what is missing; Bagholder installs ngrok where it runs, never in this browser', async () => {
+  it('adding a tunnel shows only what is missing; Bagholder installs ngrok where it runs, never in this browser', async () => {
     const posted = server()
     set(up({ allowed: [grant()], tailscale: TS }))
     const { container, getByRole, queryByLabelText } = render(AgentsPanel)
     flushSync()
-    await fireEvent.click(getByRole('button', { name: '+ Add server' }))
-    expect(container.querySelector('h5')?.textContent).toBe('Add a server')
+    await fireEvent.click(getByRole('button', { name: '+ Add tunnel' }))
+    expect(container.querySelector('h5')?.textContent).toBe('Add a tunnel')
     expect(container.textContent).toContain('Which tunnel should make Bagholder’s MCP server reachable?')
     await fireEvent.click(getByRole('radio', { name: /^ngrok/ }))
     // not installed: that alone, on the computer Bagholder runs on, named; nothing to download here
@@ -463,7 +465,7 @@ describe('your agents and their addresses', () => {
     expect(getByRole('radio', { name: /^Tailscale/ }).getAttribute('aria-checked')).toBe('true')
   })
 
-  it("a key's agent: the server its key was made for, named as every agent's is, and listed on that server", async () => {
+  it("a key's agent: the tunnel its key was made for, named as every agent's is, and listed on that tunnel", async () => {
     server()
     set(up({ allowed: [grant({ id: 'k1', name: 'Muse', way: 'api-key', who: '' })] }))
     const { container, getByRole } = render(AgentsPanel)
@@ -477,14 +479,14 @@ describe('your agents and their addresses', () => {
     expect(getByRole('button', { name: 'Muse' })).toBeTruthy()
   })
 
-  it('reconnects an agent whose server is gone through the same server step as connecting: its sign-in there replaces the old one', async () => {
+  it('reconnects an agent whose tunnel is gone through the same tunnel step as connecting: its sign-in there replaces the old one', async () => {
     const posted = server()
     const two = [address({ provider: 'cloudflare', url: CLOUDFLARE }), address({ provider: 'ngrok', url: 'https://x.ngrok-free.dev' })]
     set(up({ allowed: [grant({ name: 'Grok Bot', who: 'www.cursor.com' })], addresses: two }))
     const { container, getByRole } = render(AgentsPanel)
     flushSync()
     await fireEvent.click(getByRole('button', { name: /^Grok Bot/ }))
-    expect(container.textContent).toContain('Its server is gone')
+    expect(container.textContent).toContain('Its tunnel is gone')
     await fireEvent.click(getByRole('button', { name: 'Reconnect' }))
     expect(container.querySelector('h5')?.textContent).toBe('Reconnect Grok Bot')
     expect(container.textContent).toContain('Which tunnel should make Bagholder’s MCP server reachable for Grok Bot?')
@@ -503,10 +505,11 @@ describe('your agents and their addresses', () => {
     const posted = server()
     const signedIn = { signedIn: true, signingIn: false, signInUrl: null, said: '' }
     set(up({ allowed: [grant({ name: 'Grok Bot' })], cloudflare: signedIn }))
-    const { container, getByRole } = render(AgentsPanel)
+    const { container, getByRole, queryByRole } = render(AgentsPanel)
     flushSync()
-    await fireEvent.click(getByRole('button', { name: '+ Add server' }))
-    expect(getByRole('radio', { name: /^Tailscale/ }).textContent).toContain('Already set up')
+    await fireEvent.click(getByRole('button', { name: '+ Add tunnel' }))
+    // only the kinds that can be added: Tailscale, set up already, is not offered
+    expect(queryByRole('radio', { name: /^Tailscale/ })).toBeNull()
     await fireEvent.click(getByRole('radio', { name: /^Cloudflare/ }))
     expect(container.textContent).toContain('Your address will be agents.')
     await fireEvent.click(getByRole('button', { name: 'Continue' }))
@@ -528,7 +531,7 @@ describe('your agents and their addresses', () => {
     flushSync()
     await fireEvent.click(getByRole('button', { name: /^Grok Bot/ }))
     expect(container.querySelector('.ag-pill')?.textContent).toBe('Can’t reach Bagholder')
-    expect(container.textContent).toContain('Its server is gone')
+    expect(container.textContent).toContain('Its tunnel is gone')
   })
 
   it('removes an address only once asked again, naming the agents that use it', async () => {
@@ -537,18 +540,18 @@ describe('your agents and their addresses', () => {
     const { container, getByRole } = render(AgentsPanel)
     flushSync()
     await fireEvent.click(getByRole('button', { name: /^Tailscale/ }))
-    // the server's page: its address, the agents using it, and its state
+    // the tunnel's page: its address, the agents using it, and its state
     expect(container.textContent).toContain('Grok Bot')
-    await fireEvent.click(getByRole('button', { name: 'Remove server' }))
+    await fireEvent.click(getByRole('button', { name: 'Remove tunnel' }))
     expect(container.textContent).toContain('Remove Tailscale? Grok Bot will stop reaching Bagholder.')
     await fireEvent.click(getByRole('button', { name: 'Cancel' }))
     expect(paths(posted)).not.toContain('/api/agents/tunnel/remove')
-    await fireEvent.click(getByRole('button', { name: 'Remove server' }))
+    await fireEvent.click(getByRole('button', { name: 'Remove tunnel' }))
     await fireEvent.click(getByRole('button', { name: 'Remove' }))
     await vi.waitFor(() => expect(posted.find((p) => p.path === '/api/agents/tunnel/remove')?.body).toEqual({ provider: 'tailscale' }))
   })
 
-  it("opens a server's page from anywhere on its row but the copy icon, which copies alone", async () => {
+  it("opens a tunnel's page from anywhere on its row but the copy icon, which copies alone", async () => {
     server()
     const copied: string[] = []
     vi.stubGlobal('navigator', { clipboard: { writeText: async (t: string) => void copied.push(t) } })
@@ -560,7 +563,7 @@ describe('your agents and their addresses', () => {
     expect(container.textContent).toContain('Your agents')
     // the address's line, not its icon: the row's
     await fireEvent.click(container.querySelector('.ag-rowbtn[role="button"] .ag-block')!)
-    expect(container.textContent).toContain('Remove server')
+    expect(container.textContent).toContain('Remove tunnel')
   })
 
   it('shows a check for two seconds once copied, then the copy icon again, as the header’s copy button does', async () => {
@@ -600,7 +603,7 @@ describe('your agents and their addresses', () => {
     expect(container.textContent).toContain('Your agents')
   })
 
-  it("a server's page: its address, its agents opening their pages, and a switch that turns it off", async () => {
+  it("a tunnel's page: its address, its agents opening their pages, and a switch that turns it off", async () => {
     const posted = server()
     set(up({ allowed: [grant({ name: 'Grok Bot' })] }))
     const { container, getByRole } = render(AgentsPanel)

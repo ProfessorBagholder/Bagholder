@@ -1971,8 +1971,21 @@ fn a_tunnel_refused_for_a_clash_in_tailscale_s_settings_is_started_again() {
 /// the sentence the person allows on says each.
 #[test]
 fn the_sign_in_page_says_everything_an_agent_reads() {
+    // what each tool reads, in the words the sign-in page uses
+    const READS: [(&str, &str); 10] = [
+        ("trades", "trades"),
+        ("trade", "trades"),
+        ("positions", "holdings"),
+        ("lists", "accounts"),
+        ("stats", "stats"),
+        ("income", "income"),
+        ("exposure", "holdings"),
+        ("net_worth", "net worth"),
+        ("transactions", "chequing and credit card transactions"),
+        ("markets", "watchlist"),
+    ];
     for (_, tool, _, _) in api::routes() {
-        let words = tools::READS.iter().find(|(t, _)| *t == tool).map(|(_, w)| *w).unwrap_or_else(|| panic!("{tool} reads nothing the sign-in page says"));
+        let words = READS.iter().find(|(t, _)| *t == tool).map(|(_, w)| *w).unwrap_or_else(|| panic!("{tool} reads nothing the sign-in page says"));
         assert!(tools::READ.contains(words), "{tool}: {words} is not in \"{}\"", tools::READ);
     }
     let h = harness();
