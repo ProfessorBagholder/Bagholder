@@ -100,6 +100,8 @@
   /** the address this connection uses */
   let using = $state<Provider | null>(null)
   const usingAddr = $derived(addresses.find((a) => a.provider === using) ?? null)
+  /** an agent reconnected at another server: its sign-in there replaces the one it had */
+  let moving = $state<Connected | null>(null)
   /** a new server was set up on the way: Back from adding it goes to it getting ready */
   let walked = $state(false)
   function fromAgent() {
@@ -260,8 +262,6 @@
     if (!r.ok) error = r.error
     else made = r
   }
-  /** an agent moved to another address: its sign-in there replaces the one it had */
-  let moving = $state<Connected | null>(null)
   let doneName = $state('')
   $effect(() => {
     if (view !== 'add' || !st) return
