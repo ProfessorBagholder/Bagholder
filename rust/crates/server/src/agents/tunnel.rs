@@ -159,6 +159,25 @@ pub fn find(provider: Provider) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| std::env::split_paths(&paths).map(|d| d.join(&exe)).find(|p| p.is_file()))
 }
 
+/// Files only the person can read: each folder 0700 and each file 0600, those that
+/// exist (Unix; on Windows a user's own folder is theirs already). What a way's
+/// program writes there (a sign-in, credentials, a token) is never left readable
+/// by others on the computer.
+pub fn private(dirs: &[PathBuf], files: &[PathBuf]) -> Result<(), String> {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        for (paths, mode) in [(dirs, 0o700), (files, 0o600)] {
+            for p in paths.iter().filter(|p| p.exists()) {
+                std::fs::set_permissions(p, std::fs::Permissions::from_mode(mode)).map_err(|e| format!("{} could not be kept private: {e}", p.display()))?;
+            }
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = (dirs, files);
+    Ok(())
+}
+
 /// `provider`'s program: the copy Bagholder installed (`install`) first, then the
 /// computer's own.
 pub fn find_here(home: &Path, provider: Provider) -> Option<PathBuf> {

@@ -53,7 +53,13 @@ impl Files {
         if !self.config().is_file() {
             std::fs::write(self.config(), "").map_err(|e| e.to_string())?;
         }
-        Ok(())
+        self.secure()
+    }
+
+    /// The sign-in, the tunnel's credentials and their folders, readable by the
+    /// person alone (`tunnel::private`): kept so after each is written.
+    pub fn secure(&self) -> Result<(), String> {
+        super::tunnel::private(&[self.dir.clone(), self.dir.join(".cloudflared")], &[self.cert(), self.credentials(), self.config(), self.name_file()])
     }
 
     /// cloudflared's arguments for `tunnel {rest}`, held to this folder.
@@ -95,6 +101,7 @@ impl Files {
                 n
             }
         };
+        self.secure()?;
         let said = run::output(program, &self.args(&["route".into(), "dns".into(), name, address.into()]), &self.env(), run::WAIT).map_err(|e| plain(&e))?;
         made(&said).or_else(|| address.contains('.').then(|| address.to_ascii_lowercase())).ok_or_else(|| "Cloudflare didn’t say the address it made: type the whole address, such as agents.yourdomain.com.".into())
     }

@@ -234,7 +234,8 @@
     walked = true
     view = 'ready'
   }
-  const reachTitle = $derived(reachFor === 'connect' ? `Which server should ${moving?.name ?? agentWords} use?` : 'Which server do you want to add?')
+  /** what is picked, said plainly: the one MCP server is Bagholder's, and a tunnel makes it reachable */
+  const reachTitle = $derived(reachFor === 'connect' ? `Which tunnel should make Bagholder’s MCP server reachable for ${moving?.name ?? agentWords}?` : 'Which tunnel should make Bagholder’s MCP server reachable?')
 
   // ---- step 3: the address getting ready ----
   const setting = $derived(addresses.find((a) => a.provider === settingUp) ?? null)
@@ -660,9 +661,9 @@
       <div class="ag-q">{reachTitle}</div>
       <div class="ag-pick" role="radiogroup" aria-label="Server">
         {#if mine.length}
-          <div class="lbl">Your servers</div>
+          <div class="lbl">Your tunnels</div>
           <div class="ag-choices">{#each mine as w (w.p)}{@render way(w, `${existing(w.p)?.url ?? ''}/mcp`)}{/each}</div>
-          {#if fresh.length}<div class="lbl">New server</div>{/if}
+          {#if fresh.length}<div class="lbl">New tunnel</div>{/if}
         {/if}
         {#if fresh.length}<div class="ag-choices">{#each fresh as w (w.p)}{@render way(w, w.note)}{/each}</div>{/if}
       </div>

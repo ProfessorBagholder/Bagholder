@@ -305,7 +305,7 @@ impl Agents {
         let mut child = tunnel::spawn_piped(&argv, env).map_err(|e| format!("Cloudflare’s sign-in could not start: {e}"))?;
         *held = SignIn::default();
         for out in [child.stdout.take().map(|o| Box::new(o) as Box<dyn std::io::Read + Send>), child.stderr.take().map(|e| Box::new(e) as Box<dyn std::io::Read + Send>)].into_iter().flatten() {
-            let (state, signal) = (self.cloudflare.clone(), signal.clone());
+            let (state, signal, home) = (self.cloudflare.clone(), signal.clone(), home.to_path_buf());
             std::thread::Builder::new()
                 .name("cloudflare-sign-in".into())
                 .spawn(move || {
@@ -319,6 +319,10 @@ impl Agents {
                         drop(s);
                         signal();
                     });
+                    // the sign-in written as the sign-in ends: readable by the person alone
+                    if let Err(e) = cloudflare::Files::new(&home).secure() {
+                        crate::app::log(&format!("bagholder: {e}"));
+                    }
                     signal();
                 })
                 .map_err(|e| e.to_string())?;

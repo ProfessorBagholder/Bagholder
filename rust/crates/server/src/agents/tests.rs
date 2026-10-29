@@ -734,7 +734,7 @@ fn pkce_is_s256_and_required() {
     for extra in [vec![("code_challenge_method", "plain")], vec![("code_challenge", "")], vec![("code_challenge_method", "")]] {
         let a = h.authorize(CIMD, CALLBACK, &extra);
         assert_eq!(a.status, StatusCode::BAD_REQUEST, "{extra:?}");
-        assert!(a.text().contains("invalid_request"), "{extra:?}: {}", a.text());
+        assert_eq!(a.header("x-refused"), "invalid_request", "{extra:?}");
     }
     // and a wrong verifier exchanges nothing
     let (id, _) = h.waiting(&h.authorize(CIMD, CALLBACK, &[]));
@@ -806,7 +806,7 @@ fn a_metadata_document_naming_another_client_is_refused() {
     let h = harness_with(Outside { resolve: Arc::new(PublicAnswer("93.184.215.14".parse().unwrap())), get: docs.clone(), public_dns: Arc::new(Unreachable) }, Arc::new(|| Err("none".into())));
     let a = h.authorize(CIMD, CALLBACK, &[]);
     assert_eq!(a.status, StatusCode::BAD_REQUEST);
-    assert!(a.text().contains("another client_id"), "{}", a.text());
+    assert_eq!(a.header("x-refused"), "invalid_client");
     assert!(h.store().waiting(bagholder_core::jiff::Timestamp::MIN).unwrap().is_empty());
 }
 
@@ -932,7 +932,7 @@ fn who_is_asking_is_the_document_s_host_never_the_callback_s() {
     let h = harness_with(Outside { resolve: Arc::new(PublicAnswer("93.184.215.14".parse().unwrap())), get: docs, public_dns: Arc::new(Unreachable) }, Arc::new(|| Err("none".into())));
     let page = h.authorize(CIMD, "https://callback.example/cb", &[]).text();
     assert!(page.contains("<b>agent.example</b>") && page.contains("Agent Example"), "{page}");
-    assert!(page.contains("Enter the code shown in Bagholder") && page.contains("<b>agent.example</b> <span class=dim>(Agent Example)</span> wants to read your trades and holdings."), "{page}");
+    assert!(page.contains("Enter the code shown in Bagholder") && page.contains(&format!("<b>agent.example</b> <span class=dim>(Agent Example)</span> wants to read {}.", tools::READ)), "{page}");
     assert!(!page.contains("callback.example"), "{page}");
     let w = approve::waiting(&h.store(), h.ctx.now()).unwrap();
     assert_eq!(w.iter().map(|w| (w.who.as_str(), w.checked)).collect::<Vec<_>>(), vec![("agent.example", true)]);
@@ -1720,6 +1720,16 @@ esac"#,
     assert!(name.starts_with("bagholder-"), "{name}");
     assert!(c.iter().any(|l| l.ends_with(&format!("route dns {name} agents"))), "{c:?}");
     assert!(c.iter().any(|l| l.ends_with(&format!("route dns {name} agents2.example.com"))), "{c:?}");
+    // the sign-in and the tunnel's credentials, readable by the person alone
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&files.cert()), 0o600);
+        assert_eq!(mode(&home.path().join("agents-cloudflare").join("tunnel.json")), 0o600);
+        assert_eq!(mode(&home.path().join("agents-cloudflare")), 0o700);
+        assert_eq!(mode(&home.path().join("agents-cloudflare").join(".cloudflared")), 0o700);
+    }
     // every call: Bagholder's folder as home, its own config and sign-in, never another
     for l in &c {
         assert!(l.starts_with(&format!("HOME={folder} --config {folder}/config.yml tunnel --origincert {folder}/.cloudflared/cert.pem ")), "{l}");
@@ -1753,6 +1763,14 @@ fn ngrok_keeps_the_authtoken_in_bagholder_s_config_and_its_address_is_read_as_it
     assert_eq!(files.save_token(&program, "not a token!").unwrap_err(), "That isn't an ngrok authtoken: copy it from ngrok’s page again.");
     files.save_token(&program, " 2abcDEF_ghi123 ").unwrap();
     assert!(files.has_token());
+    // the authtoken, readable by the person alone
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        let mode = |p: &std::path::Path| std::fs::metadata(p).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&home.path().join("agents-ngrok").join("ngrok.yml")), 0o600);
+        assert_eq!(mode(&home.path().join("agents-ngrok")), 0o700);
+    }
     let config = home.path().join("agents-ngrok").join("ngrok.yml").display().to_string();
     assert!(calls(bin.path()).iter().any(|l| l.ends_with(&format!("config add-authtoken 2abcDEF_ghi123 --config {config}"))));
     // no address asked: the account's dev domain, read from ngrok's log
@@ -1947,4 +1965,53 @@ fn a_tunnel_refused_for_a_clash_in_tailscale_s_settings_is_started_again() {
     assert!(!t.start_again(run), "stopped");
     // an earlier start's end, told after another started: not this one's
     assert!(!t.start_again(run.wrapping_sub(1)));
+}
+
+/// The sign-in page says everything an agent reads: each tool has its words, and
+/// the sentence the person allows on says each.
+#[test]
+fn the_sign_in_page_says_everything_an_agent_reads() {
+    for (_, tool, _, _) in api::routes() {
+        let words = tools::READS.iter().find(|(t, _)| *t == tool).map(|(_, w)| *w).unwrap_or_else(|| panic!("{tool} reads nothing the sign-in page says"));
+        assert!(tools::READ.contains(words), "{tool}: {words} is not in \"{}\"", tools::READ);
+    }
+    let h = harness();
+    assert!(h.authorize(CIMD, CALLBACK, &[]).text().contains(tools::READ));
+}
+
+/// The sign-in pages say only plain words: the page that asks for the code, what
+/// it says as the code is typed, and every refusal. No error code, no raw error, no
+/// term of the protocol: the code goes to the agent in a header, and why to the log.
+#[test]
+fn the_sign_in_pages_say_only_plain_words() {
+    let h = harness();
+    let code = regex::Regex::new(r"(?i)\b[a-z0-9]+_[a-z0-9_]+\b|\bpkce\b|\bs256\b|\boauth\b|\bclient_id\b|\bredirect\b|\bresource\b|\binvalid\b|\berror\b").unwrap();
+    let style = regex::Regex::new(r"(?s)<style>.*?</style>").unwrap();
+    let script = regex::Regex::new(r"(?s)<script>(.*?)</script>").unwrap();
+    let tag = regex::Regex::new(r"<[^>]*>").unwrap();
+    let said = regex::Regex::new(r"(?:say|over)\('((?:[^'\\]|\\.)*)'").unwrap();
+    let shown = |html: &str| -> Vec<String> {
+        let html = style.replace_all(html, "");
+        let mut out: Vec<String> = script.captures_iter(&html).flat_map(|c| said.captures_iter(&c[1]).map(|m| m[1].to_string()).collect::<Vec<_>>()).collect();
+        out.push(tag.replace_all(&script.replace_all(&html, ""), " ").to_string());
+        out
+    };
+    let pages = [
+        ("the page that asks for the code", h.authorize(CIMD, CALLBACK, &[])),
+        ("PKCE missing", h.authorize(CIMD, CALLBACK, &[("code_challenge", "")])),
+        ("a client no one registered", h.authorize("nope", CALLBACK, &[])),
+        ("another response type", h.authorize(CIMD, CALLBACK, &[("response_type", "token")])),
+        ("another resource", h.authorize(CIMD, CALLBACK, &[("resource", "https://elsewhere.example/mcp")])),
+        ("nothing asked", h.get("/oauth/authorize")),
+    ];
+    for (what, page) in pages {
+        let text = page.text();
+        for t in shown(&text) {
+            assert!(!code.is_match(&t), "{what}: {:?} in {t:?}", code.find(&t).map(|m| m.as_str()));
+        }
+        if page.status != StatusCode::OK {
+            assert!(text.contains("This sign-in link doesn’t work. Start again from your agent."), "{what}: {text}");
+            assert!(!page.header("x-refused").is_empty(), "{what}: the agent is told why in a header");
+        }
+    }
 }

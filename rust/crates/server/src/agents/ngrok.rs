@@ -34,7 +34,9 @@ impl Files {
         }
         std::fs::create_dir_all(&self.dir).map_err(|e| e.to_string())?;
         let args = vec!["config".into(), "add-authtoken".into(), token.into(), "--config".into(), self.config().display().to_string()];
-        run::output(program, &args, &[], run::WAIT).map(|_| ()).map_err(|e| format!("ngrok said: {}", e.lines().rev().find(|x| !x.trim().is_empty()).unwrap_or(&e).trim()))
+        run::output(program, &args, &[], run::WAIT).map_err(|e| format!("ngrok said: {}", e.lines().rev().find(|x| !x.trim().is_empty()).unwrap_or(&e).trim()))?;
+        // the authtoken, readable by the person alone
+        super::tunnel::private(&[self.dir.clone()], &[self.config()])
     }
 
     /// The command that runs ngrok to `target`, on the account's dev domain, saying

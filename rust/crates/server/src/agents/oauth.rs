@@ -274,8 +274,15 @@ pub struct AuthorizeQuery {
 /// A page that says what is wrong, sent to no one: a request whose client or
 /// redirect cannot be trusted is never redirected.
 fn error_page(status: StatusCode, error: &str, why: &str) -> Response {
-    let body = format!("{HEAD}<main><div class=dim style='font-size:13px'>Bagholder</div><h1>This sign-in can't go ahead</h1><p>{}</p><p class=dim style='font-size:13px'>{}</p></main>", escape(why), escape(error));
+    // the person is told what to do, in plain words; why is for whoever reads the
+    // log, and the code for the agent's developer, in a header the page never shows
+    crate::app::log(&format!("bagholder: a sign-in was refused ({error}): {why}"));
+    let said = if status == StatusCode::TOO_MANY_REQUESTS { "Too many sign-ins are waiting on Bagholder. Try again once one is answered." } else { "This sign-in link doesn’t work. Start again from your agent." };
+    let body = format!("{HEAD}<main><div class=dim style='font-size:13px'>Bagholder</div><h1>This sign-in can’t go ahead</h1><p>{said}</p></main>");
     let mut r = (status, Html(body)).into_response();
+    if let Ok(v) = HeaderValue::from_str(error) {
+        r.headers_mut().insert("x-refused", v);
+    }
     page_headers(r.headers_mut());
     r
 }
@@ -363,7 +370,7 @@ fn waiting_page(a: &Asking, id: &str) -> String {
     format!(
         "{head}<main><div class=dim style='font-size:13px'>Bagholder</div>\
 <h1 id=t>Enter the code shown in Bagholder</h1>\
-<p><b>{who}</b>{name} wants to read your trades and holdings.</p>\
+<p><b>{who}</b>{name} wants to read {read}.</p>\
 <form id=f><input id=c aria-labelledby=t inputmode=numeric autocomplete=one-time-code maxlength=7 placeholder='000 000' autofocus>\
 <button id=b>Allow</button></form><p id=s class=dim></p></main>\
 <script>(function(){{var id={id},s=document.getElementById('s'),b=document.getElementById('b'),c=document.getElementById('c');\
@@ -378,6 +385,7 @@ else if(j.state==='paused'){{over('Sign-in is paused: the code was entered wrong
 else{{over('This sign-in has ended. Start again from your agent.')}}}}).catch(function(){{b.disabled=false;say('Bagholder didn\\u2019t answer. Try again.',true)}})}});\
 ask()}})()</script>",
         head = HEAD,
+        read = super::tools::READ,
         who = escape(&a.who),
         name = name,
         id = id_json,
