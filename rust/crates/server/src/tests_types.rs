@@ -160,7 +160,7 @@ fn status_declarations() -> String {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
     let decls: Vec<String> = decls![crate::notify::NotifySettings, crate::notify::PushStatus, crate::notify::NotifyStatus, crate::csv_import::Importing, crate::csv_import::Imported, crate::status::ModelDownload, crate::status::Status, crate::status::StatusAnswer];
-    let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\nimport type { ImportReport } from './model_api'\nimport type { AgentsStatus } from './agents'\n\n");
+    let mut out = String::from("// Generated from the server's status and notify modules. Do not edit: change the Rust type,\n// then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_status_types`.\n\nimport type { ImportReport } from './model_api'\nimport type { AgentsStatus, RemoteStatus } from './agents'\n\n");
     for d in decls {
         out.push_str("export ");
         out.push_str(d.trim());
@@ -181,17 +181,20 @@ fn test_the_pages_status_types_are_the_servers() {
     assert!(have == want, "web/src/lib/generated/status.ts is not what the server's types generate: run with BAGHOLDER_BLESS=1 and check the page");
 }
 
-/// The Agents panel's types, generated to `web/src/lib/generated/agents.ts`
-/// (`docs/plans/agents-from-anywhere.md`, §4).
+/// The Agents panel's types, and the page-from-anywhere panel's beside them (its
+/// tunnel is Cloudflare's, as an agents' one), generated to
+/// `web/src/lib/generated/agents.ts` (`docs/plans/agents-from-anywhere.md`, §4;
+/// `docs/plans/page-from-anywhere.md`).
 fn agents_declarations() -> String {
     use crate::agents::approve::*;
     use crate::agents::tunnel::*;
     use crate::http::agents::*;
+    use crate::http::remote::*;
     let config = ts_rs::Config::new().with_large_int("number");
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![Provider, Setup, Address, CloudflareSays, Installing, TailscaleSays, TunnelState, Ready, Waiting, Connected, ProgramFound, RefusedCount, AgentsStatus, SwitchAsked, ProviderAsked, AgentId, Renamed, NgrokToken, KeyAsked, MadeKey, LogAsked, LogLine, AgentLog];
+    let decls: Vec<String> = decls![Provider, Setup, Address, CloudflareSays, Installing, TailscaleSays, TunnelState, Ready, Waiting, Connected, ProgramFound, RefusedCount, AgentsStatus, SwitchAsked, ProviderAsked, AgentId, Renamed, NgrokToken, KeyAsked, MadeKey, LogAsked, LogLine, AgentLog, RemoteStatus, TokenAsked, SetUpAsked, RemoteSwitch, GitHubAsked, GitHubManifest];
     let mut out = String::from("// Generated from the server's agents module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_agents_types`.\n\n");
     for d in decls {
         out.push_str("export ");
@@ -364,7 +367,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "HistoryAnswer" | "HistoryQuery" => "chart",
         "TradesDoc" | "Detail" | "Details" => "figures",
         "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" | "TransactionsQuery" | "TransactionsAnswer" => "model_api",
-        "SwitchAsked" | "ProviderAsked" | "Setup" | "AgentId" | "Renamed" | "NgrokToken" | "KeyAsked" | "MadeKey" | "LogAsked" | "AgentLog" => "agents",
+        "SwitchAsked" | "ProviderAsked" | "Setup" | "AgentId" | "Renamed" | "NgrokToken" | "KeyAsked" | "MadeKey" | "LogAsked" | "AgentLog" | "TokenAsked" | "SetUpAsked" | "RemoteSwitch" | "GitHubAsked" | "GitHubManifest" => "agents",
         other => panic!("route table type {} has no generated file mapped in generated_file_of", other),
     }
 }

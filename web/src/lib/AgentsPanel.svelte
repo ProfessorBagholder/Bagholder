@@ -152,8 +152,8 @@
   let proxyHost = $state('')
   /** the name's own field, shown only when the person asks for another than "agents" */
   let naming = $state(false)
-  /** the Cloudflare domain, once an address made on it says it */
-  const cfDomain = $derived(hostOf(addresses.find((a) => a.provider === 'cloudflare')?.url ?? '').split('.').slice(1).join('.'))
+  /** the domain the Cloudflare sign-in was made for, once Cloudflare said its name, or an address made on it says it */
+  const cfDomain = $derived(st?.cloudflare.domain || hostOf(addresses.find((a) => a.provider === 'cloudflare')?.url ?? '').split('.').slice(1).join('.'))
   let sendsHost = $state('')
   let hostDiffers = $state(false)
   let token = $state('')
@@ -690,10 +690,11 @@
         {:else if naming}
           <label class="ag-field-l">
             <span>Name for the address</span>
-            <div class="ag-copy"><input class="input ag-grow" bind:value={name} spellcheck="false" aria-label="Name for the address" /><span class="muted">.{cfDomain || 'your domain'}</span></div>
+            <div class="ag-copy"><input class="input ag-grow" bind:value={name} spellcheck="false" aria-label="Name for the address" />{#if cfDomain}<span class="muted">.{cfDomain}</span>{/if}</div>
           </label>
         {:else}
-          <div>Your address will be <b class="ag-mono">{(name.trim() || 'agents') + '.' + (cfDomain || 'the domain you picked')}</b></div>
+          {#if cfDomain}<div>Your address will be <b class="ag-mono">{(name.trim() || 'agents') + '.' + cfDomain}</b></div>
+          {:else}<div>Your address will be <b class="ag-mono">{name.trim() || 'agents'}</b> on the domain you chose at Cloudflare</div>{/if}
           <button class="ag-link" onclick={() => (naming = true)}>Use a different name</button>
         {/if}
       {:else if picked === 'ngrok'}

@@ -27,7 +27,7 @@ function agents(over: Partial<AgentsStatus> = {}): AgentsStatus {
     os: 'linux',
     installing: [],
     tailscale: null,
-    cloudflare: { signedIn: false, signingIn: false, signInUrl: null, said: '' },
+    cloudflare: { signedIn: false, signingIn: false, signInUrl: null, said: '', domain: null },
     waiting: [],
     allowed: [],
     refused: [],
@@ -192,10 +192,26 @@ describe('connecting an agent', () => {
   })
 })
 
+describe('a Cloudflare address', () => {
+  // the domain is the one chosen at Cloudflare's sign-in, by its name once Cloudflare says
+  // it; until then, said in words, never a placeholder in the address
+  it('is shown on the domain signed in with, before any address is made on it', async () => {
+    server()
+    set(up({ allowed: [grant()], cloudflare: { signedIn: true, signingIn: false, signInUrl: null, said: '', domain: 'example.com' } }))
+    const { container, getByRole } = render(AgentsPanel)
+    flushSync()
+    await fireEvent.click(getByRole('button', { name: '+ Add tunnel' }))
+    await fireEvent.click(getByRole('radio', { name: /^Cloudflare/ }))
+    expect(container.textContent).toContain('Your address will be agents.example.com')
+    set(up({ allowed: [grant()], cloudflare: { signedIn: true, signingIn: false, signInUrl: null, said: '', domain: null } }))
+    expect(container.textContent).toContain('Your address will be agents on the domain you chose at Cloudflare')
+  })
+})
+
 describe('an error', () => {
   it('stays on the screen it happened on, and goes with Back', async () => {
     vi.stubGlobal('fetch', vi.fn(async (url: string | URL | Request) => new Response(JSON.stringify(String(url).includes('/api/agents/tunnel') ? { ok: false, error: 'That address is already used on your Cloudflare domain.' } : { ok: true, lines: [] }))))
-    set(up({ allowed: [grant()], cloudflare: { signedIn: true, signingIn: false, signInUrl: null, said: '' } }))
+    set(up({ allowed: [grant()], cloudflare: { signedIn: true, signingIn: false, signInUrl: null, said: '', domain: null } }))
     const { container, getByRole } = render(AgentsPanel)
     flushSync()
     await fireEvent.click(getByRole('button', { name: '+ Add tunnel' }))
@@ -503,7 +519,7 @@ describe('your agents and their addresses', () => {
 
   it('adds an address beside the one there, never stopping it', async () => {
     const posted = server()
-    const signedIn = { signedIn: true, signingIn: false, signInUrl: null, said: '' }
+    const signedIn = { signedIn: true, signingIn: false, signInUrl: null, said: '', domain: null }
     set(up({ allowed: [grant({ name: 'Grok Bot' })], cloudflare: signedIn }))
     const { container, getByRole, queryByRole } = render(AgentsPanel)
     flushSync()
@@ -511,7 +527,7 @@ describe('your agents and their addresses', () => {
     // only the kinds that can be added: Tailscale, set up already, is not offered
     expect(queryByRole('radio', { name: /^Tailscale/ })).toBeNull()
     await fireEvent.click(getByRole('radio', { name: /^Cloudflare/ }))
-    expect(container.textContent).toContain('Your address will be agents.')
+    expect(container.textContent).toContain('Your address will be agents on the domain you chose at Cloudflare')
     await fireEvent.click(getByRole('button', { name: 'Continue' }))
     await vi.waitFor(() => expect(posted.find((p) => p.path === '/api/agents/tunnel/start')?.body).toEqual({ provider: 'cloudflare' }))
     expect(posted.find((p) => p.path === '/api/agents/tunnel')?.body).toMatchObject({ provider: 'cloudflare', name: 'agents' })

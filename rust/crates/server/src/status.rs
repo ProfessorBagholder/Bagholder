@@ -55,6 +55,9 @@ pub struct Status {
     /// The agents' address: on or off, its tunnel, the sign-ins waiting on the
     /// person, and every agent that may read (`http::agents`).
     pub agents: crate::http::agents::AgentsStatus,
+    /// The page from anywhere: its address, the email let in, its tunnel
+    /// (`http::remote`).
+    pub remote: crate::http::remote::RemoteStatus,
 }
 
 /// The language model's file downloading: the bytes written of its pinned size.
@@ -144,6 +147,7 @@ pub fn status(app: &Arc<App>) -> Status {
     // the agents' part reads their tables: never while holding the app's state,
     // which a CSV import takes inside its own write
     let agents = crate::http::agents::status(app);
+    let remote = crate::http::remote::status(app);
     let st = app.state.lock().unwrap();
     let connected = st.connected && sess.as_ref().map(|x| !x.access_token.is_empty()).unwrap_or(false);
     let error = failures(&st, &sources);
@@ -179,6 +183,7 @@ pub fn status(app: &Arc<App>) -> Status {
         model_download: bagholder_market::localmodel::downloading().map(|(received, size)| ModelDownload { received, size }),
         notify: notify_status,
         agents,
+        remote,
     }
 }
 

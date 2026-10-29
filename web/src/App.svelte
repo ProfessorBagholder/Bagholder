@@ -27,6 +27,7 @@
   import { cancelConnect, closeNotice, showing, tell, followConnect, loginInput, quiet, updateNow, openAgents } from './lib/ui.svelte'
   import Modals from './lib/Modals.svelte'
   import AgentsPanel from './lib/AgentsPanel.svelte'
+  import RemotePanel from './lib/RemotePanel.svelte'
   import { ui } from './lib/ui.svelte'
   import { resetFilters } from './lib/filters.svelte'
   import OrderTicket from './lib/ticket/OrderTicket.svelte'
@@ -582,4 +583,4 @@
   {#if ui.notesOpen}<NotesPanel onclose={() => (ui.notesOpen = false)} />{/if}
   {#if ui.loginView}<LoginView />{/if}
   {#if ui.confirm}<ConfirmDialog />{/if}
-  {#if ui.modal === 'agents'}<AgentsPanel />{:else if ui.modal}<Modals />{/if}
+  {#if ui.modal === 'agents'}<AgentsPanel />{:else if ui.modal === 'remote'}<RemotePanel />{:else if ui.modal}<Modals />{/if}

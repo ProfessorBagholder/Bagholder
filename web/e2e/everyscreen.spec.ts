@@ -40,6 +40,7 @@ const OPENERS: Record<string, (page: Page) => Promise<void>> = {
   folder: fromMenu('Load folder'),
   clear: fromMenu('Clear data'),
   agents: fromMenu(/^Agents/),
+  remote: fromMenu(/^Open from anywhere/),
   filter: click('Filters'),
 }
 

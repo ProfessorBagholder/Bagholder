@@ -2,7 +2,7 @@
   import { status as statusSlot } from './subs.svelte'
   import { ICONS } from './icons'
   import { THEMES, theme, applyTheme } from './theme.svelte'
-  import { ui, syncNow, refreshSession, connect, disconnect, openTradeModal, importCsv, openFolder, exportCsv, openData, openAgents } from './ui.svelte'
+  import { ui, syncNow, refreshSession, connect, disconnect, openTradeModal, importCsv, openFolder, exportCsv, openData, openAgents, openRemote } from './ui.svelte'
   import { channel, notifyDead, notifyOn, notifySubscribed, notifyTest, notifyToggle, turnOn } from './notes/channel.svelte'
 
   const status = $derived(statusSlot.data)
@@ -41,6 +41,7 @@
     <button class="primary" onclick={connect}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:1"><path d={ICONS.link} /></svg>Connect Wealthsimple</button>
   {/if}
   <button onclick={openAgents}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.robot} /></svg>Agents</button>
+  <button onclick={openRemote}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.globe} /></svg>Open from anywhere</button>
 
   <div class="sep"></div>
   <button onclick={openTradeModal}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.plus} /></svg>Add trade</button>

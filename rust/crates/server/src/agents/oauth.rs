@@ -348,7 +348,7 @@ pub async fn authorize(State(ctx): State<Arc<Ctx>>, Extension(site): Extension<S
 
 /// The head both public pages share: Bagholder's colours, light or dark as the
 /// person's device is, and its card.
-const HEAD: &str = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title><style>:root{color-scheme:light dark;--bg:#eef0f5;--card:#fafafc;--ink:#1b1d27;--dim:rgba(27,29,39,.72);--line:rgba(27,29,39,.12);--accent:#6b5cd6;--on:#eef0f5;--err:#c0505f}\
+pub(crate) const HEAD: &str = "<!doctype html><meta charset=utf-8><meta name=viewport content='width=device-width'><title>Bagholder</title><style>:root{color-scheme:light dark;--bg:#eef0f5;--card:#fafafc;--ink:#1b1d27;--dim:rgba(27,29,39,.72);--line:rgba(27,29,39,.12);--accent:#6b5cd6;--on:#eef0f5;--err:#c0505f}\
 @media (prefers-color-scheme:dark){:root{--bg:#101220;--card:#161826;--ink:#e9e9ed;--dim:rgba(233,233,237,.68);--line:rgba(233,233,237,.14);--accent:#9184d9;--on:#161826;--err:#e0778a}}\
 body{margin:0;background:var(--bg);color:var(--ink);font:16px/1.5 Inter,system-ui,-apple-system,Segoe UI,sans-serif}\
 main{max-width:440px;margin:48px auto;padding:28px;background:var(--card);border:1px solid var(--line);border-radius:12px}\

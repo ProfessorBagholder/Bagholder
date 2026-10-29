@@ -15,7 +15,13 @@ pub struct Files {
 
 impl Files {
     pub fn new(home: &Path) -> Files {
-        Files { dir: home.join("agents-cloudflare") }
+        Files::at(home.join("agents-cloudflare"))
+    }
+
+    /// The same files in another folder of Bagholder's: the page's own tunnel
+    /// (`remote`) keeps its tunnel there, apart from the agents'.
+    pub fn at(dir: PathBuf) -> Files {
+        Files { dir }
     }
 
     /// The sign-in `tunnel login` writes: under the home it is given.
@@ -106,6 +112,20 @@ impl Files {
         made(&said).or_else(|| address.contains('.').then(|| address.to_ascii_lowercase())).ok_or_else(|| "Cloudflare didn’t say the address it made: type the whole address, such as agents.yourdomain.com.".into())
     }
 
+    /// The sign-in `from` holds, copied here: one sign-in serves both tunnels, and
+    /// each keeps its own copy so removing one never strands the other.
+    pub fn take_sign_in(&self, from: &Files) -> Result<(), String> {
+        if self.signed_in() {
+            return Ok(());
+        }
+        if !from.signed_in() {
+            return Err("Sign in to Cloudflare first.".into());
+        }
+        self.prepare()?;
+        std::fs::copy(from.cert(), self.cert()).map_err(|e| format!("Cloudflare’s sign-in could not be copied: {e}"))?;
+        self.secure()
+    }
+
     /// What the sign-in lets Bagholder do at Cloudflare's API: read from the block
     /// cloudflared writes into it, and never kept anywhere else.
     pub fn access(&self) -> Option<Access> {
@@ -127,12 +147,23 @@ impl Files {
     }
 
     /// Everything of Bagholder's for Cloudflare on this computer gone: the sign-in,
-    /// the tunnel's credentials and its name.
+    /// the tunnel's credentials, its name and its config. The connector Bagholder
+    /// installed in the folder (`install::path`) stays: the page's own tunnel runs it too.
     pub fn forget(&self) -> Result<(), String> {
-        match std::fs::remove_dir_all(&self.dir) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("{} could not be removed: {e}", self.dir.display())),
+        let gone = |r: std::io::Result<()>, p: &Path| match r {
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("{} could not be removed: {e}", p.display())),
             _ => Ok(()),
+        };
+        let signed = self.dir.join(".cloudflared");
+        gone(std::fs::remove_dir_all(&signed), &signed)?;
+        for f in [self.credentials(), self.name_file(), self.config()] {
+            gone(std::fs::remove_file(&f), &f)?;
         }
+        // the folder itself, once nothing else is in it
+        if std::fs::read_dir(&self.dir).is_ok_and(|mut d| d.next().is_none()) {
+            return gone(std::fs::remove_dir(&self.dir), &self.dir);
+        }
+        Ok(())
     }
 
     /// The command that runs the tunnel Bagholder made, to `target`.
@@ -143,12 +174,14 @@ impl Files {
     }
 }
 
-/// The domain the sign-in was made for, and the token cloudflared was given for
-/// Cloudflare's API.
+/// The domain the sign-in was made for, its account, and the token cloudflared was
+/// given for Cloudflare's API.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Access {
     pub zone: String,
     pub token: String,
+    /// The account the domain is in.
+    pub account: String,
 }
 
 /// The access a sign-in holds: its `ARGO TUNNEL TOKEN` block, base64 of JSON
@@ -157,7 +190,7 @@ pub fn access_of(pem: &str) -> Option<Access> {
     let body = pem.split("-----BEGIN ARGO TUNNEL TOKEN-----").nth(1)?.split("-----END ARGO TUNNEL TOKEN-----").next()?;
     let v: serde_json::Value = serde_json::from_slice(&base64(body)?).ok()?;
     let text = |k: &str| v.get(k).and_then(serde_json::Value::as_str).map(str::to_string).filter(|s| !s.is_empty());
-    Some(Access { zone: text("zoneID")?, token: text("apiToken")? })
+    Some(Access { zone: text("zoneID")?, token: text("apiToken")?, account: text("accountID")? })
 }
 
 /// Standard base64, whitespace between its lines skipped; none where it is not.
@@ -209,7 +242,7 @@ pub fn sign_in_url(line: &str) -> Option<String> {
 pub fn plain(said: &str) -> String {
     let l = said.to_ascii_lowercase();
     if l.contains("already exists") && l.contains("record") {
-        "That address is already used on your Cloudflare domain: pick another name, such as agents2.yourdomain.com.".into()
+        "That name is already used on your domain: use a different name.".into()
     } else if l.contains("zone") && (l.contains("not found") || l.contains("could not find") || l.contains("does not belong")) {
         "That address isn’t on the domain you signed in with: use a name that ends in that domain.".into()
     } else {

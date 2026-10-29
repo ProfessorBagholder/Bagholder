@@ -188,7 +188,8 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
         t.iter().map(|(p, x)| (*p, x.state())).collect()
     };
     out.tailscale = app.agents.tailscale();
-    out.cloudflare = app.agents.cloudflare_says(&app.home);
+    let events = app.events.clone();
+    out.cloudflare = app.agents.cloudflare_says(&app.home, Arc::new(move || events.signal()), Arc::new(zone_name));
     out.refused = app.agents.ctx().map(|c| agents::listener::strangers(&c)).unwrap_or_default().into_iter().map(|(why, n)| RefusedCount { why, count: n.min(u32::MAX as u64) as u32 }).collect();
     out.computer = tunnel::computer();
     out.os = std::env::consts::OS.to_string();
@@ -414,7 +415,12 @@ async fn remove_tunnel(State(state): State<AppState>, Required(asked): Required<
 /// (one pointing anywhere else is the person's, and stays), the tunnel, and
 /// Bagholder's sign-in there. `dns` deletes the record (`delete_record`).
 fn remove_cloudflare(home: &std::path::Path, address: Option<&str>, dns: &dyn Fn(&agents::cloudflare::Access, &str, &str) -> Result<(), String>) -> Result<(), String> {
-    let cf = agents::cloudflare::Files::new(home);
+    remove_made(&agents::cloudflare::Files::new(home), home, address, dns)
+}
+
+/// What Bagholder made at Cloudflare with the files `cf` (the agents' or the
+/// page's own), removed as `remove_cloudflare` says.
+pub(crate) fn remove_made(cf: &agents::cloudflare::Files, home: &std::path::Path, address: Option<&str>, dns: &dyn Fn(&agents::cloudflare::Access, &str, &str) -> Result<(), String>) -> Result<(), String> {
     if let (Some(address), Some(id), Some(access)) = (address, cf.tunnel_id(), cf.access()) {
         dns(&access, address, &format!("{id}.cfargotunnel.com")).map_err(|e| format!("Cloudflare’s address {address} couldn’t be deleted: {e}"))?;
     }
@@ -423,6 +429,22 @@ fn remove_cloudflare(home: &std::path::Path, address: Option<&str>, dns: &dyn Fn
         cf.delete_tunnel(&program.display().to_string())?;
     }
     cf.forget()
+}
+
+/// The name of the domain the sign-in was made for, as Cloudflare's API says it:
+/// the sign-in holds only its id.
+pub(crate) fn zone_name(access: &agents::cloudflare::Access) -> Result<String, String> {
+    let auth = format!("Bearer {}", access.token);
+    let headers = [("Authorization", auth.as_str()), ("Accept", "application/json")];
+    let url = format!("https://api.cloudflare.com/client/v4/zones/{}", access.zone);
+    let said = bagholder_net::client::request("GET", &url, &headers, None, std::time::Duration::from_secs(30)).map_err(|e| e.to_string())?;
+    let v: serde_json::Value = serde_json::from_slice(&said.body).map_err(|e| format!("Cloudflare’s answer could not be read: {e}"))?;
+    zone_name_of(&v).ok_or_else(|| "Cloudflare’s answer named no domain.".into())
+}
+
+/// The domain's name in Cloudflare's answer for a zone (`result.name`).
+pub(crate) fn zone_name_of(v: &serde_json::Value) -> Option<String> {
+    v.pointer("/result/name").and_then(serde_json::Value::as_str).map(|n| n.trim_end_matches('.').to_ascii_lowercase()).filter(|n| agents::fetch::dns_name(n))
 }
 
 /// The CNAME records named `address` that point at `target`: the ones Bagholder
@@ -436,7 +458,7 @@ fn ours(listed: &serde_json::Value, target: &str) -> Vec<String> {
 
 /// The address's DNS record deleted through Cloudflare's API with the sign-in's
 /// token, only where it points at `target`.
-fn delete_record(access: &agents::cloudflare::Access, address: &str, target: &str) -> Result<(), String> {
+pub(crate) fn delete_record(access: &agents::cloudflare::Access, address: &str, target: &str) -> Result<(), String> {
     let auth = format!("Bearer {}", access.token);
     let headers = [("Authorization", auth.as_str()), ("Accept", "application/json")];
     let records = format!("https://api.cloudflare.com/client/v4/zones/{}/dns_records", access.zone);
@@ -879,8 +901,8 @@ mod tests {
 
     /// Removing Cloudflare's server deletes what Bagholder made there, as the
     /// person asked by removing it: the address's record (only one pointing at its
-    /// tunnel), the tunnel, then its sign-in here. A deletion Cloudflare refuses
-    /// keeps it all, so it can be removed again.
+    /// tunnel), the tunnel, then its sign-in here; the connector Bagholder installed
+    /// stays. A deletion Cloudflare refuses keeps it all, so it can be removed again.
     #[cfg(unix)]
     #[test]
     fn removing_cloudflare_s_server_deletes_its_address_tunnel_and_sign_in_there() {
@@ -900,7 +922,7 @@ mod tests {
             (home, dir, log)
         };
         let (home, _, _) = made();
-        assert_eq!(agents::cloudflare::Files::new(home.path()).access(), Some(agents::cloudflare::Access { zone: "zone-1".into(), token: "token-1".into() }));
+        assert_eq!(agents::cloudflare::Files::new(home.path()).access(), Some(agents::cloudflare::Access { zone: "zone-1".into(), token: "token-1".into(), account: "acct".into() }));
 
         let (home, dir, log) = made();
         let asked = std::sync::Mutex::new(Vec::new());
@@ -912,7 +934,8 @@ mod tests {
         assert_eq!(asked.into_inner().unwrap(), vec![("zone-1".to_string(), "token-1".to_string(), "agents.example.com".to_string(), "t-1.cfargotunnel.com".to_string())]);
         let said = std::fs::read_to_string(&log).unwrap();
         assert!(said.contains("tunnel") && said.contains("delete -f bagholder-x"), "{said}");
-        assert!(!dir.exists(), "the sign-in and the tunnel's credentials are gone");
+        assert!(!dir.join(".cloudflared").exists() && !dir.join("tunnel.json").exists() && !dir.join("tunnel-name").exists(), "the sign-in and the tunnel's credentials are gone");
+        assert!(crate::agents::install::path(home.path(), Provider::Cloudflare).unwrap().exists(), "the connector Bagholder installed stays: the page's own tunnel runs it too");
 
         let (home, dir, log) = made();
         let e = remove_cloudflare(home.path(), Some("agents.example.com"), &|_, _, _| Err("offline".into())).unwrap_err();

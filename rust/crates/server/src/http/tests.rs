@@ -129,6 +129,72 @@ fn test_a_name_listed_for_a_proxy_is_answered_from_this_machine_alone() {
     });
 }
 
+/// The page's address from anywhere set up, until the test ends (`remote`).
+struct Remote;
+
+impl Remote {
+    fn on() -> Remote {
+        let a = app();
+        a.remote.keep(&a.home, crate::remote::tests::kept()).unwrap();
+        Remote
+    }
+}
+
+impl Drop for Remote {
+    fn drop(&mut self) {
+        let a = app();
+        a.remote.keep(&a.home, Default::default()).unwrap();
+    }
+}
+
+/// The page's address from anywhere is let in on Access's token for this
+/// application and the email named, from the tunnel on this machine, and on
+/// nothing else, listed for a proxy or not; the page on this machine is as ever.
+#[test]
+fn test_the_page_s_address_lets_in_access_s_token_for_its_email_alone() {
+    use crate::remote::tests::{claims, head, key, signed};
+    let _g = guard();
+    let local = [127, 0, 0, 1];
+    let now = bagholder_core::jiff::Timestamp::now();
+    let (k, keys) = key("k1");
+    let _on = Remote::on();
+    app().remote.set_keys(keys);
+    let token = signed(&k, head("k1"), claims(now));
+    let at = |method: Method, uri: &str, body: Option<&str>, jwt: Option<&str>, peer: [u8; 4]| {
+        let mut r = through(method, uri, body, "app.example.com", peer);
+        if let Some(t) = jwt {
+            r.headers_mut().insert("cf-access-jwt-assertion", t.parse().unwrap());
+        }
+        r
+    };
+    runtime().block_on(async {
+        // no token: one sentence, and nothing of the page
+        let (code, _, body) = send(at(Method::GET, "/api/status", None, None, local)).await;
+        assert_eq!(code, StatusCode::FORBIDDEN);
+        let body = String::from_utf8_lossy(&body).to_string();
+        assert!(body.contains("Only the person who set up this Bagholder can open it") && !body.contains("\"ok\""), "{body}");
+        assert_eq!(send(at(Method::GET, "/", None, None, local)).await.0, StatusCode::FORBIDDEN, "the page itself");
+        // Access's token for the email: a read, and a write from the page
+        assert_eq!(json_of(at(Method::GET, "/api/status", None, Some(&token), local)).await.0, StatusCode::OK);
+        assert_eq!(json_of(at(Method::POST, "/api/events/watch", Some("{}"), Some(&token), local)).await.0, StatusCode::OK);
+        // signed in, a write not from the page
+        let mut forged = at(Method::POST, "/api/events/watch", Some("{}"), Some(&token), local);
+        forged.headers_mut().remove("sec-fetch-site");
+        assert_eq!(send(forged).await.0, StatusCode::FORBIDDEN, "a write not from the page");
+        // another email's token, a key the team never had, and the tunnel's name from another machine
+        let mut theirs = claims(now);
+        theirs["email"] = json!("someone@example.com");
+        assert_eq!(send(at(Method::GET, "/api/status", None, Some(&signed(&k, head("k1"), theirs)), local)).await.0, StatusCode::FORBIDDEN, "another email");
+        assert_eq!(send(at(Method::GET, "/api/status", None, Some(&signed(&k, head("k2"), claims(now))), local)).await.0, StatusCode::FORBIDDEN, "a key the team never had");
+        assert_eq!(send(at(Method::GET, "/api/status", None, Some(&token), [192, 168, 1, 20])).await.0, StatusCode::FORBIDDEN, "not from this machine");
+        // listed for a proxy as well: still Access's token alone
+        let _listed = Listed::names(&["app.example.com"]);
+        assert_eq!(send(at(Method::GET, "/api/status", None, None, local)).await.0, StatusCode::FORBIDDEN, "listed, no token");
+        // the page on this machine as ever
+        assert_eq!(json_of(from_the_page(Method::GET, "/api/status", None)).await.0, StatusCode::OK);
+    });
+}
+
 /// The agents' public name is never answered by the page, even listed for a proxy:
 /// the page's Allow and Deny cannot be reached through the agents' tunnel.
 #[test]
