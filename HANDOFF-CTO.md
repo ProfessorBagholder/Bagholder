@@ -1,6 +1,6 @@
 # Handoff: the CTO session for Bagholder
 
-Written 2026-10-18 by the CTO session that ran on the owner's Mac; section 2 last rewritten 2026-10-26; and the home-server lessons updated the same day by the home-server CTO session for the next one. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
+Written 2026-10-18 by the CTO session that ran on the owner's Mac; section 2 last rewritten 2026-10-29; and the home-server lessons updated the same day by the home-server CTO session for the next one. Read this whole file once, then `CLAUDE.md`, `docs/decisions.md`, `SPEC.md` (as needed), `docs/architecture.md` and `briefs/reference.md` on the `architecture-briefs` branch.
 
 The old session's memory (about 95 notes) lived only on the Mac. Everything in it that still matters is folded in below. Where a rule is already in the repo's `CLAUDE.md`, this file points to it and does not restate it.
 
@@ -22,100 +22,67 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-27 ~22:30 UTC, written by the home-server CTO session)
+## 2. Where things stand (2026-10-29 ~15:00 UTC, written by the home-server CTO session)
 
-### Released, newest first (`gh release list` is the truth)
-- **v2.11.5** (#643, merge dcd86f17; published 2026-10-27 ~22:40 UTC, Latest, 8 assets): a run's first sync restates every history (`pull_restating`; `App::history_restated` set once that pull completes, whatever failed in it). The header keeps only the units lines and the "took more" lines. The owner was told to update. **Then check their book on the Mac (below); a reminder fires at 23:49 UTC.**
-- **v2.11.4** (#642): an account's history is read whole whenever its day is due, over every id it has had (the closed one too).
-- **v2.11.3** (#641); **v2.11.2** (#640: the local model stops with the app); **v2.11.0** (#636: `BAGHOLDER_HOSTS`).
-- **#644 merged** (40748cd5), tests only: closing the filters is its own measured interaction in `dataflow.spec.ts`, so its watch (the popover watches the holdings) is never counted in the idle minute. Proven with a plant that issues every page request 300 ms late.
+Private details (the preview's address, the owner's domain, paths) are in the session's local memory, `bagholder-preview-state.md`: never in this public file.
 
-### The chart spike's cause (proven with read-only ratio reads of the owner's book)
-- 2.10.2 re-read the history of accounts with two Wealthsimple ids on one id, and stored years of `account_days` at zero;
-- the pull read history only from `last + 1`, so those days were never read again;
-- 2.10.4 summed both ids for new days, so the charts jumped at the end.
+### Released
+- **v2.13.0** is Latest (`gh release list` is the truth). It has agents anywhere and the first agents panel.
 
-#642 and #643 state those days again.
+### In flight: #650, release 2.14.0
+- Branch `agents-panel`, worktree `ux` under the session's scratchpad. Head **8c7ad639**.
+- **The Architect cleared #650 at 3e559b8f**: "merge it on green checks and release 2.14.0 as Latest". Since then, each told to the Architect:
+  - 38ba9de6: no browser tooltips (`src/no_title.test.ts`);
+  - 8c7ad639: `tests/agents_restart.rs` uses the per-tunnel routes, and the routes' golden blanks the computer's name and system.
+- **The draft release v2.14.0 exists**, with plain-words notes.
+- **On green CI on the head:** merge (a merge commit, as #639 was). `release.yml` then builds and publishes the draft as Latest. **Tell the Architect the moment it is Latest**; the Architect tells the owner what to try.
+- **What #650 holds:** the PR body lists it. In short:
+  - the Agents panel redesigned: agents and tunnels, each with a page;
+  - "Which tunnel should make Bagholder's MCP server reachable for …?", with Change tunnel and Reconnect taking the same step;
+  - several tunnels at once;
+  - the typed-code sign-in (brief 81);
+  - keys bound to one tunnel (migration 44);
+  - Bagholder installing ngrok and cloudflared;
+  - Remove tunnel deleting Cloudflare's tunnel and DNS record;
+  - the Tailscale clash retried;
+  - agents reading stats, income, exposure, net worth, chequing and card transactions (companies only, never a person), markets, and account types;
+  - the sign-in page saying all an agent reads;
+  - refusals in plain words;
+  - credentials 0600/0700.
 
-### In flight
-- **#639 agents anywhere → v2.12.0** (branch `agents-anywhere`, worktree `aa`, head 750eff32, master merged): brief 80 and its re-review (b64f563d, items 1-15) all in, each with a test and a plant; PR text from `scratchpad/pr639-new.md` (it has both tables). **Waiting:** CI (watcher) and the Architect's clearance. Then merge, release 2.12.0, and **tell the Architect the moment it is published**.
-- **Brief 79's build** (branch `amounts-as-stated`, worktree `am`, not pushed; plan #645 merged with the Architect's five conditions). Done and committed:
-  - 6e2b9963: the monthly statements, the broker check, the gate and Bagholder's own cash removed; the first pull withdraws statement records (`pull::withdraw_statement_records`); `StatementMapping` kept for migration 039;
-  - a87de427: holdings from what Wealthsimple states (`engine/src/stated.rs`, `holdings` takes no records), linked to the journal's open lots; positions read as of today for every account in one request with the balances (`pull::store_holdings`), as of yesterday at the day's pull; held/quoted/payers follow the stated holdings; book value's currency on the wire (`bookCurrency`); the engine case harness states what the journal holds where a case states no holdings; the log line on differing cash (`say_cash_differs`);
-  - bbec2c75: a units statement keeps its read's cash; `Book::units_days`.
-  - **Left:** past days (§2.4): `BrokerAccount` days from `units_days`; Past from stated days (no journal link); `portfolio_as_of` cash from the day's read; net worth past debts from day reads for accounts that can owe; **cards keep `CashByDay`** (the Architect's call: option 1, named in code/test/PR as the one past figure still worked back; option 3, whether the net worth feature answers a WS card id by day, goes on the list to record); on-demand reads (needs → broker_reads, one request a second, only while the positions document is watched); then tests 1-8 of the plan, goldens, docs, the PR. `engine/tests/debts.rs` fails until past days are done.
-  - The owner's answer on Book/Avg currency for US listings is pending (the Architect asked them).
+### After the release: cleanup
+- The owner presses **Remove tunnel** on the preview's Cloudflare tunnel, once done testing. It deletes the test tunnel and DNS record in their Cloudflare account through the new code. Never do this for them.
+- Then:
+  - stop the preview;
+  - delete `scratchpad/preview`, `scratchpad/agents-shots` and the `ux` worktree (after the merge);
+  - delete this `handoff` worktree once pushed.
+- Nothing is left in `/tmp` beyond the scratchpad. The cargo cache cap runs every 15 minutes from the user's crontab.
 
-### Checking the owner's book on their Mac
-- **The owner's words (2026-10-27):** "a local session can poll the db to get the data it needs… it can launch the real app on my mac and verify what the browser shows. why do you keep putting more back on me?" Verify there yourself; never hand the owner a step.
-- **Reads:** `sqlite3 -readonly` on the book only. Report ratios, dates and labels: never amounts, ids, names or account nicknames.
-- **Never read** the sign-in, `session.json`, or anything a request made with the sign-in returns. The Mac's permission check refuses it ([PII Data Handling]), rightly. Never ask a bridge session to read or change Claude's settings ([Auto-Mode Bypass]).
-- **The check after 2.11.5:** for each account, the combined series has no step on the day the history is restated, and no run of zero days inside an open account's life.
-- **How:** find the Mac's bridge with `list_environments`. One full first prompt: quote the owner's words, include the cleanup block, and archive the session after its report.
+### Next, in order
+1. 2.14.0 out (above).
+2. **The page from anywhere** (the owner, 2026-10-29: a feature anyone can switch on, and they want it for theirs):
+   - Bagholder's page through its own Cloudflare tunnel, behind Cloudflare Access with GitHub sign-in;
+   - Bagholder checks the Access JWT on every request through it.
+   - The plan is drafted at `scratchpad/page-from-anywhere.md`. Open it as a PR (`docs/plans/page-from-anywhere.md`) from master, send it to the Architect, then build it with a preview.
+   - The owner runs production on their Mac (the server is slow), so it is reachable while the Mac is awake.
+3. Then:
+   - long/short shown on the Trades page, with covered call, cash-secured put and uncovered labels (decided);
+   - the filings test that crashes at exit and leaves temp files (own PR);
+   - line-tables-only debug builds;
+   - Bagholder updating the ngrok/cloudflared it installed.
 
-### Next, in order (the owner's go, 2026-10-27: "tell CTO to go ahead with all that")
-1. #643 → 2.11.5, then the check on the Mac.
-2. #639 → 2.12.0.
-3. (The sign-in at start is fixed on master: 3903a528, "Only Wealthsimple's refusal ends a sign-in; no answer leaves it standing", with the log line saying why one ends.)
-4. **Brief 79** (architecture-briefs, `briefs/79-amounts-as-wealthsimple-states-them.md`, amended at b73a9106; read it whole first). The capture is withdrawn. The plan decides §3's points from the code and the recorded replies, naming the basis of each, and names every file removed and every test kept. Then one build PR, released MINOR. The research started 2026-10-27.
-5. **agents-every-tunnel:** Cloudflare without a terminal, after #639.
-6. The cleanup PR (below).
-7. Previews over Funnel (below).
-- `capture-79-script`, `scratchpad/cap79`, `pull-broker-capture` and `scratchpad/cap` are gone; the capture is withdrawn for good.
-- After #639's guard lands, the local model starts through the guard and main's call goes (one mechanism). The stop after a failed start stays.
-
-### Previews (brief 78 §2 amended by the owner, architecture-briefs 750fcf76)
-- **The link:** Tailscale Funnel on this server's tailnet, https://<machine>.<tailnet>.ts.net[:port]. No Cloudflare and no domain.
-- **Ports:** each preview gets one of 443, 8443 and 10000, so at most three at once. The agents' Funnel takes one while it runs. Here, Traefik holds 443.
-- **`BAGHOLDER_HOSTS`:** the name exactly as the Host header carries it, with `:8443`/`:10000`.
-- **Content:** no login, so a made-up book with `DRY_ORDERS` only.
-- **Lifetime:** foreground only. Afterwards `tailscale funnel status` shows nothing of the preview's.
-- The Cloudflare Access gate is only for the main copy's fixed link, later. The order: agents → brief 79 → the cleanup PR → previews.
-
-### Small follow-up for the next commit to master
-- `events.rs`: `test_a_page_opening_wakes_the_figure_path_with_quotes_owed` (#641) went in under the doc comment of `test_quotes_are_owed_while_a_page_is_open_whatever_it_shows`. Move that test's own comment back above it (the Architect, not a condition).
-
-### The cleanup PR (the Architect's ruling, 2026-10-27; after the agents build, one PR, no owner decision)
-For each removal, the PR says why nothing calls it: a function nothing calls can be a missing call (#640 was one).
-1. Remove four functions nothing calls on 920d24a:
-   - `core/src/bracket.rs:1138` `bracket::settle`;
-   - `model/src/filters.rs:89` `Filters::key`;
-   - `model/src/input.rs:278` `Listing::to_value`;
-   - `wealthsimple/src/generated.rs:1724` `Generated::statement_closing`.
-2. `model/src/symbols_of.rs:59` `migrate_legacy_notes` is called only by model/tests/model.rs:1318. Remove both, unless it should still run.
-3. `broker/src/statements.rs:1084`: `checked_sub(book).expect(...)` goes through the loop's `too_large` path.
-4. `server/src/update.rs:226`: `kept.expect("asked with its ETag")`. A 304 to a request without an ETag is a failed check, not a panic.
-5. `market/tests/listing_isolation.rs:163` uses `unwrap_or_default` (denied): fix it. Then measure `clippy --all-targets`. If clean, widen CI's gate to `--all-targets` in this PR; if not, it stays with PR B.
-
-### Delegated
-- **PR A (#630): merged** (cc28ea70), no release. It covers the exponent cap, `take_frame` returning `io::Result`, four clippy denies, and CI's clippy running with `--features bagholder-ws/standin` (the Architect's condition).
-- **PR B** (the wider lints): after brief 77.
-
-### Other follow-ups
-- **The intermittent `.tmpXXXXXX` leftover** (macOS and Linux suites): still not found. `bin/check-test-leftovers.sh` now lists every path left (#643): when it fails, the listing names the test. Fix it; never rerun.
-- The header's lines come in a different order from one opening to the next (#628 sorts them in the golden file only). This needs an owner decision before anything visible changes; after brief 79 only the "took more" lines are left.
-- `take_back_2_10_9`, `READ_BY_2_10_9` and the version-36 carry of a superseded coin fill go with brief 79's removal of the statements.
-- Older items, not rechecked: the `install-check` branch, the short-interest bug (options sent to FINRA), PR #589, and the open dependabot PRs.
-
-### Delegation, learned today
-- Cloud sessions cannot message back. Never tell one to `send_message`; say "ask for no permission"; read its transcript. Start one on a branch pushed beforehand (`source_revision` + `outcome_branch`), because its classifier refuses `git switch -c`.
-- Never archive a session before its report reaches me.
-- **The Mac gate.** Run it from a bridge named `air:Bagholder:…`; look it up with `list_environments`. Then:
-  - Back up a read-only copy with `sqlite3 -readonly .backup`.
-  - Build both versions from a clone. For a walk fix, the candidate gets `--features pull-broker`, and `pull-broker <copy> --statements-only` runs before it opens.
-  - Run each server inside one polling shell with `BAGHOLDER_EXIT_WITH=$$`; never use `kill`.
-  - Offline the app never reports ready, so stop polling once `error` has been unchanged for 60 s.
-  - Report the walk's whole output.
-- **Merging.** A merge whose commit writes a new workflow file blob is refused (the token has no `workflow` scope). Merge master into the branch first and push; git pushes are allowed.
-
-### Workspace
-- Worktrees in this session's scratchpad: `aa` (#639), `aa2` (`agents-every-tunnel`, after #639), `hn` (#643; remove with its branch once merged), `g558` (paused, the owner's call), `ho` (this file).
-- The shared cargo target is `/tmp/claude-1005/-home-md-dev/2645431b-0517-51b8-a5b6-289b4b14d9d0/scratchpad/cargo-target`. It was removed at 196 GB on 2026-10-26 because the disk filled; on 2026-10-27 its `debug/incremental` (19 GB) was removed, leaving 16 GB. Keep it under ~30 GB (`du -sh`), and remove it when the day's branches merge. Build with `RUSTC_WRAPPER= CARGO_TARGET_DIR=<it> flock -o /tmp/bagholder-build.lock nice -n 10 cargo …`, and only the named tests a change touches. The server crate is a bin: `-p bagholder-server --bin bagholder <filter>`.
-
-### How a release goes (all delegated: Architect clearance + green checks = merge and release)
-- The version bump goes inside the fix PR, so CI runs once: `rust/Cargo.toml` `version`, `rust/crates/server/src/app.rs` `APP_VERSION`, `rust/crates/server/tests/golden/routes.json` `"version"`, then `cargo update --workspace --offline`.
-- Merge with `gh api -X PUT repos/ProfessorBagholder/Bagholder/pulls/N/merge -f merge_method=merge -f sha=<cleared head>`.
-- Then `gh release create vX.Y.Z --target <merge sha> --prerelease --title vX.Y.Z --notes "…"`. release.yml builds 8 assets and marks it Latest; confirm with `gh release view` and `gh api repos/ProfessorBagholder/Bagholder/releases/latest` before telling the owner it is out.
+### Lessons from this release (how the owner wants it)
+- **The preview first.** A link only once you have seen it show the change. Every reply after a preview change starts "Ready to test: reload <link>" or "Not ready yet: …". No scripts or hooks to enforce basics: just do it.
+- **Tool-call descriptions are read as what is happening.** Say plainly what the command does. A code change says it is a code change, never "Delete Cloudflare's tunnel…".
+- **Design is yours to decide**, after looking at how the best apps do it:
+  - one term per thing on every screen (the ways in are **tunnels**, and an **address** is the URL a tunnel gives);
+  - no reassurance blurbs;
+  - read every line of text before showing a screen.
+- **Answer the question asked, first** (the owner asked whether two button styles were normal; the answer was a consistency pass).
+- **Before pushing:**
+  - `npm test` (the whole page suite, `src/no_title.test.ts` included) and `npm run check` (CI's svelte-check with `tsconfig.app.json`);
+  - the server's integration tests in `crates/server/tests/` when routes change.
+  - CI found three failures this release that local runs had skipped.
 
 ## 3. How the owner wants to be worked with
 
