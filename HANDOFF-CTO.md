@@ -27,10 +27,11 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 Private details (the preview's address, the owner's domain, paths) are in the session's local memory, `bagholder-preview-state.md`: never in this public file.
 
 ### Released
-- **v2.14.0 is Latest** (published 2026-10-29 16:37 UTC at the merge e6f3bc02; #650 at 55059be1; 8 assets). The macOS suite failed twice, each on a different timing flake in a test #650 doesn't touch (below); every macOS test passed in one of the two runs. The owner chose to publish with the workflow's own `gh release edit … --draft=false --latest` rather than run a third time. The Architect has been told.
+- **v2.15.0 is Latest** (2026-10-29 21:57 UTC, merge a45f6fc2, #651): Open from anywhere. The page at an address on the person's Cloudflare domain, behind Cloudflare Access with a GitHub sign-in of Bagholder's own; Bagholder checks Access's signed pass on every request. The release run passed every job on its first try, macOS and Windows included. Plan as built: `docs/plans/page-from-anywhere.md`; decisions: `docs/decisions.md` 2026-10-29.
+- v2.14.0 (agents panel rebuild) before it, the same day.
 
 ### After the release: cleanup
-- The preview is stopped (its 2 h task limit). Start it again (local memory `bagholder-preview-state.md`) only when the owner is ready to press **Remove tunnel** on its Cloudflare tunnel. It deletes the test tunnel and DNS record in their Cloudflare account through the new code. Never do this for them.
+- The preview still runs #651's build with Open from anywhere set up at the owner's address (private details in local memory `bagholder-preview-state.md`). When the owner moves it to their Mac, they press Remove in the preview first; then stop the preview and delete its files and worktrees. It deletes the test tunnel and DNS record in their Cloudflare account through the new code. Never do this for them.
 - Then:
   - stop the preview;
   - delete `scratchpad/preview`, `scratchpad/agents-shots` and the `ux` worktree (after the merge);
