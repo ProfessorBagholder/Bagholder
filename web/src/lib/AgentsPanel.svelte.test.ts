@@ -389,8 +389,15 @@ describe('your agents and their addresses', () => {
     expect(container.querySelector('.ag-facts')?.textContent).toContain('Added')
     // its reads, asked as the page opens: no button to see them
     await vi.waitFor(() => expect(container.textContent).toContain('No activity yet.'))
-    // nothing to do while it works: no actions beside its address
+    // while it works: its server can be changed, and nothing needs reconnecting
     expect(container.textContent).not.toContain('Reconnect')
+    await fireEvent.click(getByRole('button', { name: 'Change server' }))
+    expect(container.querySelector('h5')?.textContent).toBe('Change Cursor’s server')
+    expect(container.textContent).toContain('Which server should Cursor use?')
+    // the server it uses now is not one to change to
+    expect((getByRole('radio', { name: /^Tailscale/ }) as HTMLButtonElement).disabled).toBe(true)
+    expect(getByRole('radio', { name: /^Tailscale/ }).textContent).toContain('Cursor uses it now')
+    await fireEvent.click(getByRole('button', { name: 'Back' }))
     // Remove asks once more, and Cancel keeps it
     await fireEvent.click(getByRole('button', { name: 'Remove agent' }))
     expect(container.textContent).toContain('Remove Cursor? It won’t be able to read your Bagholder anymore.')

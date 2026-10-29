@@ -102,6 +102,8 @@
   const usingAddr = $derived(addresses.find((a) => a.provider === using) ?? null)
   /** an agent reconnected at another server: its sign-in there replaces the one it had */
   let moving = $state<Connected | null>(null)
+  /** what the steps are called while it is: Reconnect one that can't reach Bagholder, else changing its server */
+  let movingTitle = $state('')
   /** a new server was set up on the way: Back from adding it goes to it getting ready */
   let walked = $state(false)
   function fromAgent() {
@@ -132,6 +134,7 @@
   const notFor = (p: Provider): string => {
     const a = existing(p)
     if (a && reachFor !== 'connect') return 'Already set up'
+    if (a && moving && addressOf(moving)?.provider === p) return `${moving.name} uses it now`
     if (a && !works(a, kind)) return 'Claude.ai needs port 443, and this one is on 8443'
     if (a && !up(a)) return status(a)
     if (!a && p === 'tailscale' && reachFor === 'connect' && kind === 'claude' && port443Taken) return 'Claude.ai needs port 443, which another program is using'
@@ -309,10 +312,11 @@
   }
   /** Reconnect: the same server step as connecting one, its sign-in at the server
    * picked replacing the one it has */
-  function reconnect(c: Connected) {
+  function reconnect(c: Connected, title: string) {
     allowedBefore = new Set(st?.allowed.map((a) => a.id) ?? [])
     made = null
     moving = c
+    movingTitle = title
     kind = kindOf(c)
     toReach('connect', 'manage')
   }
@@ -507,7 +511,7 @@
         <h5 id="agTitle" class="ag-manage-head">{PROVIDER[viewed.provider]}</h5>
         <span class="ag-pill" class:ok={s === 'Ready'} class:bad={s === 'Stopped'} class:off={s === 'Off' || s === 'Not running'}>{s}</span>
       {:else}
-        <h5 id="agTitle">{view === 'home' || view === '' ? 'Agents' : reachFor !== 'connect' && (view === 'reach' || view === 'ready') ? 'Add a server' : view === 'agent' ? 'Connect an agent' : view === 'done' ? `Connect ${doneName || agentName}` : moving ? `Reconnect ${moving.name}` : `Connect ${agentName}`}</h5>
+        <h5 id="agTitle">{view === 'home' || view === '' ? 'Agents' : reachFor !== 'connect' && (view === 'reach' || view === 'ready') ? 'Add a server' : view === 'agent' ? 'Connect an agent' : view === 'done' ? `Connect ${doneName || agentName}` : moving ? movingTitle : `Connect ${agentName}`}</h5>
       {/if}
       <button class="tk-x" aria-label="Close" onclick={closeModal}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.x} /></svg></button>
     </div>
@@ -578,7 +582,8 @@
             {:else}
               <span class="muted">Not used yet</span>
             {/if}
-            {#if cantReach(c)}<button class="btn btn-primary ag-sm ag-fix" onclick={() => reconnect(c)}>Reconnect</button>{/if}
+            {#if cantReach(c)}<button class="btn btn-primary ag-sm ag-fix" onclick={() => reconnect(c, `Reconnect ${c.name}`)}>Reconnect</button>
+            {:else}<button class="ag-link ag-block" onclick={() => reconnect(c, `Change ${c.name}’s server`)}>Change server</button>{/if}
           </dd>
           <dt>Added</dt>
           <dd>{longDay(c.madeAt)}{c.way === 'sign-in' && c.who ? `, through ${c.who}` : ''}</dd>
