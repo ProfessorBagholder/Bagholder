@@ -27,29 +27,7 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 Private details (the preview's address, the owner's domain, paths) are in the session's local memory, `bagholder-preview-state.md`: never in this public file.
 
 ### Released
-- **v2.13.0** is Latest (`gh release list` is the truth). It has agents anywhere and the first agents panel.
-
-### In flight: #650, release 2.14.0
-- Branch `agents-panel`, worktree `ux` under the session's scratchpad. Head **55059be1**.
-- **The Architect cleared #650 at 3e559b8f**: "merge it on green checks and release 2.14.0 as Latest". Since then, each told to the Architect:
-  - 38ba9de6: no browser tooltips (`src/no_title.test.ts`);
-  - 8c7ad639: `tests/agents_restart.rs` uses the per-tunnel routes, and the routes' golden blanks the computer's name and system.
-  - 55059be1: clippy's demo/pull-broker step (nine discarded failures, each now handled or `#[expect]`ed with its reason). That CI step and the workspace clippy pass locally.
-- **The draft release v2.14.0 exists**, with plain-words notes.
-- **On green CI on the head:** merge (a merge commit, as #639 was). `release.yml` then builds and publishes the draft as Latest. **Tell the Architect the moment it is Latest**; the Architect tells the owner what to try.
-- **What #650 holds:** the PR body lists it. In short:
-  - the Agents panel redesigned: agents and tunnels, each with a page;
-  - "Which tunnel should make Bagholder's MCP server reachable for …?", with Change tunnel and Reconnect taking the same step;
-  - several tunnels at once;
-  - the typed-code sign-in (brief 81);
-  - keys bound to one tunnel (migration 44);
-  - Bagholder installing ngrok and cloudflared;
-  - Remove tunnel deleting Cloudflare's tunnel and DNS record;
-  - the Tailscale clash retried;
-  - agents reading stats, income, exposure, net worth, chequing and card transactions (companies only, never a person), markets, and account types;
-  - the sign-in page saying all an agent reads;
-  - refusals in plain words;
-  - credentials 0600/0700.
+- **v2.14.0 is Latest** (published 2026-10-29 16:37 UTC at the merge e6f3bc02; #650 at 55059be1; 8 assets). The macOS suite failed twice, each on a different timing flake in a test #650 doesn't touch (below); every macOS test passed in one of the two runs. The owner chose to publish with the workflow's own `gh release edit … --draft=false --latest` rather than run a third time. The Architect has been told.
 
 ### After the release: cleanup
 - The owner presses **Remove tunnel** on the preview's Cloudflare tunnel, once done testing. It deletes the test tunnel and DNS record in their Cloudflare account through the new code. Never do this for them.
@@ -60,7 +38,11 @@ Private details (the preview's address, the owner's domain, paths) are in the se
 - Nothing is left in `/tmp` beyond the scratchpad. The cargo cache cap runs every 15 minutes from the user's crontab.
 
 ### Next, in order
-1. 2.14.0 out (above).
+1. **The three flaky tests, one PR, one CI run** (they blocked 2.14.0's publication):
+   - `bagholder-net client::coding_tests::get_at_holds_its_answer_to_its_own_ceiling`: "Connection reset by peer" on macOS, a race between the stand-in peer closing and the read.
+   - `following::tests::an_index_both_a_tile_and_watched_is_one_instrument_and_quoted_through_yahoo`: it returns once the quote is asked, and the quote's write lands as the temp folder goes (`market.db-wal` left). Wait for the write, or stop the app's work, before returning.
+   - `filings::tests::a_document_told_once_is_never_told_again`: SIGSEGV at exit, leaving temp files.
+   - The macOS suite runs only at release, so a macOS-only flake shows up only there.
 2. **The page from anywhere** (the owner, 2026-10-29: a feature anyone can switch on, and they want it for theirs):
    - Bagholder's page through its own Cloudflare tunnel, behind Cloudflare Access with GitHub sign-in;
    - Bagholder checks the Access JWT on every request through it.
