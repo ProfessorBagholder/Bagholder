@@ -30,10 +30,11 @@ Private details (the preview's address, the owner's domain, paths) are in the se
 - **v2.13.0** is Latest (`gh release list` is the truth). It has agents anywhere and the first agents panel.
 
 ### In flight: #650, release 2.14.0
-- Branch `agents-panel`, worktree `ux` under the session's scratchpad. Head **8c7ad639**.
+- Branch `agents-panel`, worktree `ux` under the session's scratchpad. Head **55059be1**.
 - **The Architect cleared #650 at 3e559b8f**: "merge it on green checks and release 2.14.0 as Latest". Since then, each told to the Architect:
   - 38ba9de6: no browser tooltips (`src/no_title.test.ts`);
   - 8c7ad639: `tests/agents_restart.rs` uses the per-tunnel routes, and the routes' golden blanks the computer's name and system.
+  - 55059be1: clippy's demo/pull-broker step (nine discarded failures, each now handled or `#[expect]`ed with its reason). That CI step and the workspace clippy pass locally.
 - **The draft release v2.14.0 exists**, with plain-words notes.
 - **On green CI on the head:** merge (a merge commit, as #639 was). `release.yml` then builds and publishes the draft as Latest. **Tell the Architect the moment it is Latest**; the Architect tells the owner what to try.
 - **What #650 holds:** the PR body lists it. In short:
