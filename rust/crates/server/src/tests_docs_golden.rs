@@ -61,6 +61,7 @@ fn status_doc(sync_step: &str) -> Status {
         imported: None,
         model_download: None,
         agents: Default::default(),
+        remote: Default::default(),
     }
 }
 

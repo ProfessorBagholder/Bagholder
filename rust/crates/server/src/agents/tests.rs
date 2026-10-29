@@ -1736,7 +1736,7 @@ esac"#,
     }
     // an address already used on the domain, said plainly
     assert_eq!(cloudflare::made("x INF agents.example.com is already configured to route to your tunnel tunnelID=y").as_deref(), Some("agents.example.com"));
-    assert_eq!(files.set_up(&program, "taken.example.com").unwrap_err(), "That address is already used on your Cloudflare domain: pick another name, such as agents2.yourdomain.com.");
+    assert_eq!(files.set_up(&program, "taken.example.com").unwrap_err(), "That name is already used on your domain: use a different name.");
 
     // run: the tunnel Bagholder made, from its folder
     let s = Setup { provider: Provider::Cloudflare, name: "agents.example.com".into(), funnel_port: None, sends_host: None };

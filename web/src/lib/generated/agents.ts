@@ -50,7 +50,11 @@ signingIn: boolean, signInUrl: string | null,
 /**
  * Why the last sign-in or setup did not finish, in plain words.
  */
-said: string, };
+said: string, 
+/**
+ * The domain the sign-in was made for, once Cloudflare said its name.
+ */
+domain: string | null, };
 
 export type Installing = { provider: Provider, 
 /**
@@ -207,3 +211,88 @@ export type LogAsked = { agent: string | null, };
 export type LogLine = { at: string, tool: string | null, arguments: string | null, refusal: string | null, };
 
 export type AgentLog = { lines: Array<LogLine>, };
+
+export type RemoteStatus = { 
+/**
+ * The address, once set up: `https://{name}`.
+ */
+url: string, 
+/**
+ * The one email let in.
+ */
+email: string, 
+/**
+ * Whether the person gave Bagholder a token for Access that Cloudflare took.
+ */
+token: boolean, 
+/**
+ * Cloudflare's page for that token, filled in.
+ */
+tokenPage: string, 
+/**
+ * The token found the account has no Zero Trust team yet, which only
+ * Cloudflare's dashboard makes (`team_page`).
+ */
+noTeam: boolean, teamPage: string, 
+/**
+ * The person's API tokens at Cloudflare, where the token made for Bagholder
+ * is deleted once the address is removed.
+ */
+tokensPage: string, 
+/**
+ * Bagholder's own GitHub sign-in: its name once Cloudflare holds it as a login
+ * method, else empty.
+ */
+github: string, 
+/**
+ * Its manifest waits on the person in GitHub's tab.
+ */
+makingGithub: boolean, 
+/**
+ * Why Cloudflare didn't take the GitHub app GitHub made, until it does.
+ */
+githubSaid: string, 
+/**
+ * The GitHub app's own page, where only the person can delete it.
+ */
+githubPage: string, 
+/**
+ * The tunnel runs with Bagholder.
+ */
+on: boolean, running: boolean, 
+/**
+ * What the check from outside found: none while it is still trying, since the
+ * tunnel started.
+ */
+ready: boolean | null, 
+/**
+ * What the check's last try found, while it keeps trying.
+ */
+trying: string, 
+/**
+ * Why it isn't reachable, or how the tunnel ended, in words.
+ */
+said: string, };
+
+export type TokenAsked = { token: string, };
+
+export type SetUpAsked = { 
+/**
+ * The name before the domain ("app"), or the whole address.
+ */
+name: string, 
+/**
+ * The one email Access lets in.
+ */
+email: string, };
+
+export type RemoteSwitch = { on: boolean, };
+
+export type GitHubAsked = { 
+/**
+ * The page's own address (`location.origin`): where GitHub sends the person
+ * back once the app is made.
+ */
+origin: string, };
+
+export type GitHubManifest = { ok: boolean, error?: string, action: string, manifest: string, };

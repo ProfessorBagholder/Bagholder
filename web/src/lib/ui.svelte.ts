@@ -59,7 +59,7 @@ function freshTradeForm(): TradeForm {
 
 export const ui = $state<{
   menuOpen: boolean
-  modal: '' | 'trade' | 'import' | 'folder' | 'agents'
+  modal: '' | 'trade' | 'import' | 'folder' | 'agents' | 'remote'
   // '' | 'clear' | 'disconnect' | `cancel:<orderId>` | `bracket:<bracketId>`
   confirm: string
   /** what the header says of the person's own actions, oldest first, the newest showing: each until they close it */
@@ -286,6 +286,11 @@ export async function clearDataNow(): Promise<void> {
 export function openAgents(): void {
   ui.menuOpen = false
   ui.modal = 'agents'
+}
+/** Open from anywhere: this Bagholder at an address behind Cloudflare Access (docs/plans/page-from-anywhere.md). */
+export function openRemote(): void {
+  ui.menuOpen = false
+  ui.modal = 'remote'
 }
 
 export function openTradeModal(): void {

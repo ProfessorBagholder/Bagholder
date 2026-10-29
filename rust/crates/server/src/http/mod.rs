@@ -23,6 +23,7 @@ pub(crate) mod markets;
 pub(crate) mod model;
 mod notifications;
 pub(crate) mod orders;
+pub(crate) mod remote;
 mod session;
 pub mod stream;
 
@@ -259,6 +260,7 @@ pub fn route_table() -> Vec<RouteEntry> {
     t.extend(markets::routes().table);
     t.extend(model::routes().table);
     t.extend(agents::routes().table);
+    t.extend(remote::routes().table);
     t
 }
 
@@ -287,7 +289,10 @@ pub fn router(state: AppState) -> Router {
         .merge(session::routes().router)
         .merge(notifications::routes().router)
         .merge(agents::routes().router)
+        .merge(remote::routes().router)
         .route("/api/events/watch", post(stream::watch))
+        // GitHub sends the person back here, in its own tab, once Bagholder's GitHub app is made
+        .route(crate::remote::MADE, get(remote::made))
         .route("/api/events/resync", post(stream::resync))
         .layer(axum::middleware::from_fn(conditional))
         .layer(TimeoutLayer::with_status_code(StatusCode::GATEWAY_TIMEOUT, ROUTE_TIMEOUT));
@@ -356,6 +361,11 @@ fn refused(code: StatusCode) -> Response {
 /// its own to this machine names itself there), and a write has to come from the
 /// page itself.
 async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Response {
+    // the page's address from anywhere: let in on Access's sign-in alone (`remote`)
+    let host = req.headers().get(header::HOST).and_then(|v| v.to_str().ok()).unwrap_or("").trim().to_string();
+    if remote::is_remote(&state.app, &host) {
+        return remote::gate(state.app.clone(), req, next).await;
+    }
     match admitted(&state.app, &req) {
         Ok(()) => next.run(req).await,
         Err(code) => refused(code),
@@ -385,7 +395,7 @@ fn admitted(app: &App, req: &Request) -> Result<(), StatusCode> {
     }
 }
 
-fn peer_ok(bind_host: &str, peer: Option<std::net::IpAddr>) -> bool {
+pub(crate) fn peer_ok(bind_host: &str, peer: Option<std::net::IpAddr>) -> bool {
     if bind_host != "127.0.0.1" {
         return true; // bound beyond loopback on purpose (a container); the peer is its bridge
     }

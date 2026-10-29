@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.14.0";
+pub const APP_VERSION: &str = "2.15.0";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -325,6 +325,8 @@ pub struct App {
     following: std::sync::atomic::AtomicU64,
     /// The agents' address: off, or its listener and tunnel (`agents`).
     pub agents: crate::agents::Agents,
+    /// The page from anywhere: its address behind Cloudflare Access (`remote`).
+    pub remote: crate::remote::Remote,
 }
 
 impl App {
@@ -386,6 +388,7 @@ impl App {
             fill_waits: Mutex::new(std::collections::BTreeMap::new()),
             following: std::sync::atomic::AtomicU64::new(0),
             agents: crate::agents::Agents::default(),
+            remote: crate::remote::Remote::default(),
         })
     }
 

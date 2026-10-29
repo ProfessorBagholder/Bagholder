@@ -216,6 +216,8 @@ pub struct CloudflareSays {
     pub sign_in_url: Option<String>,
     /// Why the last sign-in or setup did not finish, in plain words.
     pub said: String,
+    /// The domain the sign-in was made for, once Cloudflare said its name.
+    pub domain: Option<String>,
 }
 
 /// What Tailscale states of this machine, by which the panel shows each of its

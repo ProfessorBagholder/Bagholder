@@ -1,7 +1,7 @@
 // Generated from the server's route table (`api_routes!`). Do not edit: change the
 // route's declaration, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_routes_are_the_servers`.
 
-import type { AgentId, AgentLog, KeyAsked, LogAsked, MadeKey, NgrokToken, ProviderAsked, Renamed, Setup, SwitchAsked } from './agents'
+import type { AgentId, AgentLog, GitHubAsked, GitHubManifest, KeyAsked, LogAsked, MadeKey, NgrokToken, ProviderAsked, RemoteSwitch, Renamed, SetUpAsked, Setup, SwitchAsked, TokenAsked } from './agents'
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, Details, TradesDoc } from './figures'
@@ -88,4 +88,12 @@ export interface Routes {
   'POST /api/agents/ngrok/token': { body: NgrokToken; answer: OkOr }
   'POST /api/agents/install': { body: ProviderAsked; answer: OkOr }
   'GET /api/agents/log': { query: LogAsked; answer: AgentLog }
+  'POST /api/remote/token': { body: TokenAsked; answer: OkOr }
+  'POST /api/remote/team': { answer: OkOr }
+  'POST /api/remote/github': { body: GitHubAsked; answer: GitHubManifest }
+  'POST /api/remote/github/login': { answer: OkOr }
+  'POST /api/remote/set-up': { body: SetUpAsked; answer: OkOr }
+  'POST /api/remote/switch': { body: RemoteSwitch; answer: OkOr }
+  'POST /api/remote/check': { answer: OkOr }
+  'POST /api/remote/remove': { answer: OkOr }
 }

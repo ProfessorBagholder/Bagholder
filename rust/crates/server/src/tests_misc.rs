@@ -453,7 +453,7 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// here, with the reason it stays: this list is the one place timers are argued for.
-const TIMED_WAITS: [(&str, usize, &str); 23] = [
+const TIMED_WAITS: [(&str, usize, &str); 24] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
     ("net/src/client.rs", 1, "a test's stand-in peer that answers a byte at a time, slower than the fetch is given, to show the fetch ends at its deadline"),
@@ -469,6 +469,7 @@ const TIMED_WAITS: [(&str, usize, &str); 23] = [
     ("server/src/feeds.rs", 10, "outside sources that offer no push, each only while wanted; known deadlines"),
     ("server/src/filings.rs", 3, "the regulators offer no push: the daily sweep of the filers held, the gap between two reads at one regulator, and a person's pace at SEDAR+"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
+    ("server/src/http/remote.rs", 1, "the page's address asked from outside while it comes up, every few seconds for at most ten minutes, until it asks for the sign-in: Cloudflare offers no push for a name beginning to answer"),
     ("server/src/http/stream.rs", 1, "the event stream's keep-alive comment, every fifteen seconds while it is idle, so a connection that died is noticed: the transport's, not a poll"),
     ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),
     ("server/src/notify.rs", 4, "its stream's heartbeat (folded into /api/events in stage 6, with the page's structure); three in its tests"),

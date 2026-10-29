@@ -182,6 +182,9 @@ pub struct Agents {
     tailscale: Mutex<Option<tunnel::TailscaleSays>>,
     /// Cloudflare's sign-in, while it runs, and what it said.
     cloudflare: Arc<Mutex<SignIn>>,
+    /// The name of the domain the sign-in was made for, asked of Cloudflare once
+    /// for each sign-in: the sign-in holds only its id.
+    domain: Arc<Mutex<Domain>>,
     /// Each program Bagholder installs (`install`): empty while it runs, why it
     /// failed once it did, gone once it worked.
     installing: Mutex<std::collections::BTreeMap<tunnel::Provider, String>>,
@@ -194,6 +197,16 @@ struct SignIn {
     child: Option<std::process::Child>,
     url: Option<String>,
     last: String,
+}
+
+/// How the name of a sign-in's domain is asked of Cloudflare's API.
+pub type Ask = Arc<dyn Fn(&cloudflare::Access) -> Result<String, String> + Send + Sync>;
+
+/// The domain's name for one sign-in's zone: being asked, or as Cloudflare said it.
+#[derive(Default)]
+struct Domain {
+    zone: String,
+    name: Option<String>,
 }
 
 impl Agents {
@@ -333,8 +346,9 @@ impl Agents {
 
     /// Cloudflare as the panel shows it: signed in, or the sign-in under way, or why
     /// the last one ended without one.
-    pub fn cloudflare_says(&self, home: &std::path::Path) -> tunnel::CloudflareSays {
+    pub fn cloudflare_says(&self, home: &std::path::Path, signal: Arc<dyn Fn() + Send + Sync>, ask: Ask) -> tunnel::CloudflareSays {
         let files = cloudflare::Files::new(home);
+        let domain = files.access().and_then(|a| self.domain_of(a, signal, ask));
         let mut s = self.cloudflare.lock().unwrap_or_else(|e| e.into_inner());
         let running = s.child.as_mut().is_some_and(|c| matches!(c.try_wait(), Ok(None)));
         if !running && s.child.take().is_some() && !files.signed_in() && s.last.is_empty() {
@@ -346,7 +360,36 @@ impl Agents {
             signing_in: running && !signed_in,
             sign_in_url: if running { s.url.clone() } else { None },
             said: if signed_in || running { String::new() } else { s.last.clone() },
+            domain,
         }
+    }
+
+    /// The domain's name for the sign-in `access` holds: asked of Cloudflare (`ask`,
+    /// the page's side: this module makes no request of its own) on a thread the
+    /// first time this sign-in is seen, `signal` told once it is known. Not known
+    /// until then, nor when Cloudflare can't be asked.
+    fn domain_of(&self, access: cloudflare::Access, signal: Arc<dyn Fn() + Send + Sync>, ask: Ask) -> Option<String> {
+        let mut d = self.domain.lock().unwrap_or_else(|e| e.into_inner());
+        if d.zone == access.zone {
+            return d.name.clone();
+        }
+        *d = Domain { zone: access.zone.clone(), name: None };
+        let held = self.domain.clone();
+        let asked = std::thread::Builder::new().name("cloudflare-domain".into()).spawn(move || match ask(&access) {
+            Ok(name) => {
+                let mut d = held.lock().unwrap_or_else(|e| e.into_inner());
+                if d.zone == access.zone {
+                    d.name = Some(name);
+                }
+                drop(d);
+                signal();
+            }
+            Err(e) => crate::app::log(&format!("bagholder: Cloudflare didn’t say the domain’s name: {e}")),
+        });
+        if let Err(e) = asked {
+            crate::app::log(&format!("bagholder: {e}"));
+        }
+        None
     }
 
     /// The port the listener answers on, while it is on.

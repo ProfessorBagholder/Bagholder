@@ -100,6 +100,8 @@ The app opens at `http://127.0.0.1:8765` in your browser. Use that address as wr
 
 To open it from elsewhere, put a tunnel or reverse proxy with a login of its own in front of it, on the same machine, and list the name it serves the app under in `BAGHOLDER_HOSTS` (comma-separated, each exactly as the address bar shows it, `name` or `name:port`). The app then answers that name as it answers `127.0.0.1:8765`, and only from its own machine, where the proxy runs: any other name, and any request from another machine, is refused. The app has no sign-in of its own, so the proxy's login is the only one: list only a name nobody reaches without it. An entry the app cannot read stops it at start, naming the entry.
 
+**Open from anywhere** (in the menu) sets this up for you with Cloudflare: the page at an address on your own Cloudflare domain, behind Cloudflare Access with GitHub sign-in, letting in only the email you name. You sign in to Cloudflare, make a token on Cloudflare's page that Bagholder fills in, and press Create once on GitHub. Bagholder makes the tunnel, the address, the Access application and its own GitHub sign-in, and checks Cloudflare's signed pass on every request itself.
+
 ### Starting at login
 
 Bagholder sets nothing up to start itself; each platform's own means does it. Use the full path to the `bagholder` you unpacked (an update replaces the files in place, so the path stays right). `BAGHOLDER_NO_BROWSER=1` keeps it from opening a browser tab at every login.

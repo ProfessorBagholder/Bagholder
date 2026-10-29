@@ -24,6 +24,7 @@ mod figures;
 mod following;
 #[cfg(feature = "pull-broker")]
 mod pull_broker;
+mod remote;
 mod outside_debts_check;
 mod read_sources;
 mod reading;
@@ -272,6 +273,7 @@ fn serve() -> i32 {
     // the agents' address, on again when the person left it on: its reads go to
     // this server's own port, known from here (docs/plans/agents-from-anywhere.md)
     http::agents::open(&a, runtime.handle());
+    http::remote::open(&a);
     // started and answering: the copies a migration kept of the stores are only for
     // putting a failed update back, which the updater does inside its window, so with
     // no update waiting on this start they go (brief 19, change 11)

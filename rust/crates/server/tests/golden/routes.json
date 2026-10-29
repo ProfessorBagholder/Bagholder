@@ -16,7 +16,7 @@
       "summaryReady": false,
       "protocol": "2026-09-26.2",
       "startedAt": "<startedAt>",
-      "version": "2.14.0",
+      "version": "2.15.0",
       "latestVersion": "",
       "updateAvailable": false,
       "updateUrl": "https://github.com/ProfessorBagholder/Bagholder",
@@ -77,13 +77,32 @@
           "signedIn": false,
           "signingIn": false,
           "signInUrl": null,
-          "said": ""
+          "said": "",
+          "domain": null
         },
         "waiting": [],
         "allowed": [],
         "refused": [],
         "codesPaused": false,
         "error": ""
+      },
+      "remote": {
+        "url": "",
+        "email": "",
+        "token": false,
+        "tokenPage": "https://dash.cloudflare.com/profile/api-tokens?permissionGroupKeys=%5B%7B%22key%22%3A%22access%22%2C%22type%22%3A%22edit%22%7D%2C%7B%22key%22%3A%22access_acct%22%2C%22type%22%3A%22edit%22%7D%5D&accountId=*&zoneId=all&name=Bagholder",
+        "noTeam": false,
+        "teamPage": "https://one.dash.cloudflare.com/",
+        "tokensPage": "https://dash.cloudflare.com/profile/api-tokens",
+        "github": "",
+        "makingGithub": false,
+        "githubSaid": "",
+        "githubPage": "",
+        "on": false,
+        "running": false,
+        "ready": null,
+        "trying": "",
+        "said": ""
       },
       "dataVersion": "exposures:0|filings:0|news:0|universes:0|<today>",
       "coreVersion": "exposures:0|filings:0|news:0|universes:0|<today>"
