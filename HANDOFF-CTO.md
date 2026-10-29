@@ -30,7 +30,7 @@ Private details (the preview's address, the owner's domain, paths) are in the se
 - **v2.14.0 is Latest** (published 2026-10-29 16:37 UTC at the merge e6f3bc02; #650 at 55059be1; 8 assets). The macOS suite failed twice, each on a different timing flake in a test #650 doesn't touch (below); every macOS test passed in one of the two runs. The owner chose to publish with the workflow's own `gh release edit … --draft=false --latest` rather than run a third time. The Architect has been told.
 
 ### After the release: cleanup
-- The owner presses **Remove tunnel** on the preview's Cloudflare tunnel, once done testing. It deletes the test tunnel and DNS record in their Cloudflare account through the new code. Never do this for them.
+- The preview is stopped (its 2 h task limit). Start it again (local memory `bagholder-preview-state.md`) only when the owner is ready to press **Remove tunnel** on its Cloudflare tunnel. It deletes the test tunnel and DNS record in their Cloudflare account through the new code. Never do this for them.
 - Then:
   - stop the preview;
   - delete `scratchpad/preview`, `scratchpad/agents-shots` and the `ux` worktree (after the merge);
