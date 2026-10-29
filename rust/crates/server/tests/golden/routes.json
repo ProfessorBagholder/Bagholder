@@ -69,8 +69,8 @@
             "path": "<this machine's>"
           }
         ],
-        "computer": "server",
-        "os": "linux",
+        "computer": "<this machine's>",
+        "os": "<this machine's>",
         "installing": [],
         "tailscale": null,
         "cloudflare": {

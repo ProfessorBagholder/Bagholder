@@ -134,9 +134,11 @@ fn tunnel_of(port: u16, within: Duration) -> Option<i32> {
     loop {
         let (_, status) = ask(port, "GET", "/api/status", None);
         let v: serde_json::Value = serde_json::from_str(&status).unwrap_or_default();
-        let lines: Vec<String> = v["agents"]["tunnel"]["lines"].as_array().map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
+        // the ngrok address, among every address set up, each with its own tunnel
+        let address = v["agents"]["addresses"].as_array().and_then(|a| a.iter().find(|x| x["provider"] == "ngrok")).cloned().unwrap_or_default();
+        let lines: Vec<String> = address["lines"].as_array().map(|l| l.iter().filter_map(|x| x.as_str().map(String::from)).collect()).unwrap_or_default();
         if let Some(pid) = lines.iter().find_map(|l| l.strip_prefix("stand-in tunnel ").and_then(|p| p.trim().parse::<i32>().ok())) {
-            assert_eq!(v["agents"]["tunnel"]["running"], "ngrok", "{v}");
+            assert_eq!(address["running"], true, "{v}");
             return Some(pid);
         }
         if Instant::now() >= until {
@@ -151,7 +153,7 @@ fn started_by_the_person(port: u16, started: &mut Started) -> i32 {
     assert_eq!(ask(port, "POST", "/api/agents/switch", Some(r#"{"on":true}"#)).0, 200);
     let (code, said) = ask(port, "POST", "/api/agents/tunnel", Some(r#"{"provider":"ngrok","name":"agents.example.com"}"#));
     assert_eq!(code, 200, "{said}");
-    let (code, said) = ask(port, "POST", "/api/agents/tunnel/start", None);
+    let (code, said) = ask(port, "POST", "/api/agents/tunnel/start", Some(r#"{"provider":"ngrok"}"#));
     assert_eq!((code, said.contains("\"ok\":true")), (200, true), "{said}");
     let pid = tunnel_of(port, Duration::from_secs(30)).expect("the tunnel started");
     started.tunnels.push(pid);
@@ -191,7 +193,7 @@ fn a_tunnel_the_person_stopped_stays_stopped_across_a_restart() {
     let mut started = Started::default();
     let port = serve(&h, false, &mut started);
     let first = started_by_the_person(port, &mut started);
-    assert_eq!(ask(port, "POST", "/api/agents/tunnel/stop", None).0, 200);
+    assert_eq!(ask(port, "POST", "/api/agents/tunnel/stop", Some(r#"{"provider":"ngrok"}"#)).0, 200);
     assert!(ended(first), "the tunnel stopped");
     stop(&mut started);
 
