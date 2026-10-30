@@ -73,6 +73,18 @@ pub struct RemoteStatus {
     pub trying: String,
     /// Why it isn't reachable, or how the tunnel ended, in words.
     pub said: String,
+    /// The address an earlier Bagholder set-up's tunnel, connected nowhere, still
+    /// holds: offered to take over.
+    pub held: Option<RemoteHeld>,
+}
+
+/// An address an earlier set-up's tunnel holds, and when that tunnel was last
+/// connected (empty where it never was).
+#[derive(Clone, Debug, Default, PartialEq, Serialize, TS, Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct RemoteHeld {
+    pub host: String,
+    pub last_connected: String,
 }
 
 pub fn status(app: &Arc<App>) -> RemoteStatus {
@@ -105,6 +117,7 @@ pub fn status(app: &Arc<App>) -> RemoteStatus {
             (_, false) if kept.on => st.exited.unwrap_or_default(),
             _ => String::new(),
         },
+        held: app.remote.held().map(|(host, last_connected)| RemoteHeld { host, last_connected }),
     }
 }
 
@@ -423,6 +436,10 @@ pub struct SetUpAsked {
     pub name: String,
     /// The one email Access lets in.
     pub email: String,
+    /// The address the person chose to take over from an earlier set-up's tunnel
+    /// that runs nowhere (`RemoteStatus::held`).
+    #[serde(default, rename = "takeOver")]
+    pub take_over: String,
 }
 
 /// Everything at Cloudflare made, then the tunnel started: the page's own tunnel
@@ -447,7 +464,27 @@ async fn set_up(State(state): State<AppState>, Required(asked): Required<SetUpAs
         let files = remote::cloudflare(&app.home);
         files.take_sign_in(&ours)?;
         stop(&app);
-        let host = tunnel::clean_name(&files.set_up(&program, asked.name.trim())?)?;
+        // an address an earlier set-up of Bagholder's still holds, its tunnel connected
+        // nowhere, is offered to the person, and taken over once they choose to: a
+        // computer asleep is connected nowhere too, so it is never taken unasked
+        let made = match files.set_up(&program, asked.name.trim()) {
+            Err(e) if e == agents::cloudflare::NAME_TAKEN => match super::agents::stale_holder(&access, asked.name.trim(), files.tunnel_id().as_deref())? {
+                Some(h) if asked.take_over.eq_ignore_ascii_case(&h.host) => {
+                    super::agents::take_over(&access, &h)?;
+                    files.set_up(&program, asked.name.trim())
+                }
+                Some(h) => {
+                    let said = format!("{} is held by an earlier Bagholder set-up whose tunnel isn’t connected.", h.host);
+                    app.remote.set_held(Some((h.host, h.last_connected)));
+                    app.events.signal();
+                    Err(said)
+                }
+                None => Err(e),
+            },
+            other => other,
+        };
+        let host = tunnel::clean_name(&made?)?;
+        app.remote.set_held(None);
         if !before.host.is_empty() && before.host != host {
             if let (Some(id), Some(a)) = (files.tunnel_id(), files.access()) {
                 super::agents::delete_record(&a, &before.host, &format!("{id}.cfargotunnel.com"))?;

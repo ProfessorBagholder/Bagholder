@@ -272,7 +272,14 @@ trying: string,
 /**
  * Why it isn't reachable, or how the tunnel ended, in words.
  */
-said: string, };
+said: string, 
+/**
+ * The address an earlier Bagholder set-up's tunnel, connected nowhere, still
+ * holds: offered to take over.
+ */
+held: RemoteHeld | null, };
+
+export type RemoteHeld = { host: string, lastConnected: string, };
 
 export type TokenAsked = { token: string, };
 
@@ -284,7 +291,12 @@ name: string,
 /**
  * The one email Access lets in.
  */
-email: string, };
+email: string, 
+/**
+ * The address the person chose to take over from an earlier set-up's tunnel
+ * that runs nowhere (`RemoteStatus::held`).
+ */
+takeOver: string, };
 
 export type RemoteSwitch = { on: boolean, };
 
