@@ -874,7 +874,7 @@ fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: Conn
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let keys: Vec<String> = accounts.iter().flat_map(|(_, k)| k.iter().cloned()).collect();
     // today's are asked apart: the past-date read is a past day's alone
-    let asked = if day == adapter.day(now) { adapter.positions_now(&keys, day) } else { adapter.positions(&keys, day) };
+    let asked = if day == adapter.day(now) { adapter.positions_today(&keys, day) } else { adapter.positions(&keys, day) };
     let read = match asked {
         Ok(r) => r,
         Err(f) => {

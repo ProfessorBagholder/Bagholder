@@ -53,7 +53,7 @@ pub trait Source {
     /// past days alone, and its own web app asks today's with
     /// `FetchHoldingsExportPositions`; a source that asks no network states today's
     /// as it states any day's.
-    fn positions_now(&mut self, accounts: &[String], today: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
+    fn positions_today(&mut self, accounts: &[String], today: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
         self.positions_of(accounts, today)
     }
     /// The balances replies' accounts.
@@ -355,7 +355,7 @@ impl<S: Source> Wealthsimple<S> {
     /// Each account's positions as of `day`, or today's (`now`), read from the
     /// position nodes the source states.
     fn positions_read(&mut self, accounts: &[String], day: jiff::civil::Date, now: bool) -> Answer<BTreeMap<String, Positions>> {
-        let nodes = if now { self.source.positions_now(accounts, day)? } else { self.source.positions_of(accounts, day)? };
+        let nodes = if now { self.source.positions_today(accounts, day)? } else { self.source.positions_of(accounts, day)? };
         let mut out = BTreeMap::new();
         for (account, nodes) in nodes {
             let units = crate::read::units(&nodes).map_err(mismatch)?;
@@ -629,7 +629,7 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
     fn positions(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>> {
         self.positions_read(accounts, day, false)
     }
-    fn positions_now(&mut self, accounts: &[String], today: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>> {
+    fn positions_today(&mut self, accounts: &[String], today: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>> {
         self.positions_read(accounts, today, true)
     }
     fn instruments(&mut self, refs: &[Reference], day: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)> {

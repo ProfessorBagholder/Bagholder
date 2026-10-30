@@ -299,7 +299,7 @@ impl Source for Client<'_> {
         }
         Ok(out)
     }
-    fn positions_now(&mut self, accounts: &[String], _today: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
+    fn positions_today(&mut self, accounts: &[String], _today: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
         // asked as Wealthsimple's own web app asks for the holdings today (release
         // 0.3.726566, read 2026-10-30): each account's positions apart
         // (`aggregated: false`), its cash among them, five hundred a page

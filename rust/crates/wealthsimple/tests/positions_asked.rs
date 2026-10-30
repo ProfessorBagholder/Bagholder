@@ -75,7 +75,7 @@ fn today_s_holdings_are_asked_as_wealthsimple_s_web_app_asks_them_and_read_as_a_
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("session.json"), r#"{"access_token":"a1","refresh_token":"r1","client_id":"c","identity_canonical_id":"identity-1","expires_at":"2026-10-30T15:00:00Z","wssdi":"device-1"}"#).unwrap();
     let mut client = bagholder_wealthsimple::client::Client::new(&net, bagholder_wealthsimple::session::SessionFile { path: dir.path().join("session.json") });
-    let today = client.positions_now(&["a-1".to_string(), "a-2".to_string()], "2026-10-30".parse().unwrap()).unwrap();
+    let today = client.positions_today(&["a-1".to_string(), "a-2".to_string()], "2026-10-30".parse().unwrap()).unwrap();
     // one request, never the past-date document, which Wealthsimple refuses for today
     let asked = seen.lock().unwrap();
     assert_eq!(asked.len(), 1);
