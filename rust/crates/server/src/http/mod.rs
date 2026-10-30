@@ -15,6 +15,7 @@
 //! machine; a body is never cut at a size. Routes that answer once are given
 //! `ROUTE_TIMEOUT`; the three that stream are not.
 
+mod admit;
 pub(crate) mod agents;
 pub(crate) mod assets;
 mod error;
@@ -351,8 +352,17 @@ async fn not_found() -> ApiError {
     ApiError::NotFound("not found".into())
 }
 
-fn refused(code: StatusCode) -> Response {
-    (code, Json(OkOr { ok: false, error: None })).into_response()
+/// A refusal, said in one sentence: a page for a browser opening the page, the
+/// shape every route answers for anything else.
+fn refused(why: &admit::Refused, port: u16, page: bool) -> Response {
+    let said = why.said(port);
+    if page {
+        let body = format!("{}<main><div class=dim style='font-size:13px'>Bagholder</div><h1>Bagholder can’t open here</h1><p>{}</p></main>", crate::agents::oauth::HEAD, crate::agents::oauth::escape(&said));
+        let mut r = (why.status(), axum::response::Html(body)).into_response();
+        r.headers_mut().insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+        return r;
+    }
+    (why.status(), Json(OkOr { ok: false, error: Some(said) })).into_response()
 }
 
 /// The gate: loopback only unless the server was bound elsewhere on purpose, the
@@ -366,33 +376,32 @@ async fn gate(State(state): State<AppState>, req: Request, next: Next) -> Respon
     if remote::is_remote(&state.app, &host) {
         return remote::gate(state.app.clone(), req, next).await;
     }
-    match admitted(&state.app, &req) {
+    let port = *state.app.port.lock().unwrap_or_else(|e| e.into_inner());
+    // a browser opening a page gets a page saying why; anything else, the routes' shape
+    let page = req.method() == Method::GET && !req.uri().path().starts_with("/api/");
+    match admitted(&state.app, &req, port) {
         Ok(()) => next.run(req).await,
-        Err(code) => refused(code),
+        Err(why) => refused(&why, port, page),
     }
 }
 
-fn admitted(app: &App, req: &Request) -> Result<(), StatusCode> {
+/// The request, held against who the page answers (`admit`).
+fn admitted(app: &App, req: &Request, port: u16) -> Result<(), admit::Refused> {
     let write = match *req.method() {
         Method::GET | Method::HEAD => false,
         Method::POST => true,
-        Method::OPTIONS => return Err(StatusCode::FORBIDDEN),
-        _ => return Err(StatusCode::NOT_IMPLEMENTED),
+        Method::OPTIONS => return Err(admit::Refused::Method(StatusCode::FORBIDDEN)),
+        _ => return Err(admit::Refused::Method(StatusCode::NOT_IMPLEMENTED)),
     };
     let peer = req.extensions().get::<ConnectInfo<SocketAddr>>().map(|c| c.0.ip());
     let head = |name: &str| req.headers().get(name).and_then(|v| v.to_str().ok()).unwrap_or("").trim().to_lowercase();
-    let port = *app.port.lock().unwrap_or_else(|e| e.into_inner());
-    let from_the_page = || head("sec-fetch-site") == "same-origin" || !head("x-bagholder").is_empty();
-    let hosts = app.hosts.lock().unwrap_or_else(|e| e.into_inner());
-    // the agents' public name is never the page's, listed or not: Allow and Deny are
-    // not reached through the agents' tunnel
+    let forwarded = req.headers().get_all("x-forwarded-for").iter().filter_map(|v| v.to_str().ok()).collect::<Vec<_>>().join(",");
     let host = head("host");
-    let agents_name = !host.is_empty() && app.agents.ctx().is_some_and(|c| c.sites().iter().any(|s| host == s.host || host == s.received()));
-    if peer_ok(&app.bind_host, peer) && !agents_name && host_ok(&app.bind_host, port, &host, &hosts) && (!write || from_the_page()) {
-        Ok(())
-    } else {
-        Err(StatusCode::FORBIDDEN)
-    }
+    let listed = app.hosts.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let agents_name = |h: &str| app.agents.ctx().is_some_and(|c| c.sites().iter().any(|s| h == s.host || h == s.received()));
+    let server = admit::Server { bind_host: &app.bind_host, port, listed: &listed, agents_name: &agents_name, gateway: if app.bind_host == "127.0.0.1" { None } else { admit::docker_gateway() } };
+    let asked = admit::Asked { write, host: &host, peer, forwarded: &forwarded, from_the_page: head("sec-fetch-site") == "same-origin" || !head("x-bagholder").is_empty(), old_http: req.version() <= axum::http::Version::HTTP_10 };
+    admit::admit(&server, &asked)
 }
 
 pub(crate) fn peer_ok(bind_host: &str, peer: Option<std::net::IpAddr>) -> bool {
@@ -404,24 +413,6 @@ pub(crate) fn peer_ok(bind_host: &str, peer: Option<std::net::IpAddr>) -> bool {
         Some(std::net::IpAddr::V6(ip)) => ip.is_loopback() || ip.to_ipv4_mapped().is_some_and(|v4| v4.is_loopback()),
         None => false,
     }
-}
-
-fn host_ok(bind_host: &str, port: u16, host: &str, listed: &[String]) -> bool {
-    if host.is_empty() || host.contains(',') {
-        return false;
-    }
-    // a name listed for a proxy in front, exactly as listed: no wildcard, no suffix, no port ignored
-    if listed.iter().any(|l| l == host) {
-        return true;
-    }
-    if bind_host != "127.0.0.1" {
-        // a container's port may be published under another number; the name must still be 127.0.0.1
-        return match host.split_once(':') {
-            Some((name, p)) => name == "127.0.0.1" && !p.is_empty() && p.len() <= 5 && p.bytes().all(|c| c.is_ascii_digit()),
-            None => false,
-        };
-    }
-    host == format!("127.0.0.1:{}", port)
 }
 
 /// Serve until the app is told to stop; then let the requests in hand finish,

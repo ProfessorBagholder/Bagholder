@@ -7,6 +7,7 @@
   // address checked from outside, then the address and who can open it. Built as the
   // Agents panel is, and styled as it is.
   import { status as statusSlot } from './subs.svelte'
+  import { copyText } from './clipboard'
   import { closeModal } from './ui.svelte'
   import { call } from './api'
   import { ICONS } from './icons'
@@ -136,7 +137,7 @@
     }
   }
   function copy(text: string) {
-    navigator.clipboard.writeText(text).then(
+    copyText(text).then(
       () => {
         copied = true
         setTimeout(() => (copied = false), 2000)

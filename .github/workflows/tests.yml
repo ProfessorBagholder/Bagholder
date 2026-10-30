@@ -233,6 +233,8 @@ jobs:
           body=$(curl -s -H 'X-Bagholder: 1' http://127.0.0.1:8792/api/status)
           echo "$body" | jq -e '.ok == true and (.version | length > 0) and (.updateUrl | length > 0) and has("canUpdate") and .dataVersion == null and .error == "The market cache could not be opened: file is not a database."' \
             || { echo "$body"; exit 1; }
+      - name: Who the image answers, on a local network and from the internet, directly and through Traefik, Caddy and nginx
+        run: sh bin/container-network.test.sh bagholder:ci
       - name: The container's log
         if: failure()
         run: docker logs bagholder
