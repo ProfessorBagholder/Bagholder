@@ -159,3 +159,14 @@ fn the_same_symbol_venue_and_currency_without_the_retirement_stated_stay_two() {
     assert_eq!(stated(&p, p.new), Some(Dec::parse("600").unwrap()));
     assert_eq!(stated(&p, p.old), None);
 }
+
+#[test]
+fn a_halted_or_suspended_id_is_one_the_listing_still_trades_under() {
+    // a past day's security record read 2026-10-30 states HALTED: trading paused
+    // under the same id, read as TRADING is, and the pull reads it with no failure
+    for status in ["HALTED", "SUSPENDED"] {
+        let p = pulled(status);
+        assert_ne!(p.old, p.new, "{status}");
+        assert_eq!(held(&p, p.old), Some(Dec::parse("1000").unwrap()), "{status}");
+    }
+}
