@@ -179,6 +179,13 @@ fn sites(a: &bagholder_book::agents::AgentsBook) -> Result<Vec<Site>, String> {
     Ok(out)
 }
 
+/// The computer the panel names, by the address Bagholder listens on: in a
+/// container (any but `127.0.0.1`) the host's name is the container's id, no name
+/// its owner gave, and none is named.
+fn computer_named(bind_host: &str) -> String {
+    if bind_host == "127.0.0.1" { tunnel::computer() } else { String::new() }
+}
+
 /// The panel's state, for the page's status.
 pub fn status(app: &Arc<App>) -> AgentsStatus {
     let mut out = AgentsStatus { on: app.agents.port().is_some(), port: app.agents.port().map(u32::from), ..AgentsStatus::default() };
@@ -191,7 +198,7 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
     let events = app.events.clone();
     out.cloudflare = app.agents.cloudflare_says(&app.home, Arc::new(move || events.signal()), Arc::new(zone_name));
     out.refused = app.agents.ctx().map(|c| agents::listener::strangers(&c)).unwrap_or_default().into_iter().map(|(why, n)| RefusedCount { why, count: n.min(u32::MAX as u64) as u32 }).collect();
-    out.computer = tunnel::computer();
+    out.computer = computer_named(&app.bind_host);
     out.os = std::env::consts::OS.to_string();
     out.installing = app.agents.installing().into_iter().map(|(provider, failed)| Installing { provider, failed }).collect();
     out.programs = Provider::ALL.iter().filter(|p| p.program().is_some()).map(|p| ProgramFound { provider: *p, path: tunnel::find_here(&app.home, *p).map(|x| x.display().to_string()) }).collect();
@@ -756,6 +763,14 @@ async fn log(State(state): State<AppState>, Params(q): Params<LogAsked>) -> Api<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A container's host name is its id: the panel names a computer only for an
+    /// app on its own computer.
+    #[test]
+    fn a_container_names_no_computer() {
+        assert_eq!(computer_named("0.0.0.0"), "");
+        assert_eq!(computer_named("127.0.0.1"), tunnel::computer());
+    }
 
     /// As the tunnel comes up, the address is checked on a thread of its own, once at
     /// a time, and no more once a check has found it answering.

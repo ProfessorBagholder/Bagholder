@@ -42,6 +42,8 @@ What stays on the journal, and why:
 
 ### 2.1 Units now: the positions read, asked as of today
 
+**Amended 2026-10-30:** Wealthsimple refuses `FetchHoldingsExportPositionsAsOfDate` asked as of today (`BAD_REQUEST`, every time). Its own web app (release 0.3.726566) asks today's holdings with `FetchHoldingsExportPositions` and the past-date document for a past day alone, and so does Bagholder (`client.rs`, `positions_now`). Each position of that document names its one account (asked with `aggregated: false`) and its direction as `positionDirection`; the rest is read as a past day's.
+
 **Decided:** units, direction and book value come from `FetchHoldingsExportPositionsAsOfDate` asked as of **today**, for every account in one request, with the balances: every five minutes while a page is open (`server/src/broker_reads.rs:231-239`), and at each pull.
 
 **Basis:**

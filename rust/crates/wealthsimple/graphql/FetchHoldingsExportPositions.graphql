@@ -1,0 +1,74 @@
+# Wealthsimple's own document, from its web app (release 0.3.726566, read 2026-10-30):
+# what it asks for the holdings today, the past-date document being for past days alone.
+query FetchHoldingsExportPositions($identityId: ID!, $currency: Currency!, $first: Int, $cursor: String, $accountIds: [ID!], $aggregated: Boolean, $currencyOverride: CurrencyOverride, $filter: PositionFilter, $accountScope: AccountScope) {
+  identity(id: $identityId) {
+    id
+    financials(accountScope: $accountScope, filter: {accounts: $accountIds}) {
+      current(currency: $currency) {
+        id
+        positions(first: $first, after: $cursor, aggregated: $aggregated, filter: $filter) {
+          edges {
+            node {
+              ...HoldingsExportPosition
+            }
+          }
+          pageInfo {
+            hasNextPage
+            endCursor
+          }
+          totalCount
+        }
+      }
+    }
+  }
+}
+fragment HoldingsExportPosition on PositionV2 {
+  id
+  quantity
+  positionDirection
+  accounts {
+    id
+  }
+  bookValue {
+    amount
+    currency
+  }
+  marketBookValue: bookValue(currencyOverride: $currencyOverride) {
+    amount
+    currency
+  }
+  totalValue(currencyOverride: $currencyOverride) {
+    amount
+    currency
+  }
+  marketUnrealizedReturns: unrealizedReturns(currencyOverride: $currencyOverride) {
+    amount
+    currency
+  }
+  security {
+    id
+    securityType
+    stock {
+      name
+      symbol
+      listedSymbol
+      primaryExchange
+      primaryMic
+    }
+    quoteV2(currency: null) {
+      securityId
+      price
+      currency
+    }
+    optionDetails {
+      osiSymbol
+      underlyingSecurity {
+        id
+        stock {
+          primaryExchange
+          primaryMic
+        }
+      }
+    }
+  }
+}

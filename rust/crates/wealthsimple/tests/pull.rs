@@ -114,8 +114,10 @@ fn a_pull_with_nothing_new_asks_only_the_accounts_their_activity_and_their_cash(
     assert!(second.failures.is_empty(), "{:?}", second.failures);
     assert_eq!((second.records_new, second.records_revised), (0, 0));
     // and the net worth feature's outside accounts, one read a pull (plan debts-held-outside-wealthsimple),
-    // and the holdings now, each pull (brief 79 §2.1): yesterday's, stated already, not again
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances", "net worth", "positions anon-tfsa-1 2025-11-19"]);
+    // and the holdings now, each pull (brief 79 §2.1), asked as today's and never
+    // with the past-date document, which Wealthsimple answers for past days alone:
+    // yesterday's, stated already, not again
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "balances", "net worth", "positions now anon-tfsa-1 2025-11-19"]);
 }
 
 #[test]
@@ -134,7 +136,7 @@ fn a_pull_with_one_new_trade_asks_only_what_the_trade_needs_besides() {
     let (third, asked) = once(&book, later.path(), "2025-11-19T22:00:00Z");
     assert!(third.failures.is_empty(), "{:?}", third.failures);
     assert_eq!(third.records_new, 1);
-    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances", "net worth", "positions anon-tfsa-1 2025-11-19"]);
+    assert_eq!(asked, vec!["accounts", "activity anon-tfsa-1", "securities 1", "balances", "net worth", "positions now anon-tfsa-1 2025-11-19"]);
 }
 
 /// A day an earlier read stored wrong is stated again by the next day's pull:

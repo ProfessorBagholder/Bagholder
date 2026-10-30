@@ -32,6 +32,7 @@ fn doc(name: &str) -> &'static str {
         "FetchSoOrdersMultilegOrder" => include_str!("../graphql/FetchSoOrdersMultilegOrder.graphql"),
         "FetchCorporateActionChildActivities" => include_str!("../graphql/FetchCorporateActionChildActivities.graphql"),
         "FetchHoldingsExportPositionsAsOfDate" => include_str!("../graphql/FetchHoldingsExportPositionsAsOfDate.graphql"),
+        "FetchHoldingsExportPositions" => include_str!("../graphql/FetchHoldingsExportPositions.graphql"),
         "FetchAccountHistoricalFinancials" => include_str!("../graphql/FetchAccountHistoricalFinancials.graphql"),
         "FetchFundingIntent" => include_str!("../graphql/FetchFundingIntent.graphql"),
         "FetchInternalTransfer" => include_str!("../graphql/FetchInternalTransfer.graphql"),
@@ -297,6 +298,47 @@ impl Source for Client<'_> {
             }
         }
         Ok(out)
+    }
+    fn positions_now(&mut self, accounts: &[String], _today: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
+        // asked as Wealthsimple's own web app asks for the holdings today (release
+        // 0.3.726566, read 2026-10-30): each account's positions apart
+        // (`aggregated: false`), its cash among them, five hundred a page
+        let op = "FetchHoldingsExportPositions";
+        let identity = self.identity()?;
+        let ids = Value::Array(accounts.iter().map(|a| text(a)).collect());
+        let filter = obj(vec![("includeManaged", Value::Bool(true)), ("includeCash", Value::Bool(true))]);
+        let vars = |cursor: Option<&str>| {
+            obj(vec![
+                ("identityId", text(&identity)),
+                ("currency", text("CAD")),
+                ("currencyOverride", text(CURRENCY_OVERRIDE)),
+                ("aggregated", Value::Bool(false)),
+                ("accountIds", ids.clone()),
+                ("first", num(500)),
+                ("cursor", cursor.map(text).unwrap_or(Value::Null)),
+                ("filter", filter.clone()),
+            ])
+        };
+        let nodes = self.pages(op, vars, |d| d.obj("identity")?.obj("financials")?.obj("current")?.obj("positions"))?;
+        // every account asked is stated, with no position where none names it
+        let mut out: BTreeMap<String, Vec<Value>> = accounts.iter().map(|a| (a.clone(), Vec::new())).collect();
+        for node in nodes {
+            let n = Node::root(&node);
+            let named = n.list("accounts").map_err(|m| mismatch(op, m))?;
+            let [account] = named.as_slice() else {
+                return Err(mismatch(op, format!("a position of {} accounts, asked for each account's apart", named.len())));
+            };
+            let id = account.text("id").map_err(|m| mismatch(op, m))?;
+            let Some(list) = out.get_mut(id) else {
+                return Err(mismatch(op, format!("a position of {id}, an account not asked for")));
+            };
+            // the past-date document's node: its direction under the name that one gives it
+            let Value::Object(mut fields) = node.clone() else { return Err(mismatch(op, "a position that is not an object")) };
+            let direction = fields.remove("positionDirection").ok_or_else(|| mismatch(op, "a position with no positionDirection"))?;
+            fields.insert("direction".into(), direction);
+            list.push(Value::Object(fields));
+        }
+        Ok(out.into_iter().map(|(a, n)| (a, Value::Array(n))).collect())
     }
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {
         let mut out = Vec::new();

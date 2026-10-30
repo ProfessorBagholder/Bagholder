@@ -296,10 +296,16 @@ pub fn payer_rate(inputs: &Inputs, i: InstrumentId, payments: Vec<&CashRow>, mat
         announced.sort_by_key(|d| (due(d), d.ex_date));
         let next = all.iter().find(|d| due(d) >= today).or_else(|| announced.iter().find(|d| due(d) >= today)).or(all.last());
         // without a record: the ex-date the listing's quote reports, and the day
-        // of the last payment received
+        // of the last payment received only where it is that distribution's (paid
+        // on or after it): a quote states no pay date, and an earlier payment's
+        // day is never the next one's
         let (next_ex, next_pay) = match next {
             Some(d) => (Some(d.ex_date), d.pay_date),
-            None => (inputs.market.ex_dividends.get(&i).copied(), payments.iter().map(|r| r.day).max()),
+            None => {
+                let ex = inputs.market.ex_dividends.get(&i).copied();
+                let paid = payments.iter().map(|r| r.day).max();
+                (ex, paid.filter(|p| ex.is_none_or(|e| *p >= e)))
+            }
         };
         Some(PayerRate { instrument: i, per, source, per_year, frequency_source, next_ex, next_pay })
     }

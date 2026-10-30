@@ -1,0 +1,49 @@
+{
+    "terms": {
+        "url": "https://www.bankofcanada.ca/terms/"
+    },
+    "seriesDetail": {
+        "IEXE0101": {
+            "label": "USD_NOON",
+            "description": "U.S. dollar (noon)",
+            "dimension": {
+                "key": "d",
+                "name": "Date"
+            },
+            "dateFormat": "daily",
+            "metadata": {}
+        }
+    },
+    "observations": [
+        {
+            "d": "2017-04-24",
+            "IEXE0101": {
+                "v": "1.3516"
+            }
+        },
+        {
+            "d": "2017-04-25",
+            "IEXE0101": {
+                "v": "1.3615"
+            }
+        },
+        {
+            "d": "2017-04-26",
+            "IEXE0101": {
+                "v": "1.3592"
+            }
+        },
+        {
+            "d": "2017-04-27",
+            "IEXE0101": {
+                "v": "1.3667"
+            }
+        },
+        {
+            "d": "2017-04-28",
+            "IEXE0101": {
+                "v": "1.3665"
+            }
+        }
+    ]
+}

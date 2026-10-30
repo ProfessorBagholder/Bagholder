@@ -873,7 +873,9 @@ fn store_outside_days(book: &Book, adapter: &mut dyn BrokerAdapter, outside: &[b
 fn store_holdings(book: &Book, adapter: &mut dyn BrokerAdapter, connection: ConnectionId, accounts: &[(AccountId, Vec<String>)], day: jiff::civil::Date, now: jiff::Timestamp, failures: &mut Vec<(String, Failure)>) -> Result<BTreeMap<AccountId, BTreeMap<bagholder_core::Currency, Dec>>> {
     let add = |a: Dec, b: Dec| a.checked_add(b).map_err(|e| bagholder_book::BookError::Refused(format!("a statement too large to add: {e}")));
     let keys: Vec<String> = accounts.iter().flat_map(|(_, k)| k.iter().cloned()).collect();
-    let read = match adapter.positions(&keys, day) {
+    // today's are asked apart: the past-date read is a past day's alone
+    let asked = if day == adapter.day(now) { adapter.positions_now(&keys, day) } else { adapter.positions(&keys, day) };
+    let read = match asked {
         Ok(r) => r,
         Err(f) => {
             failures.push(("holdings".into(), f));

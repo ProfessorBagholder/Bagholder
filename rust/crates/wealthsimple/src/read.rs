@@ -116,9 +116,10 @@ pub fn accounts(nodes: &[Value]) -> Read<Vec<AccountStated>> {
 /// from another figure. Each is written to more digits than a decimal holds:
 /// each is taken to the places that fit.
 ///
-/// Wealthsimple writes a short's quantity negative and a long's not (every
-/// recorded reply): a quantity whose sign contradicts its direction is a
-/// mismatch, not a sign to correct.
+/// Wealthsimple writes a short's quantity negative and a long's not, but for
+/// what is left of a holding: a past day's reply read 2026-10-30 states
+/// -0.0009684509 units held LONG. The quantity is what is held, as Wealthsimple's
+/// own web app reads it, whatever its direction says.
 pub fn units(nodes: &Value) -> Read<Vec<Units>> {
     let mut out = Vec::new();
     for n in Node::root(nodes).as_list()? {
@@ -127,13 +128,9 @@ pub fn units(nodes: &Value) -> Read<Vec<Units>> {
             continue;
         }
         let quantity = n.dec_text("quantity")?;
-        let agrees = match n.text("direction")? {
-            "LONG" => !quantity.is_negative(),
-            "SHORT" => !quantity.is_positive(),
+        match n.text("direction")? {
+            "LONG" | "SHORT" => {}
             other => return Err(n.field("direction")?.mismatch(format!("expected LONG or SHORT, found {other:?}"))),
-        };
-        if !agrees {
-            return Err(n.field("quantity")?.mismatch(format!("{} units held {}", quantity.to_text(), n.text("direction")?)));
         }
         let money = |key: &str| -> Read<Money> {
             let v = n.obj(key)?;
