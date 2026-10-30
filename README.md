@@ -164,7 +164,7 @@ Bagholder answers your local network (its addresses, and names like `server.loca
   ```
 
   Keep the route to your network, as the allowlist does, when the proxy also faces the internet. Bagholder refuses visitors from the internet anyway, but the route is then never open to them.
-- **No proxy, on a home server or a NAS:** publish the port on the network (`ports: ["8765:8765"]`) and open `http://<the server's address>:8765`.
+- **No proxy, on a home server or a NAS:** publish the port on the network (`ports: ["8765:8765"]`) and open `http://<the server's address>:8765`. Under rootless Docker or Docker Desktop every visit reaches the container from its gateway, so Bagholder can't tell visitors apart there: don't forward the port from your router; put a proxy in front, or turn on Open from anywhere.
 - **On the computer you browse from (Docker Desktop):** the compose file as it is, which publishes the port on that computer alone. Open `http://127.0.0.1:8765`.
 - **A rented server with a public address:** publish nothing beyond its loopback (the compose file as it is). Open it once through an SSH tunnel (`ssh -L 8765:127.0.0.1:8765 you@server`, then `http://127.0.0.1:8765` on your computer), and turn on Open from anywhere.
 

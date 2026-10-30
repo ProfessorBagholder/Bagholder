@@ -8,7 +8,8 @@
 //! visitor the proxy names last in `X-Forwarded-For` (the address it saw itself; a
 //! browser page can't add that header without the preflight the page refuses). A
 //! visitor not on a private network is refused. So is one Bagholder can't tell:
-//! Docker's own gateway passing a visit on without the visitor's address.
+//! Docker's own gateway passing a visit on without the visitor's address. A private
+//! network includes 100.64/10, for Tailscale's addresses.
 //!
 //! The name asked for is held against DNS rebinding, where a website points its own
 //! name at an address on the visitor's network: directly, only this machine's own
@@ -197,7 +198,11 @@ pub fn admit(server: &Server, asked: &Asked) -> Result<(), Refused> {
         return write_ok();
     }
     // Docker's gateway, with no visitor named: a visit Docker passed on without its
-    // address, from this network or from the internet alike
+    // address, from this network or from the internet alike. Under rootless Docker or
+    // Docker Desktop, with the port published on every interface, every visit comes
+    // from the gateway, and one from the internet naming a private address in a
+    // forged X-Forwarded-For can't be told from a proxy on the host: the README says
+    // not to forward that port from a router.
     if !proxied && server.gateway == Some(peer) {
         return Err(Refused::CannotTell("Docker passed it on without the visitor’s address"));
     }
