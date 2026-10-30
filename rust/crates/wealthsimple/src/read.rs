@@ -132,17 +132,24 @@ pub fn units(nodes: &Value) -> Read<Vec<Units>> {
             "LONG" | "SHORT" => {}
             other => return Err(n.field("direction")?.mismatch(format!("expected LONG or SHORT, found {other:?}"))),
         }
-        let money = |key: &str| -> Read<Money> {
+        // each figure as stated, and none where Wealthsimple states it null, as its
+        // web app shows it blank (a past day's reply read 2026-10-30 states one
+        // position's totalValue null)
+        let money = |key: &str| -> Read<Option<Money>> {
+            if matches!(n.field(key)?.value(), Value::Null) {
+                return Ok(None);
+            }
             let v = n.obj(key)?;
             let amount = Dec::parse_to_fit(v.text("amount")?).map_err(|e| v.field("amount").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
             let currency = Currency::parse(v.text("currency")?).map_err(|e| v.field("currency").map(|f| f.mismatch(e.to_string())).unwrap_or_else(|m| m))?;
-            Ok(Money::new(amount, currency))
+            Ok(Some(Money::new(amount, currency)))
         };
-        let value = Some(money("totalValue")?);
-        let book_value = Some(money("bookValue")?);
+        let value = money("totalValue")?;
+        let book_value = money("bookValue")?;
+        // a reply recorded before it was asked carries none
         let market_book_value = match n.field("marketBookValue") {
-            Ok(m) if !matches!(m.value(), Value::Null) => Some(money("marketBookValue")?),
-            _ => None,
+            Ok(_) => money("marketBookValue")?,
+            Err(_) => None,
         };
         out.push(Units { instrument: Reference::new(RefScheme::BrokerSecurity(broker()), id), quantity, book_value, market_book_value, value });
     }
