@@ -46,13 +46,13 @@ Private details (the owner's server, domain, deployment paths) are in the sessio
 - EASY's Evolve read through the server copy is unconfirmed on real data: the position was closed. Bagholder's client on Debian's OpenSSL 3.0 answers 200 with the fix (403 without). Check its Cashflow row when the owner holds EASY again.
 
 ### Next, in order
-1. **The flaky-tests PR** (test-only, no release; the Architect will review):
-   - `bagholder-net client::coding_tests::get_at_holds_its_answer_to_its_own_ceiling`: macOS only ("Connection reset by peer"), a race between the stand-in peer closing and the read. Only the macOS suite (release runs) proves it.
-   - `following::tests::an_index_both_a_tile_and_watched_is_one_instrument_and_quoted_through_yahoo`: returns once the quote is asked; its write lands as the temp folder goes (`market.db-wal` left).
-   - The detached `bagholder-notify` thread outliving its test (Architect's note on #653): the no-subscriber fix made the window small, not gone. End it with its test.
-   - `filings::tests::a_document_told_once_is_never_told_again` crashed at exit before: likely the same notify-thread race; confirm.
-   - Reproduce each here first (loop the test binary; gdb `thread apply all bt` on a crash), fix the cause, never retry/skip.
-2. Then: long/short on the Trades page (covered call, cash-secured put, uncovered labels: decided); line-tables-only debug builds; Bagholder updating the ngrok/cloudflared it installed.
+1. **Done: #655** (merged 55b6dc74, test-only, no release).
+   - The app keeps the threads it starts for one-off work (`App::spawn_work`); `App::finish` (tests only) stops it and joins them. `tests_common::OwnHome` finishes a test's app before its folder goes, and `app::work_tests` holds it.
+   - The `get_at` stand-in peer reads the request first.
+   - The watchlist spec names the venue (TD is held on two).
+   - Other per-test apps (`due`, `broker_reads`, `tests_orders`, …) don't use `OwnHome` yet; give one `OwnHome` if it flakes.
+   - **Architect's rule from #655:** a failed release suite is fixed, never published around. The next release's suite-macos proves the `get_at` fix.
+2. Next: long/short on the Trades page (covered call, cash-secured put, uncovered labels: decided); line-tables-only debug builds; Bagholder updating the ngrok/cloudflared it installed.
 
 ### Lessons from 2026-10-30 (the owner was angry at each)
 - **"It worked before" → git history first.** Find the commit that changed the path (`git log -L`, `git log -- <file>`) before any theory; never probe the owner's accounts to diagnose.
