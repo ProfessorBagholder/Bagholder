@@ -1115,6 +1115,13 @@ mod coding_tests {
             let to = l.local_addr().unwrap();
             let t = std::thread::spawn(move || {
                 let (mut s, _) = l.accept().unwrap();
+                // the request read whole first: a socket closed with bytes unread
+                // resets the connection, and macOS then drops the answer unread
+                let mut head = Vec::new();
+                let mut b = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && std::io::Read::read(&mut s, &mut b).unwrap() == 1 {
+                    head.push(b[0]);
+                }
                 let _ = std::io::Write::write_all(&mut s, format!("HTTP/1.1 200 OK\r\nContent-Encoding: gzip\r\nContent-Length: {}\r\n\r\n", body.len()).as_bytes());
                 let _ = std::io::Write::write_all(&mut s, &body);
             });

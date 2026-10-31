@@ -446,8 +446,14 @@ test.describe('Watchlist', () => {
     }
     const notFollowed = offered.slice(0, 4).find((p) => p.kind === 'Shares')
     test.skip(!notFollowed, 'every held share is already followed in this book')
-    // a row by its own symbol line: a name holding the same letters ("Ltd") is another row
-    const bySym = (cls: string) => page.locator(cls).filter({ has: page.locator(':scope > div:first-child > div:first-child', { hasText: new RegExp('^' + notFollowed!.symbol + '$') }) })
+    // a row by its own symbol line and its venue: a name holding the same letters
+    // ("Ltd") is another row, and so is the same ticker held on another venue
+    const exact = (t: string) => new RegExp('^' + t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '$')
+    const bySym = (cls: string) =>
+      page
+        .locator(cls)
+        .filter({ has: page.locator(':scope > div:first-child > div:first-child', { hasText: exact(notFollowed!.symbol) }) })
+        .filter({ has: page.locator(':scope > div:nth-child(2)', { hasText: exact(notFollowed!.exchange) }) })
     await page.goto('/#markets')
     await ready(page)
     await page.getByRole('button', { name: 'Add to the watchlist' }).click()

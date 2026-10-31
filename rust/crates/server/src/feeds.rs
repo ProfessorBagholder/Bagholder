@@ -453,7 +453,7 @@ pub fn read_sector(app: &Arc<App>, n: &crate::following::Named) {
     let (symbol, exchange, currency) = (tmx_symbol(&n.symbol), n.exchange.clone(), n.currency.clone());
     let said = bagholder_core::ListingKey::on(&n.symbol, &n.exchange).map_or_else(|_| format!("{} on {}", n.symbol, n.exchange), |k| k.named());
     let a = app.clone();
-    spawn("watch-sector", move || {
+    app.spawn_work("watch-sector", move || {
         let (Ok(c), Ok(p)) = (conn(&a), pool(&a)) else { return }; // said in the header by `conn`
         let ctx = exposure::Ctx { conn: &c, pool: p, today: today() };
         if let Err(e) = exposure::share_exposure(&ctx, &symbol, &exchange, &currency) {
@@ -1883,7 +1883,7 @@ mod tests {
 
     /// An app of its own on a home of its own, the recorded month in its book and
     /// its figures built.
-    fn built_app() -> (tempfile::TempDir, Arc<App>) {
+    fn built_app() -> (crate::tests_common::OwnHome, Arc<App>) {
         crate::tests_common::home(); // offline, dry orders
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
@@ -1892,7 +1892,7 @@ mod tests {
         let f = crate::figures::Figures::open(home.path(), at).unwrap();
         f.state_zone("America/Toronto", at).unwrap();
         app.set_figures(f);
-        (home, app)
+        (crate::tests_common::OwnHome::new(home, &app), app)
     }
 
     /// What a listing offers is its own chart document's to say: for generated

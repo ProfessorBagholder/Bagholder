@@ -579,7 +579,8 @@ pub fn default_ident(i: &serde_json::Value) -> String {
 #[derive(Default)]
 pub struct NotifyState {
     bell: (Mutex<u64>, Condvar),
-    worker: OnceLock<Mutex<std::sync::mpsc::Sender<bagholder_market::stored::feeds::Notification>>>,
+    /// The sender's queue, until `close`.
+    worker: OnceLock<Mutex<Option<std::sync::mpsc::Sender<bagholder_market::stored::feeds::Notification>>>>,
     /// The pages with the notifications' stream open: while one is, it shows each
     /// row, and nothing goes through a push service.
     pub pages: std::sync::atomic::AtomicUsize,
@@ -599,6 +600,14 @@ impl NotifyState {
         let (m, c) = &self.bell;
         *m.lock().unwrap_or_else(|e| e.into_inner()) += 1;
         c.notify_all();
+    }
+
+    /// Close the sender's queue: its thread sends what it was handed and ends.
+    #[cfg(test)]
+    pub fn close(&self) {
+        if let Some(tx) = self.worker.get() {
+            tx.lock().unwrap_or_else(|e| e.into_inner()).take();
+        }
     }
 }
 
@@ -697,17 +706,20 @@ fn enqueue(app: Arc<App>, row: bagholder_market::stored::feeds::Notification) {
         // the app holds the sender and the thread only a weak hold on the app: when
         // the app goes, the sender goes with it and the thread ends
         let weak = Arc::downgrade(&app);
-        crate::app::spawn("bagholder-notify", move || {
+        app.spawn_work("bagholder-notify", move || {
             for row in rx {
                 let Some(app) = weak.upgrade() else { return };
                 push_all(&app, &row);
             }
         });
-        Mutex::new(tx)
+        Mutex::new(Some(tx))
     });
-    // the thread ends only with the app, whose sender this is: a send it refuses
-    // means the thread died, and the pushes with it
-    if tx.lock().unwrap().send(row).is_err() {
+    let tx = tx.lock().unwrap_or_else(|e| e.into_inner());
+    // a closed queue is an app that is finishing: nothing more is sent
+    let Some(tx) = tx.as_ref() else { return };
+    // the thread ends only with the app, whose sender this is, or once the queue
+    // is closed: a send it refuses means the thread died, and the pushes with it
+    if tx.send(row).is_err() {
         crate::feeds::feed_down(&app, PUSHED, "Notifications stopped reaching the browsers: the thread that sends them ended".into());
     }
 }
