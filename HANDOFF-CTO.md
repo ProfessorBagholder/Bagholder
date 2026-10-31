@@ -22,51 +22,47 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-29 ~15:00 UTC, written by the home-server CTO session)
+## 2. Where things stand (2026-10-31 ~03:00 UTC, written by the home-server CTO session)
 
-Private details (the preview's address, the owner's domain, paths) are in the session's local memory, `bagholder-preview-state.md`: never in this public file.
+Private details (the owner's server, domain, deployment paths) are in the session's local memory (`bagholder-server-deployment.md`), never in this public file.
 
 ### Released
-- **v2.15.0 is Latest** (2026-10-29 21:57 UTC, merge a45f6fc2, #651): Open from anywhere. The page at an address on the person's Cloudflare domain, behind Cloudflare Access with a GitHub sign-in of Bagholder's own; Bagholder checks Access's signed pass on every request. The release run passed every job on its first try, macOS and Windows included. Plan as built: `docs/plans/page-from-anywhere.md`; decisions: `docs/decisions.md` 2026-10-29.
-- v2.14.0 (agents panel rebuild) before it, the same day.
+- **v2.16.1 is Latest** (2026-10-31 02:37 UTC, #653 merged as f8243c34, tag v2.16.1 there). A fresh book reads what it needs:
+  - today's holdings asked with `FetchHoldingsExportPositions`, as Wealthsimple's web app asks today's (2.13.0 asked the past-date document for today: `BAD_REQUEST` every time);
+  - past days read whole: a quantity whatever its direction says, an amount stated `null` is none, `HALTED`/`SUSPENDED` read as trading under the same id;
+  - the Bank of Canada's daily series asked per currency with no list read first (the list's object was renamed `groupDetail`);
+  - every build's TLS hello without `SSL_OP_TLSEXT_PADDING` (OpenSSL 3.0 padded it and Evolve's site refused it; 3.5 never pads);
+  - a Pay Day only that distribution's own (SPEC cashflow-26);
+  - Open from anywhere: no computer named in a container; an address a lost set-up's `bagholder-…` tunnel (connected nowhere) still holds is offered to take over in step 5, never taken unasked;
+  - a notification with no browser subscribed makes no VAPID key (that key work on the detached notify thread raced test exit: SIGSEGV).
+- The release run's suite-macos failed only on the known `get_at` race (below); every build, the Docker images and suite-windows passed, so the draft was published by hand, as 2.16.0 was.
+- **Release process, learned the hard way tonight:** before merging a version bump, write the draft release `vX.Y.Z` (notes) first, or the push-triggered run stops; a manual `workflow_dispatch` run needs the tag to exist (create it at the merge commit with `gh api -X POST repos/…/git/refs`).
+- #654 (merged 15dd6356, no release): the capacity book runs wholly on its made-up date (`made_up_now()`); `the_capacity_tool_reads_no_clock` holds it. It had broken capacity-cases on master on 2026-10-30 (a contract in the made-up book expired by the real clock).
 
-### After the release: cleanup
-- The preview still runs #651's build with Open from anywhere set up at the owner's address (private details in local memory `bagholder-preview-state.md`). When the owner moves it to their Mac, they press Remove in the preview first; then stop the preview and delete its files and worktrees. It deletes the test tunnel and DNS record in their Cloudflare account through the new code. Never do this for them.
-- Then:
-  - stop the preview;
-  - delete `scratchpad/preview`, `scratchpad/agents-shots` and the `ux` worktree (after the merge);
-  - delete this `handoff` worktree once pushed.
-- Nothing is left in `/tmp` beyond the scratchpad. The cargo cache cap runs every 15 minutes from the user's crontab.
+### The owner's production: the server copy
+- Bagholder runs on the owner's home server in Docker behind Traefik, from the published image (`ghcr.io/professorbagholder/bagholder:latest`, 2.16.1), local network only, Wealthsimple connected, Open from anywhere on. Details in local memory.
+- Update it: in its compose folder, `docker compose pull && docker compose up -d`. Never leave it on a local test image after a release.
+- The old preview is gone (its files went with a reboot); its Cloudflare leftovers were taken over by the server copy's Open from anywhere.
+- EASY's Evolve read through the server copy is unconfirmed on real data: the position was closed. Bagholder's client on Debian's OpenSSL 3.0 answers 200 with the fix (403 without). Check its Cashflow row when the owner holds EASY again.
 
 ### Next, in order
-1. **The three flaky tests, one PR, one CI run** (they blocked 2.14.0's publication):
-   - `bagholder-net client::coding_tests::get_at_holds_its_answer_to_its_own_ceiling`: "Connection reset by peer" on macOS, a race between the stand-in peer closing and the read.
-   - `following::tests::an_index_both_a_tile_and_watched_is_one_instrument_and_quoted_through_yahoo`: it returns once the quote is asked, and the quote's write lands as the temp folder goes (`market.db-wal` left). Wait for the write, or stop the app's work, before returning.
-   - `filings::tests::a_document_told_once_is_never_told_again`: SIGSEGV at exit, leaving temp files.
-   - The macOS suite runs only at release, so a macOS-only flake shows up only there.
-2. **The page from anywhere** (the owner, 2026-10-29: a feature anyone can switch on, and they want it for theirs):
-   - Bagholder's page through its own Cloudflare tunnel, behind Cloudflare Access with GitHub sign-in;
-   - Bagholder checks the Access JWT on every request through it.
-   - The plan is drafted at `scratchpad/page-from-anywhere.md`. Open it as a PR (`docs/plans/page-from-anywhere.md`) from master, send it to the Architect, then build it with a preview.
-   - The owner runs production on their Mac (the server is slow), so it is reachable while the Mac is awake.
-3. Then:
-   - long/short shown on the Trades page, with covered call, cash-secured put and uncovered labels (decided);
-   - the filings test that crashes at exit and leaves temp files (own PR);
-   - line-tables-only debug builds;
-   - Bagholder updating the ngrok/cloudflared it installed.
+1. **The flaky-tests PR** (test-only, no release; the Architect will review):
+   - `bagholder-net client::coding_tests::get_at_holds_its_answer_to_its_own_ceiling`: macOS only ("Connection reset by peer"), a race between the stand-in peer closing and the read. Only the macOS suite (release runs) proves it.
+   - `following::tests::an_index_both_a_tile_and_watched_is_one_instrument_and_quoted_through_yahoo`: returns once the quote is asked; its write lands as the temp folder goes (`market.db-wal` left).
+   - The detached `bagholder-notify` thread outliving its test (Architect's note on #653): the no-subscriber fix made the window small, not gone. End it with its test.
+   - `filings::tests::a_document_told_once_is_never_told_again` crashed at exit before: likely the same notify-thread race; confirm.
+   - Reproduce each here first (loop the test binary; gdb `thread apply all bt` on a crash), fix the cause, never retry/skip.
+2. Then: long/short on the Trades page (covered call, cash-secured put, uncovered labels: decided); line-tables-only debug builds; Bagholder updating the ngrok/cloudflared it installed.
 
-### Lessons from this release (how the owner wants it)
-- **The preview first.** A link only once you have seen it show the change. Every reply after a preview change starts "Ready to test: reload <link>" or "Not ready yet: …". No scripts or hooks to enforce basics: just do it.
-- **Tool-call descriptions are read as what is happening.** Say plainly what the command does. A code change says it is a code change, never "Delete Cloudflare's tunnel…".
-- **Design is yours to decide**, after looking at how the best apps do it:
-  - one term per thing on every screen (the ways in are **tunnels**, and an **address** is the URL a tunnel gives);
-  - no reassurance blurbs;
-  - read every line of text before showing a screen.
-- **Answer the question asked, first** (the owner asked whether two button styles were normal; the answer was a consistency pass).
-- **Before pushing:**
-  - `npm test` (the whole page suite, `src/no_title.test.ts` included) and `npm run check` (CI's svelte-check with `tsconfig.app.json`);
-  - the server's integration tests in `crates/server/tests/` when routes change.
-  - CI found three failures this release that local runs had skipped.
+### Lessons from 2026-10-30 (the owner was angry at each)
+- **"It worked before" → git history first.** Find the commit that changed the path (`git log -L`, `git log -- <file>`) before any theory; never probe the owner's accounts to diagnose.
+- **No fallbacks or skips.** "Everything must be read properly": fix the reader, never set a failing day aside.
+- **No knee-jerk do/undo.** Settle the whole fix, then report once, checked. No step-by-step narration.
+- **Never wait on the owner for routine engineering** (a CI re-run after a crash, the next obvious step): act, then say what was done. Decisions only when genuinely theirs.
+- **Never relay a tool's label as fact.** ListAgents shows the Architect on this machine; "another machine, offline" was a stale record repeated unchecked.
+- **Fresh installs differ from the owner's Mac book:** a new book exercises reads an old book never re-does. Test on a fresh book before a release.
+- **Don't run whole crates' suites locally and wait**; touched tests here, the rest in CI.
+- **/tmp is wiped on reboot:** scratch worktrees and build folders go with it; commits survive in the repo's `.git`. Push or commit before long waits.
 
 ## 3. How the owner wants to be worked with
 
