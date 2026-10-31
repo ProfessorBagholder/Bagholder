@@ -235,6 +235,30 @@ fn test_an_agents_name_that_is_this_machine_is_refused_and_the_page_stays_reacha
     });
 }
 
+/// `BAGHOLDER_PROXY_SEES_VISITORS` read: `1` says so, unset, empty or `0` doesn't,
+/// and anything else refuses the start, naming it.
+#[test]
+fn test_proxy_sees_visitors_is_read_exactly_or_the_start_is_refused() {
+    use crate::app::parse_proxy_sees_visitors;
+    for (v, said) in [(None, false), (Some(""), false), (Some("0"), false), (Some("1"), true), (Some(" 1 "), true)] {
+        assert_eq!(parse_proxy_sees_visitors(v), Ok(said), "{v:?}");
+    }
+    for v in ["yes", "true", "2"] {
+        let e = parse_proxy_sees_visitors(Some(v)).unwrap_err();
+        assert!(e.starts_with("BAGHOLDER_PROXY_SEES_VISITORS is set to ") && e.contains(v), "{v}: {e}");
+    }
+}
+
+/// A visit a proxy names as Docker's gateway is said in the log once a run, not per
+/// visit.
+#[test]
+fn test_a_relayed_visit_is_said_once_a_run() {
+    let home = tempfile::tempdir().unwrap();
+    let app = crate::app::App::new(home.path().to_path_buf(), home.path().to_path_buf(), "0.0.0.0".into());
+    assert!(crate::http::relayed_said_once(&app), "the first is said");
+    assert!(!crate::http::relayed_said_once(&app), "the next is not");
+}
+
 /// `BAGHOLDER_HOSTS` read: names lowercased, a port kept; an entry with a space,
 /// an empty one, or one that is no host name refuses the start, naming it.
 #[test]

@@ -399,9 +399,25 @@ fn admitted(app: &App, req: &Request, port: u16) -> Result<(), admit::Refused> {
     let host = head("host");
     let listed = app.hosts.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let agents_name = |h: &str| app.agents.ctx().is_some_and(|c| c.sites().iter().any(|s| h == s.host || h == s.received()));
-    let server = admit::Server { bind_host: &app.bind_host, port, listed: &listed, agents_name: &agents_name, gateway: if app.bind_host == "127.0.0.1" { None } else { admit::docker_gateway() } };
+    let proxy_sees_visitors = app.proxy_sees_visitors.load(std::sync::atomic::Ordering::SeqCst);
+    let server = admit::Server { bind_host: &app.bind_host, port, listed: &listed, agents_name: &agents_name, gateway: if app.bind_host == "127.0.0.1" { None } else { admit::docker_gateway() }, proxy_sees_visitors };
     let asked = admit::Asked { write, host: &host, peer, forwarded: &forwarded, from_the_page: head("sec-fetch-site") == "same-origin" || !head("x-bagholder").is_empty(), old_http: req.version() <= axum::http::Version::HTTP_10 };
-    admit::admit(&server, &asked)
+    let answered = admit::admit(&server, &asked);
+    if answered.is_ok() && admit::relayed_and_answered(&server, &asked) {
+        relayed_said_once(app);
+    }
+    answered
+}
+
+/// Said once a run in the log: a proxy named a Docker gateway as its visitor, so
+/// over IPv6 Bagholder can't tell the local network from the internet. True when
+/// this call said it.
+pub(crate) fn relayed_said_once(app: &App) -> bool {
+    if app.relayed_said.swap(true, std::sync::atomic::Ordering::SeqCst) {
+        return false;
+    }
+    crate::app::log("bagholder: your proxy gets visits through Docker's relay and names Docker's gateway as the visitor, so over IPv6 Bagholder can't tell your network from the internet and answers both. Give Docker IPv6 (README, Docker, IPv6), then set BAGHOLDER_PROXY_SEES_VISITORS=1.");
+    true
 }
 
 pub(crate) fn peer_ok(bind_host: &str, peer: Option<std::net::IpAddr>) -> bool {

@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.16.1";
+pub const APP_VERSION: &str = "2.16.2";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -268,6 +268,11 @@ pub struct App {
     /// (`BAGHOLDER_HOSTS`, `parse_hosts`): a proxy's on this machine, in front of
     /// it with a login of its own. None unless the person lists them.
     pub hosts: Mutex<Vec<String>>,
+    /// The person says their proxy sees every visitor's own address
+    /// (`BAGHOLDER_PROXY_SEES_VISITORS=1`): one naming a Docker gateway is refused.
+    pub proxy_sees_visitors: AtomicBool,
+    /// The log has said this run that a proxy named a Docker gateway as its visitor.
+    pub relayed_said: AtomicBool,
     pub port: Mutex<u16>,
     pub started_at: String,
     pub state: Watched<State>,
@@ -367,6 +372,8 @@ impl App {
             root,
             bind_host,
             hosts: Mutex::new(Vec::new()),
+            proxy_sees_visitors: AtomicBool::new(false),
+            relayed_said: AtomicBool::new(false),
             port: Mutex::new(0),
             started_at: now_iso(),
             state: Watched::new(State::default(), events.clone()),
@@ -632,6 +639,15 @@ pub fn env_text(name: &str) -> Result<Option<String>, String> {
         Ok(v) => Ok(Some(v)),
         Err(std::env::VarError::NotPresent) => Ok(None),
         Err(std::env::VarError::NotUnicode(_)) => Err(format!("{name} is set to something that is not text")),
+    }
+}
+
+/// `BAGHOLDER_PROXY_SEES_VISITORS` read: `1` says so; unset, empty or `0` doesn't.
+pub fn parse_proxy_sees_visitors(v: Option<&str>) -> Result<bool, String> {
+    match v.map(str::trim) {
+        None | Some("") | Some("0") => Ok(false),
+        Some("1") => Ok(true),
+        Some(other) => Err(format!("BAGHOLDER_PROXY_SEES_VISITORS is set to {other:?}: set it to 1 once your proxy sees every visitor's own address, or leave it out")),
     }
 }
 

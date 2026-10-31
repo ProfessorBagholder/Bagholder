@@ -163,7 +163,7 @@ Bagholder answers your local network (its addresses, and names like `server.loca
         - traefik.http.services.bagholder.loadbalancer.server.port=8765
   ```
 
-  Keep the route to your network, as the allowlist does, when the proxy also faces the internet. Bagholder refuses visitors from the internet anyway, but the route is then never open to them.
+  Keep the route to your network, as the allowlist does, when the proxy also faces the internet. Bagholder refuses visitors from the internet anyway, but the route is then never open to them. Over IPv6 the allowlist and Bagholder both need Docker's IPv6 (below): without it the allowlist refuses your own devices when they connect over IPv6.
 - **No proxy, on a home server or a NAS:** publish the port on the network (`ports: ["8765:8765"]`) and open `http://<the server's address>:8765`. Under rootless Docker or Docker Desktop every visit reaches the container from its gateway, so Bagholder can't tell visitors apart there: don't forward the port from your router; put a proxy in front, or turn on Open from anywhere.
 - **On the computer you browse from (Docker Desktop):** the compose file as it is, which publishes the port on that computer alone. Open `http://127.0.0.1:8765`.
 - **A rented server with a public address:** publish nothing beyond its loopback (the compose file as it is). Open it once through an SSH tunnel (`ssh -L 8765:127.0.0.1:8765 you@server`, then `http://127.0.0.1:8765` on your computer), and turn on Open from anywhere.
@@ -175,6 +175,16 @@ docker compose up -d
 Then choose Connect Wealthsimple: the sign-in page opens inside the page. Sign in with your email, password and 2FA code (a passkey needs a real browser). The container's log says where it opens.
 
 To build the image yourself, from the root of a clone, `docker build -f rust/Dockerfile -t bagholder .`, and point the compose file's `image` at `bagholder`.
+
+### IPv6 behind a proxy in a container
+
+Without IPv6 in Docker, a visit over IPv6 reaches a proxy in a container through Docker's relay, which puts Docker's gateway in place of the visitor's address. The proxy then names that gateway as the visitor, for a device at home and one on the internet alike, so Bagholder can't tell them apart and answers both; its log says so once a run. Give Docker IPv6 so the proxy sees every visitor's own address. In `/etc/docker/daemon.json`:
+
+```json
+{ "ipv6": true, "ip6tables": true, "fixed-cidr-v6": "fd00:b4b0::/64", "userland-proxy": false }
+```
+
+and on the proxy's network and Bagholder's (`docker network create --ipv6 --subnet fd00:b4b1::/64 …`, or `enable_ipv6: true` with a `subnet` in the compose file's `networks`). Restarting Docker restarts every container. Then set `BAGHOLDER_PROXY_SEES_VISITORS=1` in Bagholder's `environment`: a visit a proxy names as Docker's gateway is refused from then on.
 
 ## Keeping up to date
 
