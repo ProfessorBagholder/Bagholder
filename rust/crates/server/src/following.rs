@@ -208,7 +208,7 @@ pub fn listings(b: &Book) -> Result<Vec<Listing>, String> {
 /// price moments later (`SPEC.md` §4, Watchlist), not at the next minute.
 fn quote_now(app: &Arc<App>, ids: Vec<InstrumentId>) {
     let a = app.clone();
-    crate::app::spawn("follow-quote", move || {
+    app.spawn_work("follow-quote", move || {
         let Some(f) = a.figures.get() else { return };
         let run = || -> Result<(), String> {
             let b = f.book()?;
@@ -418,7 +418,7 @@ mod tests {
     }
 
     /// An app of its own on the recorded month, its figures built, its network refused.
-    fn opened() -> (tempfile::TempDir, Arc<App>, Arc<Mutex<Vec<String>>>) {
+    fn opened() -> (crate::tests_common::OwnHome, Arc<App>, Arc<Mutex<Vec<String>>>) {
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
         let asked = Arc::new(Mutex::new(Vec::new()));
@@ -428,7 +428,7 @@ mod tests {
         let f = crate::figures::Figures::open(home.path(), now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();
         app.set_figures(f);
-        (home, app, asked)
+        (crate::tests_common::OwnHome::new(home, &app), app, asked)
     }
 
     fn named(symbol: &str, exchange: &str) -> Named {

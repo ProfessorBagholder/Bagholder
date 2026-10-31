@@ -1741,7 +1741,7 @@ mod tests {
 
     /// An app of its own on a home of its own, the recorded month in its book and
     /// its figures built.
-    fn built_app() -> (tempfile::TempDir, Arc<App>) {
+    fn built_app() -> (crate::tests_common::OwnHome, Arc<App>) {
         crate::tests_common::home(); // offline, dry orders
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
@@ -1750,7 +1750,7 @@ mod tests {
         let f = crate::figures::Figures::open(home.path(), at).unwrap();
         f.state_zone("America/Toronto", at).unwrap();
         app.set_figures(f);
-        (home, app)
+        (crate::tests_common::OwnHome::new(home, &app), app)
     }
 
     /// The market cache's schema, where the filings are kept.

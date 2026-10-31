@@ -273,6 +273,9 @@ pub struct App {
     pub state: Watched<State>,
     pub stop: AtomicBool,
     stop_bell: (Mutex<()>, std::sync::Condvar),
+    /// The one-off work started on threads of its own (`spawn_work`), for
+    /// `finish` to wait for.
+    work: Mutex<Vec<std::thread::JoinHandle<()>>>,
     /// The clock every wait is measured on (`Wall`).
     pub wall: Wall,
     pub exit_code: AtomicI32,
@@ -369,6 +372,7 @@ impl App {
             state: Watched::new(State::default(), events.clone()),
             stop: AtomicBool::new(false),
             stop_bell: (Mutex::new(()), std::sync::Condvar::new()),
+            work: Mutex::new(Vec::new()),
             wall: Wall::default(),
             exit_code: AtomicI32::new(0),
             market: crate::market_context::MarketContext::new(),
@@ -390,6 +394,34 @@ impl App {
             agents: crate::agents::Agents::default(),
             remote: crate::remote::Remote::default(),
         })
+    }
+
+    /// Run one-off work on a thread of its own, named `name`, kept for `finish`
+    /// to wait for.
+    pub fn spawn_work<F: FnOnce() + Send + 'static>(&self, name: &str, f: F) {
+        let h = std::thread::Builder::new().name(name.to_string()).spawn(f).expect("the system could not start a thread");
+        let mut w = self.work.lock().unwrap_or_else(|e| e.into_inner());
+        w.retain(|h| !h.is_finished());
+        w.push(h);
+    }
+
+    /// Stop, and wait for the one-off work started to end: the notifications'
+    /// sender too, once it has sent what it was handed. A test ends its app's work
+    /// with this before its data folder goes.
+    #[cfg(test)]
+    pub fn finish(&self) {
+        self.request_stop();
+        self.notify.close();
+        // a join outside the lock: work may start more work as it ends
+        loop {
+            let next = self.work.lock().unwrap_or_else(|e| e.into_inner()).pop();
+            match next {
+                Some(h) => {
+                    let _ = h.join();
+                }
+                None => break,
+            }
+        }
     }
 
     /// Run `f` on a thread of its own, named `name`, handed this app.

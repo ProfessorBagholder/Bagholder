@@ -83,6 +83,26 @@ pub fn app_ref() -> &'static App {
     made()
 }
 
+/// A test's own data folder, with the app made on it: the app's work is ended
+/// (`App::finish`) before the folder goes, so nothing the app started writes into
+/// a folder being removed, or runs on as the test's process exits.
+pub struct OwnHome {
+    _dir: tempfile::TempDir,
+    app: Arc<App>,
+}
+
+impl OwnHome {
+    pub fn new(dir: tempfile::TempDir, app: &Arc<App>) -> OwnHome {
+        OwnHome { _dir: dir, app: app.clone() }
+    }
+}
+
+impl Drop for OwnHome {
+    fn drop(&mut self) {
+        self.app.finish();
+    }
+}
+
 /// A book in `home` holding one account's month, pulled from the recorded
 /// Wealthsimple replies (`wealthsimple/tests/replies/wealthsimple-pull`).
 pub fn pulled_book(home: &std::path::Path) {
