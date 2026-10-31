@@ -11,6 +11,14 @@
 //! Docker's own gateway passing a visit on without the visitor's address. A private
 //! network includes 100.64/10, for Tailscale's addresses.
 //!
+//! A proxy in a container on a Docker network with no IPv6 gets every IPv6 visit
+//! through Docker's relay, from the network's gateway, and names that gateway as the
+//! visitor: home and internet alike. A visitor named so is a Docker gateway by its
+//! shape (an address in 172.16/12 ending in .1, a bridge's first host) or is this
+//! container's own gateway. Until the person says their proxy sees its visitors
+//! (`BAGHOLDER_PROXY_SEES_VISITORS`, once Docker has IPv6) such a visit is answered as
+//! before and the log says once why it can't be told; with it said, it is refused.
+//!
 //! The name asked for is held against DNS rebinding, where a website points its own
 //! name at an address on the visitor's network: directly, only this machine's own
 //! `127.0.0.1`, a private address, or a name that can't be in public DNS (one word,
@@ -91,6 +99,10 @@ pub struct Server<'a> {
     /// Docker's gateway inside a container: a visit it passes on shows its address,
     /// not the visitor's.
     pub gateway: Option<IpAddr>,
+    /// The person says their proxy sees every visitor's own address
+    /// (`BAGHOLDER_PROXY_SEES_VISITORS`): a visitor it names as a Docker gateway is then
+    /// refused.
+    pub proxy_sees_visitors: bool,
 }
 
 /// Whether `ip` is on this machine or a private network: loopback, the private
@@ -144,6 +156,23 @@ pub fn forwarded_for(forwarded: &str) -> Option<IpAddr> {
     bare.parse().ok().or_else(|| bare.rsplit_once(':').and_then(|(ip, port)| port.bytes().all(|c| c.is_ascii_digit()).then(|| ip.parse().ok()).flatten()))
 }
 
+/// Whether `ip` is a Docker gateway rather than a visitor: this container's own
+/// gateway, or one by its shape, a bridge's first host in 172.16/12. Only a router
+/// on such a private network holds a .1 there, and no one browses from a router.
+pub fn docker_gateway_shaped(server: &Server, ip: IpAddr) -> bool {
+    let v4 = match ip {
+        IpAddr::V4(v) => Some(v),
+        IpAddr::V6(v) => v.to_ipv4_mapped(),
+    };
+    server.gateway.is_some_and(|g| g == ip || Some(g) == v4.map(IpAddr::V4)) || v4.is_some_and(|v| v.octets()[0] == 172 && (v.octets()[1] & 0xf0) == 16 && v.octets()[3] == 1)
+}
+
+/// A visit a proxy names as coming from a Docker gateway, answered because the
+/// person hasn't said their proxy sees its visitors: what the log says once.
+pub fn relayed_and_answered(server: &Server, asked: &Asked) -> bool {
+    !server.proxy_sees_visitors && forwarded_for(asked.forwarded).is_some_and(|v| docker_gateway_shaped(server, v))
+}
+
 /// The page's own `127.0.0.1` and its port: in a container, any port, which Docker
 /// may publish under another number.
 fn own(server: &Server, host: &str) -> bool {
@@ -194,6 +223,9 @@ pub fn admit(server: &Server, asked: &Asked) -> Result<(), Refused> {
     if !local_ip(visitor) {
         return Err(Refused::Internet(visitor));
     }
+    if proxied && server.proxy_sees_visitors && docker_gateway_shaped(server, visitor) {
+        return Err(Refused::CannotTell("the proxy got this visit from Docker’s gateway, not from the visitor"));
+    }
     if own(server, host) {
         return write_ok();
     }
@@ -241,7 +273,7 @@ mod tests {
     const NONE: &[String] = &[];
 
     fn server<'a>(bind_host: &'a str, listed: &'a [String], gateway: Option<IpAddr>) -> Server<'a> {
-        Server { bind_host, port: 8765, listed, agents_name: &|h| h == "agents.example.com", gateway }
+        Server { bind_host, port: 8765, listed, agents_name: &|h| h == "agents.example.com", gateway, proxy_sees_visitors: false }
     }
 
     fn get<'a>(host: &'a str, peer: [u8; 4], forwarded: &'a str) -> Asked<'a> {
@@ -316,6 +348,34 @@ mod tests {
         assert_eq!(admit(&s, &nginx), Err(Refused::CannotTell("a proxy passed it on without the visitor’s address")));
         nginx.forwarded = "192.168.1.20";
         assert_eq!(admit(&s, &nginx), Ok(()), "the same proxy, naming its visitor");
+    }
+
+    /// A proxy that names a Docker gateway as its visitor got the visit through
+    /// Docker's relay (IPv6 on a network without it): answered as before, and said in
+    /// the log, until the person says their proxy sees its visitors; then refused. A
+    /// visitor on a 172.16/12 network that is not a gateway is answered either way.
+    #[test]
+    fn a_visitor_a_proxy_names_as_docker_s_gateway_is_refused_once_the_proxy_sees_visitors() {
+        let own_gateway = IpAddr::from([192, 168, 65, 1]); // Docker Desktop's, not of the shape
+        let mut s = server("0.0.0.0", NONE, Some(own_gateway));
+        for relay in ["172.18.0.1", "172.31.0.1", "::ffff:172.19.0.1", "192.168.65.1"] {
+            let asked = get("server.local", PROXY, relay);
+            assert_eq!(admit(&s, &asked), Ok(()), "{relay}: answered as before");
+            assert!(relayed_and_answered(&s, &asked), "{relay}: said in the log");
+        }
+        for visitor in ["172.18.0.20", "172.18.1.2", "192.168.1.1", "10.0.0.1"] {
+            assert!(!relayed_and_answered(&s, &get("server.local", PROXY, visitor)), "{visitor}: a visitor, not a gateway");
+        }
+        s.proxy_sees_visitors = true;
+        for relay in ["172.18.0.1", "172.31.0.1", "::ffff:172.19.0.1", "192.168.65.1"] {
+            let asked = get("server.local", PROXY, relay);
+            assert_eq!(admit(&s, &asked), Err(Refused::CannotTell("the proxy got this visit from Docker’s gateway, not from the visitor")), "{relay}");
+            assert!(!relayed_and_answered(&s, &asked), "{relay}: refused, so nothing to say in the log");
+        }
+        for visitor in ["172.18.0.20", "192.168.1.20"] {
+            assert_eq!(admit(&s, &get("server.local", PROXY, visitor)), Ok(()), "{visitor}: a visitor on the local network");
+        }
+        assert_eq!(admit(&s, &get("bagholder.lan", GATEWAY, "192.168.1.20")), Ok(()), "a proxy on the host, through Docker's gateway, naming its visitor");
     }
 
     /// An app on its computer, bound to loopback: its own 127.0.0.1 and port, a proxy
