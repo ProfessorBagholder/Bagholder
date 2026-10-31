@@ -771,6 +771,39 @@ mod wall_tests {
     }
 }
 
+#[cfg(test)]
+mod work_tests {
+    use super::*;
+
+    /// `finish` returns only once the work the app started has ended: a test's
+    /// folder never goes while that work still writes into it.
+    #[test]
+    fn finish_waits_for_the_work_started_to_end() {
+        let home = tempfile::tempdir().unwrap();
+        let app = App::new(home.path().to_path_buf(), home.path().to_path_buf(), "127.0.0.1".into());
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        app.spawn_work("bagholder-test-work", move || {
+            let _ = wait.recv();
+        });
+        let a = app.clone();
+        let finisher = std::thread::spawn(move || a.finish());
+        while !app.stopping() {
+            std::thread::yield_now();
+        }
+        // past its stop, a `finish` that joined nothing returns at once
+        for _ in 0..100_000 {
+            if finisher.is_finished() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(!finisher.is_finished(), "finish returned while the work still ran");
+        go.send(()).unwrap();
+        finisher.join().unwrap();
+        assert!(app.work.lock().unwrap().is_empty(), "every handle joined");
+    }
+}
+
 /// A problem a check finds, said in the header only once the next check finds one
 /// too (`SPEC.md` §4, the header): a check the next one answers is no failure the
 /// person needs to know of, and nothing is shown for a moment and gone. Said, it
