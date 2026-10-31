@@ -149,6 +149,10 @@ pub struct Remote {
     team_asked: Mutex<Option<Timestamp>>,
     /// Why Cloudflare didn't take Bagholder's GitHub app as a login method, until it does.
     github_said: Mutex<String>,
+    /// The address a set-up was refused because an earlier Bagholder set-up's
+    /// tunnel, connected nowhere, still holds it, and when that tunnel was last
+    /// connected: offered to the person to take over.
+    held: Mutex<Option<(String, String)>>,
 }
 
 /// Bagholder's folder for the page's address.
@@ -365,6 +369,14 @@ impl Remote {
 
     pub fn github_said(&self) -> String {
         self.github_said.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn held(&self) -> Option<(String, String)> {
+        self.held.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn set_held(&self, held: Option<(String, String)>) {
+        *self.held.lock().unwrap_or_else(|e| e.into_inner()) = held;
     }
 
     pub fn set_github_said(&self, said: String) {

@@ -25,20 +25,18 @@ const HOLIDAYS: &str = "bank-of-canada-holidays";
 
 #[test]
 fn the_recorded_shapes_are_the_answers_union() {
-    common::shape_is_the_answers_union("bank-of-canada-group.paths", BOC, "group-", boc::GROUP_KEYED);
-    common::shape_is_the_answers_union("bank-of-canada-observations.paths", BOC, "FX", boc::OBSERVATIONS_KEYED);
-    common::shape_is_the_answers_union("bank-of-canada-observations.paths", NOON, "IEXE", boc::OBSERVATIONS_KEYED);
+    common::shape_is_the_union_of("bank-of-canada-observations.paths", &[(BOC, "FX"), (NOON, "IEXE")], boc::OBSERVATIONS_KEYED);
     common::shape_is_the_answers_union("statistics-canada.paths", STATCAN, "v", &[]);
 }
 
 #[test]
-fn the_daily_group_lists_every_currency_the_bank_publishes_daily() {
-    let Outcome::Answered(list) = boc::parse_daily_list(&common::json(BOC, "group-FX_RATES_DAILY.json")) else { panic!() };
-    assert_eq!(list.len(), 27);
-    assert!(list.contains(&boc::DailySeries { currency: Currency::USD, code: "FXUSDCAD".into() }));
-    assert!(list.iter().any(|s| s.currency == cur("PLN")));
-    assert!(matches!(boc::parse_daily_list(&common::json(BOC, "wrong-shape-group-no-label.json")), Outcome::Mismatch(m) if m.path == "groupDetails.groupSeries.FXUSDCAD.label"));
-    assert!(matches!(boc::parse_daily_list(&common::json(BOC, "wrong-meaning-group-another-group.json")), Outcome::Meaning(w) if w.contains("FX_RATES_MONTHLY")));
+fn a_span_of_daily_rates_reads_as_the_bank_writes_it_now() {
+    // recorded 2026-10-30: each series' detail carries its dateFormat and metadata
+    let span = (date(2026, 10, 20), date(2026, 10, 29));
+    let Outcome::Answered(o) = boc::parse_observations(&common::json(BOC, "FXUSDCAD-2026-10-20-2026-10-29.json"), "FXUSDCAD", Some(span)) else { panic!() };
+    assert_eq!(o.rates.first(), Some(&(date(2026, 10, 20), dec("1.4054"))));
+    assert_eq!(o.rates.len(), 8);
+    assert_eq!(boc::daily_description(&o.description), Ok(false));
 }
 
 #[test]
@@ -203,7 +201,7 @@ fn every_noon_table_row_a_recorded_reply_states_is_the_banks_own() {
             None => assert_eq!((code.as_str(), o.description.as_str()), ("IEXE0105", "U.S. dollar noon, 90-day")),
         }
     }
-    assert_eq!(checked, vec!["IEXE0101", "IEXE2702", "IEXE2703", "IEXE4701"]);
+    assert_eq!(checked, vec!["IEXE0101", "IEXE0101", "IEXE2702", "IEXE2703", "IEXE4701"]);
     // the old cedi's whole series is the table's first and last day
     let ghc = boc::noon_series(cur("GHC"));
     let Outcome::Answered(o) = boc::parse_observations(&common::json(NOON, "IEXE4701-2007-05-01-2007-06-29.json"), "IEXE4701", Some((ghc[0].first, ghc[0].last))) else { panic!() };

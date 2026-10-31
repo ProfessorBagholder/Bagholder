@@ -194,7 +194,7 @@ fn agents_declarations() -> String {
     macro_rules! decls {
         ($($t:ty),* $(,)?) => { vec![$(<$t>::decl(&config)),*] };
     }
-    let decls: Vec<String> = decls![Provider, Setup, Address, CloudflareSays, Installing, TailscaleSays, TunnelState, Ready, Waiting, Connected, ProgramFound, RefusedCount, AgentsStatus, SwitchAsked, ProviderAsked, AgentId, Renamed, NgrokToken, KeyAsked, MadeKey, LogAsked, LogLine, AgentLog, RemoteStatus, TokenAsked, SetUpAsked, RemoteSwitch, GitHubAsked, GitHubManifest];
+    let decls: Vec<String> = decls![Provider, Setup, Address, CloudflareSays, Installing, TailscaleSays, TunnelState, Ready, Waiting, Connected, ProgramFound, RefusedCount, AgentsStatus, SwitchAsked, ProviderAsked, AgentId, Renamed, NgrokToken, KeyAsked, MadeKey, LogAsked, LogLine, AgentLog, RemoteStatus, RemoteHeld, TokenAsked, SetUpAsked, RemoteSwitch, GitHubAsked, GitHubManifest];
     let mut out = String::from("// Generated from the server's agents module. Do not edit: change the Rust type, then\n// `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_agents_types`.\n\n");
     for d in decls {
         out.push_str("export ");

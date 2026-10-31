@@ -847,14 +847,22 @@ pub fn push_one(app: &Arc<App>, key: &crate::webpush::Keys, endpoint: &str, p256
 
 /// A row sent to every subscribed browser: marked seen once one has it, a
 /// subscription its push service says is gone dropped, and a failure said in the
-/// header once confirmed, standing until a send succeeds.
+/// header once confirmed, standing until a send succeeds. With no browser
+/// subscribed there is nothing to sign: no key is made or read.
 pub fn push_all(app: &Arc<App>, row: &bagholder_market::stored::feeds::Notification) {
     let b = match book(app) {
         Ok(b) => b,
         Err(e) => return crate::feeds::feed_failed(app, PUSHED, format!("A notification could not be sent: {e}")),
     };
-    let (key, subs) = match vapid(&b).and_then(|k| b.push_subscriptions().map_err(sql).map(|s| (k, s))) {
-        Ok(x) => x,
+    let subs = match b.push_subscriptions() {
+        Ok(s) => s,
+        Err(e) => return crate::feeds::feed_failed(app, PUSHED, format!("A notification could not be sent: {}", sql(e))),
+    };
+    if subs.is_empty() {
+        return crate::feeds::feed_answered(app, PUSHED);
+    }
+    let key = match vapid(&b) {
+        Ok(k) => k,
         Err(e) => return crate::feeds::feed_failed(app, PUSHED, format!("A notification could not be sent: {e}")),
     };
     let mut reached = false;
@@ -1660,6 +1668,20 @@ mod tests {
         assert_eq!(tokens[0], tokens[1], "one token for one push service, within the hour");
         let seen: Vec<i64> = st::list_notifications(conn.notices(), 0, "", true, 1000, false).unwrap().iter().map(|r| r.id).collect();
         assert!(!seen.contains(&fill.id) && !seen.contains(&update.id), "a pushed row is shown: no page shows it again");
+    }
+
+    /// With no browser subscribed, a row is sent nowhere and no key is made: the
+    /// sending thread does no signing work (a key made on it raced the process's
+    /// exit, OpenSSL's cleanup freeing what the thread was using, 2026-10-30).
+    #[test]
+    fn a_row_with_no_browser_subscribed_makes_no_key() {
+        let (_g, app, conn) = setup();
+        clear_push(&conn);
+        conn.set_setting(VAPID_KEY, None, bagholder_core::jiff::Timestamp::now()).unwrap();
+        set(&conn, json!({"updates": true}));
+        let row = record(&conn, "updates", "update:none", "Update available", "x", None).unwrap().unwrap();
+        push_all(&app, &row);
+        assert_eq!(conn.setting(VAPID_KEY).unwrap(), None);
     }
 
     /// A row too long for one push goes as its id alone, still at most 4 KB, for

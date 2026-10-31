@@ -15,21 +15,22 @@
 //! - **Statistics Canada's archive**, when the oldest day is before the noon
 //!   series and the table holds the currency: once, whole, to 2007-04-30.
 //!
-//! The group of daily series is read when a currency needed has no series stored
-//! from any source, at most once a day: that is how a currency is found to be one
-//! the Bank publishes, or not. The holiday page is read once each month.
+//! A currency's daily series is asked for by its code, with no list read first:
+//! one the Bank does not publish daily answers that it has no such series, and
+//! that answer stands for the day it was given. The holiday page is read once
+//! each month.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_book::facts::RateSeries;
 use bagholder_core::jiff::civil::{Date, Weekday};
 use bagholder_core::jiff::tz::TimeZone;
-use bagholder_core::jiff::{SignedDuration, Timestamp};
+use bagholder_core::jiff::Timestamp;
 use bagholder_core::{Currency, SourceName};
 
 use crate::adapters::{boc, holidays, statcan};
 use crate::contract::DataKind;
-use crate::outcome::{Noted, Outcome, OutcomeKind};
+use crate::outcome::{Outcome, OutcomeKind};
 use crate::read::{Ctx, Result};
 
 /// One currency the engine converts, and the oldest day it converts it on.
@@ -46,8 +47,6 @@ pub struct Held {
     /// Per currency, the spans completed reads covered, and when each was received.
     pub reads: BTreeMap<Currency, Vec<(Date, Date, Timestamp)>>,
     pub holidays: BTreeSet<Date>,
-    /// When the group of daily series was last answered.
-    pub list_read: Option<Timestamp>,
     /// When the holiday page was last answered.
     pub holidays_read: Option<Timestamp>,
 }
@@ -55,8 +54,7 @@ pub struct Held {
 /// One read the Bank's sources are due.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Due {
-    DailyList,
-    /// The whole daily series of a currency the Bank lists, read once.
+    /// The whole daily series of a currency, read once.
     DailyWhole(Currency),
     /// A daily series from the day after the last read to today.
     DailyForward(Currency, Date, Date),
@@ -86,15 +84,10 @@ fn next_business_day(d: Date, holidays: &BTreeSet<Date>) -> Option<Date> {
     Some(n)
 }
 
-/// The reads due of the first phase: the group of daily series and the daily
-/// series themselves.
+/// The reads due of the first phase: the daily series held, read forward.
 pub fn due_daily(needs: &[Need], held: &Held, now: Timestamp, bank: &TimeZone) -> Vec<Due> {
     let today = now.to_zoned(bank.clone()).date();
     let mut out = Vec::new();
-    let unknown = needs.iter().any(|n| !held.series.iter().any(|s| s.currency == n.currency));
-    if unknown && held.list_read.is_none_or(|at| now.duration_since(at) >= SignedDuration::from_hours(24)) {
-        out.push(Due::DailyList);
-    }
     for n in needs {
         let Some(daily) = series_of(held, n.currency, boc::DAILY) else { continue };
         if daily.ended {
@@ -119,10 +112,10 @@ pub fn due_daily(needs: &[Need], held: &Held, now: Timestamp, bank: &TimeZone) -
     out
 }
 
-/// The daily series of the currencies the group lists and the book does not
-/// hold yet: each read whole, once.
-pub fn due_daily_whole(needs: &[Need], held: &Held, listed: &BTreeSet<Currency>) -> Vec<Due> {
-    needs.iter().filter(|n| listed.contains(&n.currency) && series_of(held, n.currency, boc::DAILY).is_none()).map(|n| Due::DailyWhole(n.currency)).collect()
+/// The daily series of the currencies the book does not hold yet: each read
+/// whole, once, but for one the Bank said today it does not publish daily.
+pub fn due_daily_whole(needs: &[Need], held: &Held, unpublished: &BTreeSet<Currency>) -> Vec<Due> {
+    needs.iter().filter(|n| !unpublished.contains(&n.currency) && series_of(held, n.currency, boc::DAILY).is_none()).map(|n| Due::DailyWhole(n.currency)).collect()
 }
 
 /// The reads due of the second phase, once the daily series are known: the
@@ -166,13 +159,10 @@ pub fn held(ctx: &Ctx) -> Result<Held> {
         series: ctx.book.rate_series()?,
         reads: ctx.book.rate_reads()?,
         holidays: ctx.book.bank_holidays()?,
-        list_read: last_answered(boc::daily_source(), LIST_DETAIL)?,
         holidays_read: last_answered(holidays::source(), HOLIDAYS)?,
     })
 }
 
-/// How an answered read of the group is told from a read of a series.
-const LIST_DETAIL: &str = "the group of daily series";
 /// The holiday page's subject in the reads kept.
 const HOLIDAYS: &str = "holidays";
 
@@ -191,23 +181,20 @@ pub fn read(ctx: &Ctx, needs: &[Need]) -> Result<()> {
         ctx.attempted(&subject, DataKind::Rate, &source, kind)
     };
     let h = held(ctx)?;
-    let listed = std::cell::RefCell::new(BTreeSet::new());
     for due in due_daily(&needs, &h, ctx.now, ctx.bank) {
-        match due {
-            Due::DailyList => run(LIST_DETAIL.into(), boc::daily_source(), boc::HOST, &|| {
-                let noted = boc::ask_daily_list(ctx.net);
-                record_list(ctx, &Noted { outcome: noted.outcome.clone().map(|_| ()), shape_change: noted.shape_change })?;
-                let kind = noted.outcome.kind();
-                if let Outcome::Answered(list) = noted.outcome {
-                    *listed.borrow_mut() = list.iter().map(|s| s.currency).collect();
-                }
-                Ok(kind)
-            })?,
-            Due::DailyForward(c, from, to) => run(c.to_string(), boc::daily_source(), boc::HOST, &|| daily(ctx, c, Some((from, to))))?,
-            _ => {}
+        if let Due::DailyForward(c, from, to) = due {
+            run(c.to_string(), boc::daily_source(), boc::HOST, &|| daily(ctx, c, Some((from, to))))?;
         }
     }
-    for due in due_daily_whole(&needs, &h, &listed.borrow()) {
+    // a currency whose daily series the Bank said today it does not have
+    let mut unpublished = BTreeSet::new();
+    for n in &needs {
+        let newest = ctx.cache.reads(&format!("{}:{}", n.currency, boc::daily_source()), DataKind::Rate)?.into_iter().next();
+        if newest.is_some_and(|r| r.outcome == OutcomeKind::NotCarried && r.at.to_zoned(ctx.bank.clone()).date() == ctx.today()) {
+            unpublished.insert(n.currency);
+        }
+    }
+    for due in due_daily_whole(&needs, &h, &unpublished) {
         if let Due::DailyWhole(c) = due {
             run(c.to_string(), boc::daily_source(), boc::HOST, &|| daily(ctx, c, None))?;
         }
@@ -231,20 +218,6 @@ pub fn read(ctx: &Ctx, needs: &[Need]) -> Result<()> {
             Ok(kind)
         })?;
     }
-    Ok(())
-}
-
-fn record_list(ctx: &Ctx, noted: &Noted<()>) -> Result<()> {
-    ctx.cache.record(&crate::cache::OutcomeRow {
-        source: boc::daily_source(),
-        host: boc::HOST.into(),
-        kind: DataKind::Rate,
-        instrument: None,
-        outcome: noted.outcome.kind(),
-        detail: if noted.outcome.kind() == OutcomeKind::Answered { LIST_DETAIL.into() } else { format!("{LIST_DETAIL}: {}", noted.outcome.detail()) },
-        shape_change: noted.shape_change.as_ref().map(|c| c.to_string()),
-        at: ctx.now,
-    })?;
     Ok(())
 }
 

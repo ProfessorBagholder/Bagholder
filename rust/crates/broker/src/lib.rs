@@ -268,6 +268,11 @@ pub trait BrokerAdapter {
     /// Each account's positions as of a day, read together: every account asked
     /// for in as few requests as the broker takes.
     fn positions(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>>;
+    /// Each account's positions today: a broker that asks today's apart from a past
+    /// day's (Wealthsimple) asks it so; any other states them as of today.
+    fn positions_today(&mut self, accounts: &[String], today: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>> {
+        self.positions(accounts, today)
+    }
     /// The person's accounts held outside the broker that the broker's own net
     /// worth feature states (`docs/plans/debts-held-outside-wealthsimple.md`):
     /// none from a broker that states none.

@@ -143,7 +143,7 @@ A broker is a source with more to it. Each broker adapter provides:
 
 - **Connection.** Signing in from the person's own device (the page, wherever it is open), keeping the session fresh, knowing when it has lapsed. The server never needs a screen of its own.
 - **The pull.** Accounts, balances, positions as the broker states them, its net value history, activity, turned into source records and reconciled.
-- **Positions as of a day**: each account's units, book value and cash as the broker states them on a day, asked as of today with the balances, as of yesterday at each pull, and for a past day a page shows, once (`statement_units`, `statement_cash`). Monthly statements are not read: records an earlier build booked from them are withdrawn by the first pull, and their tables are left unread.
+- **Positions as of a day**: each account's units, book value and cash as the broker states them on a day, asked as of today with the balances (Wealthsimple's document for today, `FetchHoldingsExportPositions`), as of yesterday at each pull, and for a past day a page shows, once (`statement_units`, `statement_cash`). Monthly statements are not read: records an earlier build booked from them are withdrawn by the first pull, and their tables are left unread.
 - **Capabilities**, declared: order types per instrument, whether it holds stop orders, whether it modifies in place and what, time-in-force rules, how long it keeps a resting order, **whether it rejects a duplicate client order id**, session rules.
 - **Execution**: place, modify, cancel, read one order back, list open orders; every request and reply recorded.
 

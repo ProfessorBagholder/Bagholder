@@ -997,6 +997,19 @@ fn positions_state_what_each_holding_is_worth_and_one_that_states_none_writes_no
     assert_eq!(p.stated().units, None);
 }
 
+#[test]
+fn a_holding_whose_worth_is_stated_null_is_held_with_no_worth() {
+    // a past day's reply read 2026-10-30 states one position's totalValue null: the
+    // day's holdings are read, that one with no worth stated, as Wealthsimple's web
+    // app shows it blank
+    let p = pulled(Op::Positions, &[edited("edited-positions-value-null.json")]);
+    assert!(p.report.failures.is_empty(), "{:?}", p.report.failures);
+    let s = p.stated();
+    let (_, units) = s.units.expect("the units stated");
+    assert_eq!(units.len(), 19);
+    assert_eq!(s.unit_values.len(), 18);
+}
+
 /// Each holding's book value is read as Wealthsimple states it (`bookValue`, in
 /// the currency it states: CAD on every line of every recorded reply, a short's
 /// negative, what it brought in) and stored with the units (brief 20 §4); a line
@@ -1049,12 +1062,16 @@ fn positions_with_a_quantity_of_another_type_write_no_units() {
 }
 
 #[test]
-fn positions_with_a_long_of_negative_units_write_no_units() {
-    let p = pulled(Op::Positions, &[edited("wrong-meaning-positions-long-negative.json")]);
-    let [(part, why)] = p.failures().try_into().unwrap();
-    assert_eq!(part, "holdings");
-    assert!(why.contains("quantity") && why.contains("-13000") && why.contains("LONG"), "{why}");
-    assert_eq!(p.stated().units, None);
+fn positions_with_a_long_below_zero_write_its_units_as_stated() {
+    // Wealthsimple stated a holding of -0.0009684509 units as LONG for a past day
+    // (read 2026-10-30): its web app reads the quantity as stated, and so does
+    // Bagholder, the day's other holdings with it
+    let p = pulled(Op::Positions, &[edited("edited-positions-long-below-zero.json")]);
+    assert!(p.report.failures.is_empty(), "{:?}", p.report.failures);
+    let (_, units) = p.stated().units.expect("the units stated");
+    assert_eq!(units.len(), 19);
+    let of = |id: &str| units[&p.book.instrument_by_ref(&Reference::new(RefScheme::BrokerSecurity(Broker::named("wealthsimple")), id)).unwrap().unwrap()];
+    assert_eq!(of("sec-s-0611ed76cd8445138631597d171d986f"), dec("-0.0009684509"));
 }
 
 // -- balances (FetchAccountsWithBalance) ---------------------------------------

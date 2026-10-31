@@ -6,10 +6,14 @@ observations[].*.v
 observations[].d
 seriesDetail
 seriesDetail.*
+seriesDetail.*.dateFormat ?
 seriesDetail.*.description
 seriesDetail.*.dimension
 seriesDetail.*.dimension.key
 seriesDetail.*.dimension.name
 seriesDetail.*.label
+seriesDetail.*.metadata ?
+seriesDetail.*.metadata.frequency ?
+seriesDetail.*.metadata.unit ?
 terms
 terms.url

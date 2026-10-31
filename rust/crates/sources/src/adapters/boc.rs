@@ -41,25 +41,12 @@ pub fn noon_source() -> SourceName {
     SourceName::named(NOON_SOURCE)
 }
 
-/// What Valet's replies carry, from the recorded ones (`tests/replies`).
-pub fn group_shape() -> RecordedShape {
-    ask::recorded_shape(include_str!("../../shapes/bank-of-canada-group.paths"))
-}
-
-/// The group's series are keyed by their codes.
-pub const GROUP_KEYED: &[Keyed] = &[Keyed { parent: "groupDetails.groupSeries", fields: &[] }];
-/// An observations reply is keyed by its series' code, in its detail and in each row.
+/// What Valet's observations replies carry, from the recorded ones
+/// (`tests/replies`): keyed by the series' code, in its detail and in each row.
 pub const OBSERVATIONS_KEYED: &[Keyed] = &[Keyed { parent: "seriesDetail", fields: &[] }, Keyed { parent: "observations[]", fields: &["d"] }];
 
 pub fn observations_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/bank-of-canada-observations.paths"))
-}
-
-/// One daily series the Bank lists.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct DailySeries {
-    pub currency: Currency,
-    pub code: String,
 }
 
 /// The daily series' code for a currency.
@@ -185,38 +172,6 @@ fn meaning<A>(why: String) -> Outcome<A> {
     Outcome::Meaning(why)
 }
 
-/// The group `FX_RATES_DAILY`: every currency the Bank publishes daily.
-pub fn parse_daily_list(v: &Value) -> Outcome<Vec<DailySeries>> {
-    match read_daily_list(v) {
-        Ok(Ok(list)) => Outcome::Answered(list),
-        Ok(Err(why)) => meaning(why),
-        Err(m) => Outcome::Mismatch(m),
-    }
-}
-
-fn read_daily_list(v: &Value) -> Result<Result<Vec<DailySeries>, String>, Mismatch> {
-    let root = Node::root(v);
-    let group = root.obj("groupDetails")?;
-    let name = group.text("name")?;
-    if name != "FX_RATES_DAILY" {
-        return Ok(Err(format!("the group answered is {name}, not FX_RATES_DAILY")));
-    }
-    let series = group.obj("groupSeries")?;
-    let mut out = Vec::new();
-    for code in series.keys()? {
-        let label = series.obj(code)?.text("label")?;
-        let currency = code.strip_prefix("FX").and_then(|r| r.strip_suffix("CAD")).and_then(|c| Currency::parse(c).ok());
-        match currency {
-            Some(c) if label == format!("{}/CAD", c.as_str()) => out.push(DailySeries { currency: c, code: code.to_string() }),
-            _ => return Ok(Err(format!("the group lists {code} labelled {label}, not a daily rate in Canadian dollars"))),
-        }
-    }
-    if out.is_empty() {
-        return Ok(Err("the group lists no series".into()));
-    }
-    Ok(Ok(out))
-}
-
 /// A series' observations, checked: the series answered is `code`; each day
 /// is inside `span` where one was asked, and after the one before; each rate is
 /// a positive decimal.
@@ -276,20 +231,6 @@ fn observations_url(code: &str, span: Option<(Date, Date)>) -> String {
 
 fn noted<A>(outcome: Outcome<A>, shape_change: Option<crate::reply::ShapeChange>) -> Noted<A> {
     Noted { outcome, shape_change }
-}
-
-/// Ask Valet for the group of daily series.
-pub fn ask_daily_list(net: &Net) -> Noted<Vec<DailySeries>> {
-    let url = format!("{VALET}/groups/FX_RATES_DAILY/json");
-    let reply = match ask::send(net, &Ask::get(&url, &[]), NOT_CARRIED) {
-        Outcome::Answered(r) => r,
-        other => return noted(other.failed().expect("not answered"), None),
-    };
-    let v = match ask::json(&reply.body) {
-        Ok(v) => v,
-        Err(m) => return noted(Outcome::Mismatch(m), None),
-    };
-    noted(parse_daily_list(&v), ask::noticed(&v, &group_shape(), GROUP_KEYED))
 }
 
 /// Ask Valet for one series' observations over `span`, or its whole history.

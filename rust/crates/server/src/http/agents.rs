@@ -179,6 +179,13 @@ fn sites(a: &bagholder_book::agents::AgentsBook) -> Result<Vec<Site>, String> {
     Ok(out)
 }
 
+/// The computer the panel names, by the address Bagholder listens on: in a
+/// container (any but `127.0.0.1`) the host's name is the container's id, no name
+/// its owner gave, and none is named.
+fn computer_named(bind_host: &str) -> String {
+    if bind_host == "127.0.0.1" { tunnel::computer() } else { String::new() }
+}
+
 /// The panel's state, for the page's status.
 pub fn status(app: &Arc<App>) -> AgentsStatus {
     let mut out = AgentsStatus { on: app.agents.port().is_some(), port: app.agents.port().map(u32::from), ..AgentsStatus::default() };
@@ -191,7 +198,7 @@ pub fn status(app: &Arc<App>) -> AgentsStatus {
     let events = app.events.clone();
     out.cloudflare = app.agents.cloudflare_says(&app.home, Arc::new(move || events.signal()), Arc::new(zone_name));
     out.refused = app.agents.ctx().map(|c| agents::listener::strangers(&c)).unwrap_or_default().into_iter().map(|(why, n)| RefusedCount { why, count: n.min(u32::MAX as u64) as u32 }).collect();
-    out.computer = tunnel::computer();
+    out.computer = computer_named(&app.bind_host);
     out.os = std::env::consts::OS.to_string();
     out.installing = app.agents.installing().into_iter().map(|(provider, failed)| Installing { provider, failed }).collect();
     out.programs = Provider::ALL.iter().filter(|p| p.program().is_some()).map(|p| ProgramFound { provider: *p, path: tunnel::find_here(&app.home, *p).map(|x| x.display().to_string()) }).collect();
@@ -470,6 +477,65 @@ pub(crate) fn delete_record(access: &agents::cloudflare::Access, address: &str, 
         bagholder_net::client::request("DELETE", &format!("{records}/{id}"), &headers, None, wait).map_err(|e| e.to_string())?;
     }
     Ok(())
+}
+
+/// Whether Cloudflare's answer for a tunnel (`result`) is one Bagholder made
+/// (`bagholder-…`, `agents::cloudflare::Files::set_up`) that runs nowhere now:
+/// never connected, or every connection gone.
+pub(crate) fn stale_tunnel(v: &serde_json::Value) -> bool {
+    let r = |k: &str| v.pointer(&format!("/result/{k}"));
+    r("name").and_then(serde_json::Value::as_str).is_some_and(|n| n.starts_with("bagholder-"))
+        && r("status").and_then(serde_json::Value::as_str).is_some_and(|s| matches!(s, "inactive" | "down"))
+        && r("deleted_at").is_none_or(serde_json::Value::is_null)
+}
+
+/// An address held by a tunnel Bagholder made that runs nowhere now (a set-up
+/// whose files were lost): its DNS record and tunnel, and when the tunnel was last
+/// connected (none where it never was).
+pub(crate) struct StaleHolder {
+    pub host: String,
+    pub last_connected: String,
+    record: String,
+    tunnel: String,
+}
+
+/// The address's DNS record, where it points at a tunnel Bagholder made that runs
+/// nowhere now. A record pointing anywhere else, at a tunnel that runs, at one
+/// Bagholder did not name, or at `own`, holds nothing to take over.
+pub(crate) fn stale_holder(access: &agents::cloudflare::Access, address: &str, own: Option<&str>) -> Result<Option<StaleHolder>, String> {
+    let host = if address.contains('.') { address.to_ascii_lowercase() } else { format!("{}.{}", address.to_ascii_lowercase(), zone_name(access)?) };
+    let records = format!("https://api.cloudflare.com/client/v4/zones/{}/dns_records", access.zone);
+    let query: String = serde_urlencoded::to_string([("type", "CNAME"), ("name", host.as_str())]).map_err(|e| e.to_string())?;
+    let listed = cloudflare_api(access, "GET", &format!("{records}?{query}"))?;
+    for r in listed.get("result").and_then(serde_json::Value::as_array).into_iter().flatten() {
+        let (Some(record), Some(content)) = (r.get("id").and_then(serde_json::Value::as_str), r.get("content").and_then(serde_json::Value::as_str)) else { continue };
+        let Some(tunnel) = content.to_ascii_lowercase().strip_suffix(".cfargotunnel.com").map(str::to_string) else { continue };
+        if own == Some(tunnel.as_str()) {
+            continue;
+        }
+        let said = cloudflare_api(access, "GET", &format!("https://api.cloudflare.com/client/v4/accounts/{}/cfd_tunnel/{tunnel}", access.account))?;
+        if stale_tunnel(&said) {
+            let last_connected = said.pointer("/result/conns_inactive_at").and_then(serde_json::Value::as_str).unwrap_or_default().to_string();
+            return Ok(Some(StaleHolder { host, last_connected, record: record.to_string(), tunnel }));
+        }
+    }
+    Ok(None)
+}
+
+/// The stale holder's DNS record and tunnel deleted at Cloudflare, once the person
+/// chose to take the address over.
+pub(crate) fn take_over(access: &agents::cloudflare::Access, held: &StaleHolder) -> Result<(), String> {
+    cloudflare_api(access, "DELETE", &format!("https://api.cloudflare.com/client/v4/zones/{}/dns_records/{}", access.zone, held.record))?;
+    cloudflare_api(access, "DELETE", &format!("https://api.cloudflare.com/client/v4/accounts/{}/cfd_tunnel/{}", access.account, held.tunnel))?;
+    Ok(())
+}
+
+/// One request to Cloudflare's API with the sign-in's token, its answer read.
+fn cloudflare_api(access: &agents::cloudflare::Access, method: &str, url: &str) -> Result<serde_json::Value, String> {
+    let auth = format!("Bearer {}", access.token);
+    let headers = [("Authorization", auth.as_str()), ("Accept", "application/json")];
+    let said = bagholder_net::client::request(method, url, &headers, None, std::time::Duration::from_secs(30)).map_err(|e| e.to_string())?;
+    serde_json::from_slice(&said.body).map_err(|e| format!("Cloudflare’s answer could not be read: {e}"))
 }
 
 async fn start_tunnel(State(state): State<AppState>, Required(asked): Required<ProviderAsked>) -> Api<OkOr> {
@@ -756,6 +822,28 @@ async fn log(State(state): State<AppState>, Params(q): Params<LogAsked>) -> Api<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only a tunnel Bagholder named that runs nowhere frees its address: one the
+    /// person made, one that runs, or one already deleted is left as it is.
+    #[test]
+    fn only_a_bagholder_tunnel_that_runs_nowhere_is_stale() {
+        let t = |name: &str, status: &str| serde_json::json!({"result": {"id": "t-1", "name": name, "status": status, "deleted_at": null}});
+        assert!(stale_tunnel(&t("bagholder-abc", "inactive")));
+        assert!(stale_tunnel(&t("bagholder-abc", "down")));
+        assert!(!stale_tunnel(&t("bagholder-abc", "healthy")));
+        assert!(!stale_tunnel(&t("bagholder-abc", "degraded")));
+        assert!(!stale_tunnel(&t("home-server", "down")));
+        assert!(!stale_tunnel(&serde_json::json!({"result": {"name": "bagholder-abc", "status": "down", "deleted_at": "2026-10-30T00:00:00Z"}})));
+        assert!(!stale_tunnel(&serde_json::json!({"success": false, "errors": [{"code": 1003}]})));
+    }
+
+    /// A container's host name is its id: the panel names a computer only for an
+    /// app on its own computer.
+    #[test]
+    fn a_container_names_no_computer() {
+        assert_eq!(computer_named("0.0.0.0"), "");
+        assert_eq!(computer_named("127.0.0.1"), tunnel::computer());
+    }
 
     /// As the tunnel comes up, the address is checked on a thread of its own, once at
     /// a time, and no more once a check has found it answering.

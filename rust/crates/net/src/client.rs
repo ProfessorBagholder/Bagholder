@@ -7,7 +7,7 @@
 //! One connection per host is kept open between requests, because for a
 //! request this small the handshake is the whole cost.
 
-use openssl::ssl::{SslConnector, SslMethod, SslStream};
+use openssl::ssl::{SslConnector, SslMethod, SslOptions, SslStream};
 use std::collections::HashMap;
 use std::io::{Read, Write};
 use std::net::TcpStream;
@@ -125,18 +125,29 @@ fn ca_file() -> Option<String> {
 /// not loadable leaves nothing to trust, and every TLS request says so.
 fn connector() -> Result<&'static SslConnector, Error> {
     static C: OnceLock<Result<SslConnector, String>> = OnceLock::new();
-    C.get_or_init(|| {
-        let mut b = SslConnector::builder(SslMethod::tls_client()).expect("openssl");
-        if let Some(ca) = ca_file() {
-            b.set_ca_file(&ca).map_err(|e| format!("cannot load the CA bundle {ca}: {e}"))?;
-        }
-        // HTTP/1.1 only: this client speaks nothing else, and a host that
-        // negotiated h2 would then answer in a framing it cannot read.
-        b.set_alpn_protos(b"\x08http/1.1").expect("a well-formed protocol list is accepted");
-        Ok(b.build())
-    })
-    .as_ref()
-    .map_err(|e| Error::Transport(e.clone()))
+    C.get_or_init(|| connector_settings().map(|b| b.build())).as_ref().map_err(|e| Error::Transport(e.clone()))
+}
+
+/// OpenSSL's `SSL_OP_TLSEXT_PADDING`, which the safe crate names no constant for.
+const TLSEXT_PADDING: SslOptions = SslOptions::from_bits_retain(0x10);
+
+/// The connector's settings, before it is built.
+fn connector_settings() -> Result<openssl::ssl::SslConnectorBuilder, String> {
+    let mut b = SslConnector::builder(SslMethod::tls_client()).expect("openssl");
+    if let Some(ca) = ca_file() {
+        b.set_ca_file(&ca).map_err(|e| format!("cannot load the CA bundle {ca}: {e}"))?;
+    }
+    // no padding extension in the hello: the connector's `SSL_OP_ALL` turns it on,
+    // and OpenSSL 3.0 adds it to a hello of 256 to 511 bytes (a workaround for old
+    // load balancers) where a newer OpenSSL's larger hello never takes it, so the
+    // hello differed by the system's OpenSSL. Evolve's site refuses the padded one
+    // (403, 2026-10-30), so a build on Debian 12 or Ubuntu 24.04 could not read it
+    // where the macOS build could. Every build sends the hello without it.
+    b.clear_options(TLSEXT_PADDING);
+    // HTTP/1.1 only: this client speaks nothing else, and a host that
+    // negotiated h2 would then answer in a framing it cannot read.
+    b.set_alpn_protos(b"\x08http/1.1").expect("a well-formed protocol list is accepted");
+    Ok(b)
 }
 
 struct Url {
@@ -1214,5 +1225,21 @@ mod ceiling_tests {
         let mut f = std::fs::File::create(dir.path().join("f")).unwrap();
         let e = download(&format!("http://127.0.0.1:{port}/f"), &[], Duration::from_secs(10), &mut f, 1024, &|h| h == "127.0.0.1", &mut |_| true).unwrap_err();
         assert!(e.to_string().contains("elsewhere.example is not a host"), "{e}");
+    }
+}
+
+#[cfg(test)]
+mod hello {
+    use openssl::ssl::SslOptions;
+
+    /// The hello is the same whatever OpenSSL the build links: no padding
+    /// extension, which OpenSSL 3.0 adds under `SSL_OP_ALL` and Evolve's site
+    /// refuses; the connector's other options stay as they are.
+    #[test]
+    fn the_hello_carries_no_padding_extension() {
+        let options = super::connector_settings().unwrap().options();
+        assert!(!options.contains(super::TLSEXT_PADDING));
+        assert!(options.contains(SslOptions::NO_COMPRESSION));
+        assert!(super::connector().is_ok());
     }
 }

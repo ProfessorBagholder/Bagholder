@@ -60,10 +60,6 @@ fn observations(code: &str, span: Option<(Date, Date)>) -> String {
     }
 }
 
-fn group() -> String {
-    format!("{VALET}/groups/FX_RATES_DAILY/json")
-}
-
 fn archive_url(vector: u32, from: Date, to: Date) -> String {
     format!("{WDS}?vectorIds=%22{vector}%22&startRefPeriod={from}&endReferencePeriod={to}")
 }
@@ -198,7 +194,7 @@ fn a_noon_series_answered_as_the_table_describes_it_is_stored_with_its_span() {
     e.holidays_read_at(NOW);
     let r = Arc::new(
         common::Recorded::new()
-            .with(&group(), 200, BOC, "group-FX_RATES_DAILY.json")
+            .with(&observations("FXGHCCAD", None), 404, BOC, "FXGHCCAD-status-404.json")
             .with(&observations("IEXE4701", Some((date(2007, 5, 1), date(2007, 6, 29)))), 200, NOON, "IEXE4701-2007-05-01-2007-06-29.json"),
     );
     e.run(&r, NOW, &[need(cur("GHC"), date(2007, 5, 15))]);
@@ -219,7 +215,7 @@ fn a_noon_reply_missing_its_description_is_a_mismatch_writing_nothing() {
     e.holidays_read_at(NOW);
     let r = Arc::new(
         common::Recorded::new()
-            .with(&group(), 200, BOC, "group-FX_RATES_DAILY.json")
+            .with(&observations("FXGHCCAD", None), 404, BOC, "FXGHCCAD-status-404.json")
             .with(&observations("IEXE4701", Some((date(2007, 5, 1), date(2007, 6, 29)))), 200, NOON, "wrong-shape-IEXE4701-no-description.json"),
     );
     e.run(&r, NOW, &[need(cur("GHC"), date(2007, 5, 15))]);
@@ -240,7 +236,7 @@ fn the_local_pesos_days_in_the_plain_pesos_era_are_refused_and_the_currency_writ
     let plain = observations("IEXE2703", Some((date(2010, 1, 4), date(2017, 4, 28))));
     let r = Arc::new(
         common::Recorded::new()
-            .with(&group(), 200, BOC, "group-FX_RATES_DAILY.json")
+            .with(&observations("FXARSCAD", None), 404, BOC, "FXARSCAD-status-404.json")
             .with(&observations("IEXE2702", Some((date(2007, 5, 1), date(2010, 1, 1)))), 200, NOON, "IEXE2702-2010-01-01-2010-01-08.json")
             .with(&plain, 200, NOON, "IEXE2703-2010-01-01-2010-01-08.json"),
     );
@@ -270,14 +266,14 @@ fn a_need_from_2010_records_the_daily_span_from_the_series_first_day() {
     let e = env();
     e.holidays_read_at(EVENING);
     let noon = observations("IEXE0101", Some((date(2007, 5, 1), date(2017, 1, 2))));
-    let r = Arc::new(usd_daily_whole(common::Recorded::new().with(&group(), 200, BOC, "group-FX_RATES_DAILY.json")).with(&noon, 200, NOON, "IEXE0101-2016-12-28-2017-01-05.json"));
+    let r = Arc::new(usd_daily_whole(common::Recorded::new()).with(&noon, 200, NOON, "IEXE0101-2016-12-28-2017-01-05.json"));
     e.run(&r, EVENING, &[need(Currency::USD, date(2010, 1, 4))]);
     let f = e.facts();
     assert_eq!(f.reads[&Currency::USD], vec![(date(2017, 1, 3), date(2017, 1, 5))]);
     assert_eq!(f.rates[&Currency::USD], BTreeMap::from([(date(2017, 1, 3), dec("1.3435")), (date(2017, 1, 4), dec("1.3315")), (date(2017, 1, 5), dec("1.3244"))]));
     assert_eq!(f.series, vec![daily(Currency::USD, date(2017, 1, 3), date(2017, 1, 5))]);
     // the days before it are the noon archive's to state, asked only to 2017-01-02
-    assert_eq!(asked(&r), vec![group(), observations("FXUSDCAD", None), noon]);
+    assert_eq!(asked(&r), vec![observations("FXUSDCAD", None), noon]);
 }
 
 /// The dollar needed from 2007-04-25: its daily series, its noon archive and
@@ -293,20 +289,20 @@ fn each_era_stops_before_the_next_whichever_read_runs_first() {
     // the daily series first, then the archives, in one run
     let a = env();
     a.holidays_read_at(EVENING);
-    let ra = Arc::new(eras(usd_daily_whole(common::Recorded::new().with(&group(), 200, BOC, "group-FX_RATES_DAILY.json"))));
+    let ra = Arc::new(eras(usd_daily_whole(common::Recorded::new())));
     a.run(&ra, EVENING, &needs);
-    assert_eq!(asked(&ra).len(), 4);
+    assert_eq!(asked(&ra).len(), 3);
 
-    // the archives first, while the group fails, then the daily series a day later
+    // the archives first, while the daily series fails, then the daily series a day later
     let b = env();
     b.holidays_read_at(EVENING);
-    let rb = Arc::new(eras(common::Recorded::new().with(&group(), 500, BOC, "group-FX_RATES_DAILY.json")));
+    let rb = Arc::new(eras(common::Recorded::new().with(&observations("FXUSDCAD", None), 500, BOC, "FXUSDCAD-2016-12-28-2017-01-05.json")));
     b.run(&rb, EVENING, &needs);
     assert_eq!(asked(&rb).len(), 3);
     assert!(b.facts().rates.is_empty());
-    let rb2 = Arc::new(eras(usd_daily_whole(common::Recorded::new().with(&group(), 200, BOC, "group-FX_RATES_DAILY.json"))));
+    let rb2 = Arc::new(eras(usd_daily_whole(common::Recorded::new())));
     b.run(&rb2, "2017-01-06T23:00:00Z", &needs);
-    assert_eq!(asked(&rb2).len(), 4);
+    assert_eq!(asked(&rb2).len(), 3);
 
     let (fa, fb) = (a.facts(), b.facts());
     assert_eq!(fa, fb);

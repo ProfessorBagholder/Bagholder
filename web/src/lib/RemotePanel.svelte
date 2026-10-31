@@ -11,6 +11,7 @@
   import { closeModal } from './ui.svelte'
   import { call } from './api'
   import { ICONS } from './icons'
+  import { whenWord } from './fmt'
 
   const st = $derived(statusSlot.data?.remote)
   const agents = $derived(statusSlot.data?.agents)
@@ -118,11 +119,14 @@
     postManifest(tab ? 'bagholder-github' : '_blank')
   }
   const addLogin = () => act('login', () => call('POST /api/remote/github/login'))
-  async function setUp() {
+  async function setUp(takeOver = '') {
     // followed in this list from the moment it is asked: the status may say it is set up before the answer comes
     fresh = true
-    if (!(await act('setup', () => call('POST /api/remote/set-up', { body: { name: name.trim() || 'app', email: email.trim() } })))) fresh = false
+    if (!(await act('setup', () => call('POST /api/remote/set-up', { body: { name: name.trim() || 'app', email: email.trim(), takeOver } })))) fresh = false
   }
+  /** the address being set up, as an earlier set-up holding it is named */
+  const asking = $derived(((name.trim() || 'app') + (domain && !name.includes('.') ? '.' + domain : '')).toLowerCase())
+  const held = $derived(st?.held && st.held.host === asking ? st.held : null)
   const switchTo = (on: boolean) => act('switch', () => call('POST /api/remote/switch', { body: { on } }))
   const check = () => act('check', () => call('POST /api/remote/check'))
   /** Bagholder's GitHub sign-in, said once removed: kept for the next set-up, and GitHub's page for it */
@@ -388,12 +392,18 @@
               <input class="input" type="email" bind:value={email} spellcheck="false" autocomplete="email" placeholder="you@example.com" />
               <span class="muted ag-small">Your GitHub account’s primary email: <a class="ag-inline" href="https://github.com/settings/emails" target="_blank" rel="noopener">GitHub’s email settings</a> show it. GitHub tells Cloudflare that email when you sign in.</span>
             </label>
+            {#if held}
+              <div class="ag-small">
+                <b class="ag-mono">{held.host}</b> belongs to an earlier Bagholder set-up whose tunnel {held.lastConnected ? 'was last connected ' + whenWord(held.lastConnected) : 'never connected'}. If no computer of yours still runs it, Bagholder can delete that tunnel and its address at Cloudflare and use the address here.
+              </div>
+              <div><button class="btn btn-secondary" disabled={!email.trim() || busy === 'setup'} onclick={() => setUp(held.host)}>Take over {held.host}</button></div>
+            {/if}
           </div>
         {/if}
         {@render comingUp(6)}
       </div>
       {#if address === 'now' || address === 'wait'}
-        <div class="ag-foot"><button class="btn btn-primary ag-right" disabled={!email.trim() || busy === 'setup'} onclick={setUp}>Continue</button></div>
+        <div class="ag-foot"><button class="btn btn-primary ag-right" disabled={!email.trim() || busy === 'setup'} onclick={() => setUp()}>Continue</button></div>
       {/if}
     {/if}
   </div>

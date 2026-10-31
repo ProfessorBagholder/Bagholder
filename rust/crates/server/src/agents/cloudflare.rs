@@ -237,12 +237,15 @@ pub fn sign_in_url(line: &str) -> Option<String> {
     line.split_whitespace().find(|w| w.starts_with("https://dash.cloudflare.com/")).map(str::to_string)
 }
 
+/// What Bagholder says when the address is already a record on the domain.
+pub const NAME_TAKEN: &str = "That name is already used on your domain: use a different name.";
+
 /// What Cloudflare said, in plain words: the address taken, an address on a domain
 /// that is not the one signed in with, else its own last line.
 pub fn plain(said: &str) -> String {
     let l = said.to_ascii_lowercase();
     if l.contains("already exists") && l.contains("record") {
-        "That name is already used on your domain: use a different name.".into()
+        NAME_TAKEN.into()
     } else if l.contains("zone") && (l.contains("not found") || l.contains("could not find") || l.contains("does not belong")) {
         "That address isn’t on the domain you signed in with: use a name that ends in that domain.".into()
     } else {

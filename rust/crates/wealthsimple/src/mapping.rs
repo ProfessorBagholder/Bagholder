@@ -505,13 +505,15 @@ fn instrument(root: &Node, id: &str, seen: jiff::civil::Date) -> Result<Instrume
     };
     // what Wealthsimple states of the id: traded under, retired by a corporate
     // action (the listing then trades under another id, `Book::settle_successions`)
-    // or delisted; a coin's is not stated
+    // or delisted; a coin's is not stated. Halted and suspended are trading paused
+    // under the same id, as its web app groups them (release 0.3.726566, read
+    // 2026-10-30: `HALTED` and `SUSPENDED` beside `TRADING`, the enum's five values)
     let standing = match s.opt_text("status")? {
         None => None,
-        Some("TRADING") => Some(Standing::Live),
+        Some("TRADING" | "HALTED" | "SUSPENDED") => Some(Standing::Live),
         Some("CORPORATE_ACTION") => Some(Standing::RetiredByEvent),
         Some("DELISTED") => Some(Standing::Delisted),
-        Some(other) => return Err(s.field("status")?.mismatch(format!("expected TRADING, CORPORATE_ACTION or DELISTED, found {other:?}")).into()),
+        Some(other) => return Err(s.field("status")?.mismatch(format!("expected TRADING, HALTED, SUSPENDED, CORPORATE_ACTION or DELISTED, found {other:?}")).into()),
     };
     let standing = standing.map(|standing| StandingDraft { of: refs[0].clone(), standing });
     Ok(InstrumentDraft { refs, kind, currency, name, option, standing })

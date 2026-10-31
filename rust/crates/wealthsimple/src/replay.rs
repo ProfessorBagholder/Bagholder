@@ -220,6 +220,18 @@ impl Source for Replay {
         let answers: Vec<(String, Answer<Value>)> = accounts.iter().map(|a| (a.clone(), self.positions(a, day))).collect();
         answers.into_iter().map(|(a, r)| Ok((a, r?))).collect()
     }
+    fn positions_today(&mut self, accounts: &[String], today: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
+        // today's, asked of Wealthsimple with its own document for today: the
+        // capture's as of today, each account asked apart from a past day's
+        let answers: Vec<(String, Answer<Value>)> = accounts
+            .iter()
+            .map(|a| {
+                self.asked.push(format!("positions today {a} {today}"));
+                (a.clone(), self.positions.get(&(a.clone(), today.to_string())).cloned().ok_or_else(|| Failure::Refused(format!("no positions of {a} as of {today} in the capture"))))
+            })
+            .collect();
+        answers.into_iter().map(|(a, r)| Ok((a, r?))).collect()
+    }
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>> {
         self.asked.push("balances".into());
         self.asked_balances.push(accounts.to_vec());

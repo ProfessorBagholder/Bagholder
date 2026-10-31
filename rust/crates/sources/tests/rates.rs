@@ -39,17 +39,15 @@ fn need(c: Currency, oldest: Date) -> Need {
 }
 
 #[test]
-fn the_group_is_read_for_a_currency_no_series_holds_at_most_once_a_day() {
+fn a_currency_no_daily_series_holds_is_read_whole_with_no_list_asked_first() {
     let usd = [need(Currency::USD, date(2020, 1, 2))];
     let fresh = Held::default();
-    assert_eq!(rates::due_daily(&usd, &fresh, t("2026-09-24T12:00:00Z"), &eastern()), vec![Due::DailyList]);
-    let listed = Held { list_read: Some(t("2026-09-24T00:00:00Z")), ..Held::default() };
-    assert!(rates::due_daily(&usd, &listed, t("2026-09-24T12:00:00Z"), &eastern()).is_empty());
-    assert_eq!(rates::due_daily(&usd, &listed, t("2026-09-25T00:00:00Z"), &eastern()), vec![Due::DailyList]);
-    // a currency the Bank lists and the book does not hold is read whole
-    let list: BTreeSet<Currency> = [Currency::USD].into();
-    assert_eq!(rates::due_daily_whole(&usd, &fresh, &list), vec![Due::DailyWhole(Currency::USD)]);
-    assert!(rates::due_daily_whole(&[need(cur("XAU"), date(2020, 1, 2))], &fresh, &list).is_empty());
+    // nothing is read forward while no daily series is held
+    assert!(rates::due_daily(&usd, &fresh, t("2026-09-24T12:00:00Z"), &eastern()).is_empty());
+    assert_eq!(rates::due_daily_whole(&usd, &fresh, &BTreeSet::new()), vec![Due::DailyWhole(Currency::USD)]);
+    // but for one the Bank said today it does not publish daily
+    let unpublished: BTreeSet<Currency> = [cur("XAU")].into();
+    assert!(rates::due_daily_whole(&[need(cur("XAU"), date(2020, 1, 2))], &fresh, &unpublished).is_empty());
 }
 
 fn holding_usd(last: Date, holidays: &[Date]) -> Held {
@@ -119,8 +117,9 @@ fn a_run_stores_each_series_its_days_and_the_holidays_and_asks_again_only_when_d
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
     let recorded = Arc::new(
         common::Recorded::new()
-            .with(&format!("{VALET}/groups/FX_RATES_DAILY/json"), 200, "bank-of-canada", "group-FX_RATES_DAILY.json")
             .with(&format!("{VALET}/observations/FXPLNCAD/json"), 200, "bank-of-canada", "FXPLNCAD-whole.json")
+            // the old cedi has no daily series: the Bank answers that it has none
+            .with(&format!("{VALET}/observations/FXGHCCAD/json"), 404, "bank-of-canada", "FXGHCCAD-status-404.json")
             .with(&format!("{VALET}/observations/IEXE4701/json?start_date=2007-05-01&end_date=2007-06-29"), 200, "bank-of-canada-noon", "IEXE4701-2007-05-01-2007-06-29.json")
             .with(&format!("{VALET}/observations/FXPLNCAD/json?start_date=2026-09-24&end_date=2026-09-24"), 200, "bank-of-canada", "FXPLNCAD-2026-09-24-2026-09-24.json")
             .with("https://www.bankofcanada.ca/press/upcoming-events/bank-of-canada-holiday-schedule/", 200, "bank-of-canada-holidays", "page-2026-09-24.html"),
@@ -176,19 +175,19 @@ fn a_failed_read_of_the_bank_waits_out_its_rest() {
     let at = t("2026-09-24T04:00:00Z");
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
-    // the group of daily series answers 500
-    let recorded = Arc::new(common::Recorded::new().with(&format!("{VALET}/groups/FX_RATES_DAILY/json"), 500, "bank-of-canada", "group-FX_RATES_DAILY.json").with("https://www.bankofcanada.ca/press/upcoming-events/bank-of-canada-holiday-schedule/", 200, "bank-of-canada-holidays", "page-2026-09-24.html")
+    // the zloty's daily series answers 500
+    let recorded = Arc::new(common::Recorded::new().with(&format!("{VALET}/observations/FXPLNCAD/json"), 500, "bank-of-canada", "FXPLNCAD-whole.json").with("https://www.bankofcanada.ca/press/upcoming-events/bank-of-canada-holiday-schedule/", 200, "bank-of-canada-holidays", "page-2026-09-24.html")
         // the zloty's noon archive, asked while no daily series is known, also fails
-        .with(&format!("{VALET}/observations/IEXE2401/json?start_date=2007-05-01&end_date=2017-04-28"), 500, "bank-of-canada", "group-FX_RATES_DAILY.json"));
+        .with(&format!("{VALET}/observations/IEXE2401/json?start_date=2007-05-01&end_date=2017-04-28"), 500, "bank-of-canada", "FXPLNCAD-whole.json"));
     let net = common::net(&recorded, "2026-09-24T04:00:00Z");
     let zone = eastern();
     let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
     let needs = [need(cur("PLN"), date(2026, 6, 1))];
     rates::read(&ctx, &needs).unwrap();
     let asked = |r: &Arc<common::Recorded>, what: &str| r.asked.lock().unwrap().iter().filter(|u| u.contains(what)).count();
-    assert_eq!((asked(&recorded, "FX_RATES_DAILY"), asked(&recorded, "IEXE2401")), (1, 1));
+    assert_eq!((asked(&recorded, "FXPLNCAD"), asked(&recorded, "IEXE2401")), (1, 1));
     rates::read(&Ctx { now: t("2026-09-24T04:00:30Z"), ..ctx }, &needs).unwrap();
-    assert_eq!((asked(&recorded, "FX_RATES_DAILY"), asked(&recorded, "IEXE2401")), (1, 1));
+    assert_eq!((asked(&recorded, "FXPLNCAD"), asked(&recorded, "IEXE2401")), (1, 1));
     rates::read(&Ctx { now: t("2026-09-24T04:01:00Z"), ..ctx }, &needs).unwrap();
-    assert_eq!((asked(&recorded, "FX_RATES_DAILY"), asked(&recorded, "IEXE2401")), (2, 2));
+    assert_eq!((asked(&recorded, "FXPLNCAD"), asked(&recorded, "IEXE2401")), (2, 2));
 }

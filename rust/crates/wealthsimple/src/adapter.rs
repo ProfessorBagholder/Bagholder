@@ -49,6 +49,13 @@ pub trait Source {
     fn positions_of(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
         accounts.iter().map(|a| Ok((a.clone(), self.positions(a, day)?))).collect()
     }
+    /// The same nodes for today: Wealthsimple answers the past-date document for
+    /// past days alone, and its own web app asks today's with
+    /// `FetchHoldingsExportPositions`; a source that asks no network states today's
+    /// as it states any day's.
+    fn positions_today(&mut self, accounts: &[String], today: jiff::civil::Date) -> Answer<BTreeMap<String, Value>> {
+        self.positions_of(accounts, today)
+    }
     /// The balances replies' accounts.
     fn balances(&mut self, accounts: &[String]) -> Answer<Vec<Value>>;
     /// A margin account's `account` node of `FetchAccountCurrentMarginBuyingPowerV2`:
@@ -345,6 +352,19 @@ pub fn book_moves(book: &mut dyn BookMoves, accounts: &[String], days: &[String]
 }
 
 impl<S: Source> Wealthsimple<S> {
+    /// Each account's positions as of `day`, or today's (`now`), read from the
+    /// position nodes the source states.
+    fn positions_read(&mut self, accounts: &[String], day: jiff::civil::Date, now: bool) -> Answer<BTreeMap<String, Positions>> {
+        let nodes = if now { self.source.positions_today(accounts, day)? } else { self.source.positions_of(accounts, day)? };
+        let mut out = BTreeMap::new();
+        for (account, nodes) in nodes {
+            let units = crate::read::units(&nodes).map_err(mismatch)?;
+            let cash = crate::read::cash_held(&nodes).map_err(mismatch)?;
+            out.insert(account, Positions { units, cash });
+        }
+        Ok(out)
+    }
+
     /// A stored record of a move arriving from another account put together
     /// before its other account's feed was read with it: that account.
     fn lacks_opposing<'a>(&self, payload: &'a Value) -> Option<&'a str> {
@@ -607,13 +627,10 @@ impl<S: Source> BrokerAdapter for Wealthsimple<S> {
         crate::read::margin_rates(&node, account).map(Some).map_err(mismatch)
     }
     fn positions(&mut self, accounts: &[String], day: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>> {
-        let mut out = BTreeMap::new();
-        for (account, nodes) in self.source.positions_of(accounts, day)? {
-            let units = crate::read::units(&nodes).map_err(mismatch)?;
-            let cash = crate::read::cash_held(&nodes).map_err(mismatch)?;
-            out.insert(account, Positions { units, cash });
-        }
-        Ok(out)
+        self.positions_read(accounts, day, false)
+    }
+    fn positions_today(&mut self, accounts: &[String], today: jiff::civil::Date) -> Answer<BTreeMap<String, Positions>> {
+        self.positions_read(accounts, today, true)
     }
     fn instruments(&mut self, refs: &[Reference], day: jiff::civil::Date) -> Vec<(Reference, Answer<InstrumentDraft>)> {
         // their securities' records a batch at a time, then options' underlyings

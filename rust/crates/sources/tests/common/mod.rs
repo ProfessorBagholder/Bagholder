@@ -38,9 +38,19 @@ pub fn answers(source: &str, prefix: &str) -> Vec<String> {
 /// union of their paths, each marked with whether every answer that could carry
 /// it does (`BAGHOLDER_BLESS=1` writes it).
 pub fn shape_is_the_answers_union(file: &str, source: &str, prefix: &str, keyed: &[reply::Keyed]) {
-    let names = answers(source, prefix);
-    assert!(!names.is_empty(), "no recorded answers for {source}/{prefix}");
-    let union = reply::recorded(names.iter().map(|n| reply::shape_keyed(&json(source, n), keyed)));
+    shape_is_the_union_of(file, &[(source, prefix)], keyed);
+}
+
+/// The same, over the recorded answers of several sources one reader reads with
+/// one shape (the Bank's daily series and its noon archive).
+pub fn shape_is_the_union_of(file: &str, sources: &[(&str, &str)], keyed: &[reply::Keyed]) {
+    let mut shapes = Vec::new();
+    for (source, prefix) in sources {
+        let names = answers(source, prefix);
+        assert!(!names.is_empty(), "no recorded answers for {source}/{prefix}");
+        shapes.extend(names.iter().map(|n| reply::shape_keyed(&json(source, n), keyed)));
+    }
+    let union = reply::recorded(shapes.into_iter());
     let text = ask::shape_text(&union);
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("shapes").join(file);
     if std::env::var("BAGHOLDER_BLESS").is_ok() {

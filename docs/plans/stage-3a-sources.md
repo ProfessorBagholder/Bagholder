@@ -148,7 +148,7 @@ A venue's session days are the days its own daily closes exist, as the sources r
 **Bank of Canada** (`bankofcanada.ca/valet`), verified against the live service on 2026-09-23.
 
 - **The currencies.**
-  - The group `FX_RATES_DAILY` lists the currencies the Bank publishes daily (26, from `FXAUDCAD` to `FXZARCAD`).
+  - The group `FX_RATES_DAILY` lists the currencies the Bank publishes daily (26, from `FXAUDCAD` to `FXZARCAD`). Not read since 2026-10-30: a currency's daily series is asked for by its code, and one the Bank does not publish answers 404 (its object renamed `groupDetail` from `groupDetails` that month had stopped every daily read).
   - The noon archives ended in April 2017 and never change, so which series is a currency's noon spot rate is a fixed table in the adapter, written from the Bank's and Statistics Canada's own metadata: series code, description, first and last day. A label alone does not name one series (`USD_NOON` is both IEXE0101, the spot rate, and IEXE0105, a 90-day forward; `ARS_NOON` and `MMK_NOON` are each two series in turn). Every read checks the reply's description against the table; a different one is a mismatch.
   - A currency in none of them is `rate-unpublished`.
   - Each series is stored with its first and last observation day. This needs **book migration 3**: `fx_series(currency, source, first_day, last_day, received_at)`, keyed by currency and source, with `schema/v3.sql` committed.
