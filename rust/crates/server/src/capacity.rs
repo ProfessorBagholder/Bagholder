@@ -431,6 +431,14 @@ fn made_up_today() -> Date {
     MADE_UP_TODAY.parse().expect("a day")
 }
 
+/// The moment the made-up book is read and changed at: its made-up today, an hour
+/// after `build` stamped its records. Nothing here reads the clock, so the book is
+/// the same book on every run: with the clock, each family was walked to the real
+/// today, and a contract expiring after the made-up today changed the book.
+fn made_up_now() -> Timestamp {
+    format!("{MADE_UP_TODAY}T21:00:00Z").parse().expect("a moment")
+}
+
 // ---- build ----
 
 /// The reference size times `times`.
@@ -657,8 +665,8 @@ fn facts(home: &Path, book: &Book, at: Timestamp) -> Result<(), String> {
     let transactions = book.transactions().map_err(err)?;
     let first = transactions.iter().map(|t| t.trade_date).min().unwrap_or(made_up_today());
     let from = first.checked_sub(SignedDuration::from_hours(24 * 30)).map_err(err)?;
-    // to the day the run is made on, so a value held today converts
-    let to = Timestamp::now().to_zoned(bagholder_core::jiff::tz::TimeZone::get("America/Toronto").map_err(err)?).date().max(made_up_today());
+    // to the made-up today, so a value held on it converts
+    let to = made_up_today();
     let days = |a: Date, b: Date| {
         let mut out = Vec::new();
         let mut d = a;
@@ -704,7 +712,7 @@ fn facts(home: &Path, book: &Book, at: Timestamp) -> Result<(), String> {
 /// The app open on `home`, as a start opens it, with nothing running in the background.
 fn opened(home: &Path) -> Result<Arc<crate::app::App>, String> {
     let app = crate::app::App::new(home.to_path_buf(), PathBuf::from("."), "127.0.0.1".into());
-    let f = crate::figures::Figures::open(&app.home, Timestamp::now())?;
+    let f = crate::figures::Figures::open(&app.home, made_up_now())?;
     app.set_figures(f);
     Ok(app)
 }
@@ -800,7 +808,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                 .flatten()
                 .ok_or("nothing is held")?;
             let connection = book.connections().map_err(err)?.first().map(|c| c.id).ok_or("no connection")?;
-            let at = Timestamp::now();
+            let at = made_up_now();
             let cash = std::collections::BTreeMap::from([(Currency::CAD, Dec::new(1_234_567, 2).map_err(err)?)]);
             let m = mark();
             let read = book.broker_read(connection, "cash", at).map_err(err)?;
@@ -847,7 +855,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             // the holding by its id, as the page names one it holds
             let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: Some(instrument.to_string()), symbol, exchange: String::new(), currency: currency.to_string(), day: made_up_today().to_string(), side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
             let m = mark();
-            crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
+            crate::entries::enter(f, &req, made_up_now()).map_err(|e| format!("{e:?}"))?;
             // a test's planted fold of the names, which the growth rule must catch
             #[cfg(test)]
             if PLANT_NAMES_FOLD.load(Ordering::SeqCst) {
@@ -906,7 +914,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                 // the later trades are derived again after it (`OVER_BUDGET`)
                 let req = crate::entries::EntryRequest::Trade { account, instrument: Some(instrument.to_string()), symbol, exchange: String::new(), currency: currency.to_string(), day, side: "buy".into(), quantity: "1".into(), price: "10".into(), fee: "0".into() };
                 m = mark();
-                crate::entries::enter(f, &req, Timestamp::now()).map_err(|e| format!("{e:?}"))?;
+                crate::entries::enter(f, &req, made_up_now()).map_err(|e| format!("{e:?}"))?;
             } else {
                 // the same record stored again under a new id, as a pull stores a row the
                 // broker adds late: a distribution re-forms the names and moves no
@@ -916,8 +924,8 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
                 let payload = book.revisions(id).map_err(err)?.pop().map(|(_, _, p)| p).ok_or("the record has no revision")?;
                 let key = format!("{}-late", rec.source_key);
                 m = mark();
-                book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::records::Incoming { connection: rec.connection, source_key: &key, payload: &payload, refs: vec![] }, Timestamp::now()).map_err(err)?;
-                f.record_changed(Timestamp::now())?;
+                book.store(&bagholder_wealthsimple::mapping::WealthsimpleMapping, &bagholder_book::records::Incoming { connection: rec.connection, source_key: &key, payload: &payload, refs: vec![] }, made_up_now()).map_err(err)?;
+                f.record_changed(made_up_now())?;
             }
             let out = Measured { rows: Some(rows), changed: (crate::figures::settled() - settled_before).max(1), ..since(&m, 1) };
             #[cfg(test)]
@@ -966,7 +974,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             #[cfg(not(test))]
             let _ = instrument; // what the test's record of the window keys on
             let m = mark();
-            crate::csv_import::import_from(f, "flat.csv", &open, Some(account), Timestamp::now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
+            crate::csv_import::import_from(f, "flat.csv", &open, Some(account), made_up_now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
             let measured = since(&m, 1);
             #[cfg(test)]
             paths_taken(f, window);
@@ -1000,7 +1008,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             let text = format!("{CODED_HEADER}{day},Dividend,{},{},,,1.00,CAD\n", CODED.0, CODED.1);
             let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
             let m = mark();
-            crate::csv_import::import_from(f, "late.csv", &open, Some(account), Timestamp::now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
+            crate::csv_import::import_from(f, "late.csv", &open, Some(account), made_up_now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
             Ok(Measured { rows: Some(rows), ..since(&m, 1) })
         }
         Op::Import => {
@@ -1016,7 +1024,7 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             }
             let open = || Ok(Box::new(std::io::Cursor::new(text.clone().into_bytes())) as Box<dyn std::io::BufRead>);
             let m = mark();
-            crate::csv_import::import_from(f, "capacity.csv", &open, None, Timestamp::now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
+            crate::csv_import::import_from(f, "capacity.csv", &open, None, made_up_now(), &mut |_| crate::csv_import::Go::On).map_err(|e| format!("{e:?}"))?;
             // a test's planted read of every file row, which the growth rule must catch
             #[cfg(test)]
             if PLANT_WHOLE_READ.load(Ordering::SeqCst) {
@@ -1052,7 +1060,7 @@ fn target(f: &crate::figures::Figures, pair: Pair, min_rows: u64, held: &[(bagho
 fn quote_moved(f: &crate::figures::Figures, instrument: bagholder_core::InstrumentId, currency: Currency) -> Result<(), String> {
     let cache = f.cache()?;
     let last = cache.quotes().map_err(err)?.into_iter().find(|q| q.instrument == instrument).map(|q| q.price.amount).unwrap_or(Dec::ONE);
-    let now = Timestamp::now();
+    let now = made_up_now();
     let price = last.checked_add(Dec::new(1, 2).map_err(err)?).map_err(err)?;
     cache.store_quote(&StoredQuote { instrument, source: SourceName::named("capacity"), price: Money::new(price, currency), change: None, change_pct: None, quoted_at: now, allowance: std::time::Duration::ZERO, received_at: now }).map_err(err)
 }
@@ -1332,6 +1340,22 @@ mod tests {
     const BROAD: Size = Size { accounts: SMALL.accounts * 32, instruments: SMALL.instruments * 32, trades: SMALL.trades * 32, ..SMALL };
     const DEEP: Size = Size { deep: 320, ..SMALL };
 
+    /// The made-up book is the same book on every run: nothing in the capacity tool
+    /// reads the clock, the measuring of time aside (`Instant`). A read of the
+    /// clock walked each family to the real today, and a contract expiring after
+    /// the made-up today changed the book (2026-10-30).
+    #[test]
+    fn the_capacity_tool_reads_no_clock() {
+        let source = include_str!("capacity.rs");
+        let found: Vec<(usize, &str)> = source
+            .lines()
+            .enumerate()
+            .filter(|(_, l)| [concat!("Timestamp", "::now()"), concat!("Zoned", "::now()"), concat!("SystemTime", "::now()")].iter().any(|bad| l.contains(bad)))
+            .map(|(n, l)| (n + 1, l.trim()))
+            .collect();
+        assert!(found.is_empty(), "capacity.rs reads the clock: {found:?}");
+    }
+
     /// The families a probe of `op` matched, and whether each was continued: the
     /// probe run on a copy, its paths taken from this thread.
     fn probe_paths(op: Op, pair: Pair, min_rows: u64, home: &Path) -> (Vec<(bagholder_engine::families::Node, bagholder_engine::engine::Path)>, Measured) {
@@ -1350,7 +1374,7 @@ mod tests {
     /// Every trade's and holding's figures, without the ids a build gives anew
     /// (each id is made from the moment it is made), in a fixed order.
     fn figures_digest(home: &Path) -> Vec<String> {
-        let f = crate::figures::Figures::open(home, Timestamp::now()).unwrap();
+        let f = crate::figures::Figures::open(home, made_up_now()).unwrap();
         let mut out = f
             .read(|e| {
                 let fig = e.figures();
