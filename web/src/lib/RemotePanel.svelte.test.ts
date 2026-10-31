@@ -20,7 +20,7 @@ function agents(over: Partial<AgentsStatus> = {}): AgentsStatus {
   }
 }
 function remote(over: Partial<RemoteStatus> = {}): RemoteStatus {
-  return { url: '', email: '', token: true, tokenPage: 'https://dash.cloudflare.com/profile/api-tokens?x', trying: '', github: 'Bagholder at example.com', makingGithub: false, githubSaid: '', githubPage: 'https://github.com/settings/apps/bagholder-at-example-com/advanced', noTeam: false, teamPage: 'https://one.dash.cloudflare.com/', tokensPage: 'https://dash.cloudflare.com/profile/api-tokens', on: false, running: false, ready: null, said: '', ...over }
+  return { url: '', email: '', token: true, tokenPage: 'https://dash.cloudflare.com/profile/api-tokens?x', trying: '', github: 'Bagholder at example.com', makingGithub: false, githubSaid: '', githubPage: 'https://github.com/settings/apps/bagholder-at-example-com/advanced', noTeam: false, teamPage: 'https://one.dash.cloudflare.com/', tokensPage: 'https://dash.cloudflare.com/profile/api-tokens', on: false, running: false, ready: null, said: '', held: null, ...over }
 }
 const set = (a: AgentsStatus, r: RemoteStatus) => {
   status.data = { agents: a, remote: r } as unknown as Status
@@ -104,7 +104,25 @@ describe('Open from anywhere is set up in order', () => {
     expect(go.disabled).toBe(true)
     await fireEvent.input(getByPlaceholderText('you@example.com'), { target: { value: 'me@example.com' } })
     await fireEvent.click(go)
-    expect(posted.filter((p) => p.path === '/api/remote/set-up')).toEqual([{ path: '/api/remote/set-up', body: { name: 'app', email: 'me@example.com' } }])
+    expect(posted.filter((p) => p.path === '/api/remote/set-up')).toEqual([{ path: '/api/remote/set-up', body: { name: 'app', email: 'me@example.com', takeOver: '' } }])
+  })
+
+  it('an address an earlier set-up holds is offered to take over, and taken only when pressed', async () => {
+    const posted = server()
+    set(agents(), remote({ held: { host: 'app.example.com', lastConnected: '' } }))
+    const { container, getByRole, getByPlaceholderText } = render(RemotePanel)
+    expect(container.textContent).toContain('belongs to an earlier Bagholder set-up whose tunnel never connected')
+    await fireEvent.input(getByPlaceholderText('you@example.com'), { target: { value: 'me@example.com' } })
+    expect(posted.filter((p) => p.path === '/api/remote/set-up')).toEqual([])
+    await fireEvent.click(getByRole('button', { name: 'Take over app.example.com' }))
+    expect(posted.filter((p) => p.path === '/api/remote/set-up')).toEqual([{ path: '/api/remote/set-up', body: { name: 'app', email: 'me@example.com', takeOver: 'app.example.com' } }])
+  })
+
+  it('an address held under another name than the one typed offers nothing', async () => {
+    server()
+    set(agents(), remote({ held: { host: 'old.example.com', lastConnected: '' } }))
+    const { queryByRole } = render(RemotePanel)
+    expect(queryByRole('button', { name: /^Take over/ })).toBeNull()
   })
 })
 
