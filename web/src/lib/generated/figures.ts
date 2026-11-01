@@ -37,7 +37,16 @@ side: string,
 /**
  * `long` or `short`: what the trade holds, said plainly (an agent reads it).
  */
-direction: string, qty: Fig<Dec>, entry: Fig<Dec>, 
+direction: string, 
+/**
+ * A short option's coverage when it was written; none for anything else.
+ */
+coverage: Coverage | null, 
+/**
+ * What the Side column reads (`side_label`): `Long`, `Short`, `Covered call`,
+ * `Uncovered call`, `Secured put` or `Uncovered put`.
+ */
+sideLabel: string, qty: Fig<Dec>, entry: Fig<Dec>, 
 /**
  * None before the first sale.
  */
@@ -51,11 +60,35 @@ exitDate: string | null,
  */
 lastDate: string, holdDays: number, pnl: Fig<Dec>, pnlCad: Fig<Dec>, pnlPct: number | null, fees: Fig<Dec>, flags: Array<string>, grade: string, thesis: string, tags: Array<string>, };
 
+export type Coverage = { 
+/**
+ * `call` or `put`.
+ */
+right: string, 
+/**
+ * The contracts covered (a call) or secured (a put), of `of`; none where it
+ * isn't told (`untold`).
+ */
+covered: Dec | null, of: Dec | null, 
+/**
+ * Why it isn't told, as the trade's page says it.
+ */
+untold: string | null, 
+/**
+ * Every contract covered or secured.
+ */
+whole: boolean, };
+
 export type Position = { id: string, 
 /**
  * The trade it is, whose journal it shows.
  */
-trade: string, symbol: string, underlying: string, name: string, exchange: string, kind: string, currency: string, account: string, accountId: string, instrument: string, security: string, short: boolean, qty: Fig<Dec>, avg: Fig<Dec>, 
+trade: string, symbol: string, underlying: string, name: string, exchange: string, kind: string, currency: string, account: string, accountId: string, instrument: string, security: string, short: boolean, 
+/**
+ * What its trade's Side column reads (`Trade::side_label`), and a short
+ * option's coverage: the holding's page is its trade's.
+ */
+sideLabel: string, coverage: Coverage | null, qty: Fig<Dec>, avg: Fig<Dec>, 
 /**
  * What the units held cost (long) or brought in (short), as Wealthsimple
  * states it.

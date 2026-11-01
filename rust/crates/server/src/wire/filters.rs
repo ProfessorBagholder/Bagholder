@@ -116,8 +116,8 @@ impl Filters {
                     }
                     "side" => {
                         f.sides.insert(match v.as_str() {
-                            "SELL" => Direction::Long,
-                            "COVER" => Direction::Short,
+                            "Long" => Direction::Long,
+                            "Short" => Direction::Short,
                             other => return Err(format!("no side {other:?}")),
                         });
                     }

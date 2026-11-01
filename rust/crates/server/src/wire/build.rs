@@ -204,6 +204,8 @@ pub(crate) fn trade(inputs: &Inputs, names: &Names, t: &TradeFig, position: Opti
         security: names.security.get(&t.instrument).cloned().unwrap_or_default(),
         side: if t.direction == Direction::Short { "COVER" } else { "SELL" }.into(),
         direction: if t.direction == Direction::Short { "short" } else { "long" }.into(),
+        coverage: t.coverage.as_ref().map(coverage),
+        side_label: side_label(t),
         qty: fig_dec(&t.qty),
         entry: fig_dec(&t.entry),
         exit: t.exit.as_ref().map(fig_dec),
@@ -219,6 +221,34 @@ pub(crate) fn trade(inputs: &Inputs, names: &Names, t: &TradeFig, position: Opti
         grade: grade_word(t.journal.grade),
         thesis: t.journal.thesis.clone(),
         tags: t.journal.tags.clone(),
+    }
+}
+
+/// What the Side column reads: the direction, and for a short option whose every
+/// contract was judged, what it was written against (SPEC.md trades-1).
+fn side_label(t: &TradeFig) -> String {
+    use bagholder_core::instrument::OptionRight;
+    use bagholder_engine::coverage::Coverage as C;
+    match (t.direction, &t.coverage) {
+        (Direction::Long, _) => "Long",
+        (Direction::Short, Some(c @ C::Read { right, .. })) => match (right, c.whole()) {
+            (OptionRight::Call, true) => "Covered call",
+            (OptionRight::Call, false) => "Uncovered call",
+            (OptionRight::Put, true) => "Secured put",
+            (OptionRight::Put, false) => "Uncovered put",
+        },
+        (Direction::Short, _) => "Short",
+    }
+    .into()
+}
+
+fn coverage(c: &bagholder_engine::coverage::Coverage) -> Coverage {
+    use bagholder_engine::coverage::Coverage as C;
+    match c {
+        C::Read { right, covered, of } => Coverage { right: right.as_str().into(), covered: Some(Dec(*covered)), of: Some(Dec(*of)), untold: None, whole: c.whole() },
+        C::Waiting { right, day: Some(day) } => Coverage { right: right.as_str().into(), covered: None, of: None, untold: Some(format!("coverage waits on the positions read of {day}")), whole: false },
+        C::Waiting { right, day: None } => Coverage { right: right.as_str().into(), covered: None, of: None, untold: Some("coverage waits on the contract's size".into()), whole: false },
+        C::Unclear { right } => Coverage { right: right.as_str().into(), covered: None, of: None, untold: Some("the positions read can't tell whether its cash was already held for this put".into()), whole: false },
     }
 }
 
@@ -244,6 +274,8 @@ pub(crate) fn position(inputs: &Inputs, names: &Names, p: &PositionFig, trade: S
         instrument: p.instrument.to_string(),
         security: names.security.get(&p.instrument).cloned().unwrap_or_default(),
         short: p.direction == Direction::Short,
+        side_label: if p.direction == Direction::Short { "Short" } else { "Long" }.into(),
+        coverage: None,
         qty: fig_dec(&p.qty),
         avg: fig_dec(&p.avg),
         cost: fig_money(&p.book),
@@ -384,7 +416,7 @@ fn options(inputs: &Inputs, names: &Names, trades: &[TradeFig], positions: &[Pos
         exchanges,
         kinds,
         grades: ["A", "B", "C", "F", "Ungraded"].iter().map(|s| s.to_string()).collect(),
-        sides: ["SELL", "COVER"].iter().map(|s| s.to_string()).collect(),
+        sides: ["Long", "Short"].iter().map(|s| s.to_string()).collect(),
         results: ["Winners", "Losers", "Breakeven"].iter().map(|s| s.to_string()).collect(),
         years,
     }
@@ -418,6 +450,8 @@ pub fn accounts(inputs: &Inputs, names: &Names) -> Vec<Account> {
 pub struct Links {
     pub holding_of: BTreeMap<String, String>,
     pub trade_of: BTreeMap<String, String>,
+    /// Each holding's trade's Side and coverage, by the holding's id.
+    pub side_of: BTreeMap<String, (String, Option<Coverage>)>,
 }
 
 pub fn links(engine: &Engine) -> Links {
@@ -428,13 +462,15 @@ pub fn links(engine: &Engine) -> Links {
     }).collect();
     let mut holding_of = BTreeMap::new();
     let mut trade_of = BTreeMap::new();
+    let mut side_of = BTreeMap::new();
     for p in figs.positions {
         if let Some(t) = p.key.as_ref().and_then(|k| by_trip.get(k)) {
             holding_of.insert(trade_id(t), position_id(p));
             trade_of.insert(position_id(p), trade_id(t));
+            side_of.insert(position_id(p), (side_label(t), t.coverage.as_ref().map(coverage)));
         }
     }
-    Links { holding_of, trade_of }
+    Links { holding_of, trade_of, side_of }
 }
 
 /// A trade's wire row, its holding linked while it is open.
@@ -444,7 +480,12 @@ pub fn trade_row(inputs: &Inputs, names: &Names, links: &Links, t: &TradeFig) ->
 
 /// A holding's wire row, its trade linked.
 pub fn position_row(inputs: &Inputs, names: &Names, links: &Links, p: &PositionFig) -> Position {
-    position(inputs, names, p, links.trade_of.get(&position_id(p)).cloned().unwrap_or_default())
+    let mut row = position(inputs, names, p, links.trade_of.get(&position_id(p)).cloned().unwrap_or_default());
+    if let Some((side, coverage)) = links.side_of.get(&row.id) {
+        row.side_label = side.clone();
+        row.coverage = coverage.clone();
+    }
+    row
 }
 
 /// A trade's id as the page names it.
