@@ -373,7 +373,7 @@ fn the_route_scan_reads_every_route_on_a_line() {
 #[test]
 fn each_provider_s_gate_name_comes_from_its_setup() {
     use super::tunnel::{host_of, Provider, Setup};
-    let setup = |provider, name: &str, funnel_port| Setup { provider, name: name.into(), funnel_port, sends_host: None };
+    let setup = |provider, name: &str, funnel_port| Setup { provider, name: name.into(), funnel_port, sends_host: None, take_over: None };
     let ts = Some("box.tail1234.ts.net.");
     assert_eq!(host_of(&setup(Provider::Tailscale, "", None), ts).unwrap(), "box.tail1234.ts.net");
     assert_eq!(host_of(&setup(Provider::Tailscale, "", Some(443)), ts).unwrap(), "box.tail1234.ts.net");
@@ -1135,7 +1135,7 @@ fn the_key_path_offers_no_sign_in_and_takes_only_its_own_keys() {
 #[test]
 fn a_proxy_s_own_host_is_taken_and_the_public_name_given() {
     use tunnel::{Provider, Setup};
-    let own = Setup { provider: Provider::Own, name: "Agents.Example.com".into(), funnel_port: None, sends_host: Some("bagholder.lan".into()) };
+    let own = Setup { provider: Provider::Own, name: "Agents.Example.com".into(), funnel_port: None, sends_host: Some("bagholder.lan".into()), take_over: None };
     assert_eq!(tunnel::host_of(&own, None).unwrap(), "agents.example.com");
     assert_eq!(tunnel::received_host(&own).unwrap().as_deref(), Some("bagholder.lan"));
     // every tunnel Bagholder starts sends the public name
@@ -1321,7 +1321,7 @@ fn tailscale_s_status_shows_each_step_done() {
 
 #[test]
 fn the_tailscale_command_never_runs_in_the_background() {
-    let setups = [Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: None, sends_host: None }, Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: Some(8443), sends_host: None }];
+    let setups = [Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: None, sends_host: None, take_over: None }, Setup { provider: Provider::Tailscale, name: String::new(), funnel_port: Some(8443), sends_host: None, take_over: None }];
     for s in setups {
         let c = tunnel::command(&s, "tailscale", 4321, std::path::Path::new("/nonexistent")).unwrap();
         assert!(!c.iter().any(|a| a.starts_with("--bg")), "{c:?}");
@@ -1330,10 +1330,10 @@ fn the_tailscale_command_never_runs_in_the_background() {
     }
     // every provider's command targets this listener alone, with fixed arguments
     for p in [Provider::Cloudflare, Provider::Ngrok, Provider::Zrok] {
-        let c = tunnel::command(&Setup { provider: p, name: "agents.example.com".into(), funnel_port: None, sends_host: None }, "x", 4321, std::path::Path::new("/nonexistent")).unwrap();
+        let c = tunnel::command(&Setup { provider: p, name: "agents.example.com".into(), funnel_port: None, sends_host: None, take_over: None }, "x", 4321, std::path::Path::new("/nonexistent")).unwrap();
         assert!(c.iter().any(|a| a.contains("127.0.0.1:4321")), "{p:?}: {c:?}");
     }
-    assert!(tunnel::command(&Setup { provider: Provider::Own, name: "a.example.com".into(), funnel_port: None, sends_host: None }, "x", 1, std::path::Path::new("/nonexistent")).is_none());
+    assert!(tunnel::command(&Setup { provider: Provider::Own, name: "a.example.com".into(), funnel_port: None, sends_host: None, take_over: None }, "x", 1, std::path::Path::new("/nonexistent")).is_none());
     use tunnel::{Provider, Setup};
 }
 
@@ -1739,7 +1739,7 @@ esac"#,
     assert_eq!(files.set_up(&program, "taken.example.com").unwrap_err(), "That name is already used on your domain: use a different name.");
 
     // run: the tunnel Bagholder made, from its folder
-    let s = Setup { provider: Provider::Cloudflare, name: "agents.example.com".into(), funnel_port: None, sends_host: None };
+    let s = Setup { provider: Provider::Cloudflare, name: "agents.example.com".into(), funnel_port: None, sends_host: None, take_over: None };
     let run = tunnel::command(&s, &program, 4321, home.path()).unwrap();
     assert_eq!(run[1..], [
         "--config".to_string(), format!("{folder}/config.yml"), "tunnel".into(), "--origincert".into(), format!("{folder}/.cloudflared/cert.pem"),
@@ -1758,7 +1758,7 @@ fn ngrok_keeps_the_authtoken_in_bagholder_s_config_and_its_address_is_read_as_it
     let bin = tempfile::tempdir().unwrap();
     let program = stand_in(bin.path(), "ngrok", r#"case "$*" in config\ add-authtoken*) printf 'version: "3"\nagent:\n  authtoken: x\n' > "$5";; esac"#);
     let files = ngrok::Files::new(home.path());
-    let s = Setup { provider: Provider::Ngrok, name: String::new(), funnel_port: None, sends_host: None };
+    let s = Setup { provider: Provider::Ngrok, name: String::new(), funnel_port: None, sends_host: None, take_over: None };
     assert!(files.run(&program, "127.0.0.1:1").is_none());
     assert_eq!(files.save_token(&program, "not a token!").unwrap_err(), "That isn't an ngrok authtoken: copy it from ngrok’s page again.");
     files.save_token(&program, " 2abcDEF_ghi123 ").unwrap();

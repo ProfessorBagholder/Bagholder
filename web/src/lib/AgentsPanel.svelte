@@ -11,7 +11,7 @@
   import { closeModal } from './ui.svelte'
   import { call } from './api'
   import { read } from './reads.svelte'
-  import { relTime } from './fmt'
+  import { relTime, whenWord } from './fmt'
   import { ICONS } from './icons'
   import type { Address, Connected, Provider, Setup, MadeKey, LogLine } from './generated/agents'
 
@@ -215,7 +215,9 @@
       signInWindow = null
     }
   })
-  async function fromReach() {
+  /** the address a stale tunnel of an earlier set-up holds, when it is the one asked for */
+  const cfHeld = $derived(cf?.held && cfDomain && cf.held.host === (name.trim() || 'agents') + '.' + cfDomain ? cf.held : null)
+  async function fromReach(takeOver?: string) {
     // a server already set up: on to adding Bagholder in the agent
     if (reachFor === 'connect' && existing(picked)) {
       using = picked
@@ -225,7 +227,7 @@
     }
     if (picked === 'ngrok' && !(await act('save', () => call('POST /api/agents/ngrok/token', { body: { token: token.trim() } })))) return
     const setup: Setup = picked !== 'tailscale'
-      ? { provider: picked, name: picked === 'ngrok' ? '' : picked === 'own' ? proxyHost.trim() : name.trim(), funnelPort: null, sendsHost: picked === 'own' && hostDiffers && sendsHost.trim() ? sendsHost.trim() : null }
+      ? { provider: picked, name: picked === 'ngrok' ? '' : picked === 'own' ? proxyHost.trim() : name.trim(), funnelPort: null, sendsHost: picked === 'own' && hostDiffers && sendsHost.trim() ? sendsHost.trim() : null, ...(picked === 'cloudflare' && takeOver ? { takeOver } : {}) }
       : { provider: 'tailscale', name: '', funnelPort: port443Taken ? 8443 : 443, sendsHost: null }
     if (!st?.on && !(await switchTo(true))) return
     if (!(await act('save', () => call('POST /api/agents/tunnel', { body: setup })))) return
@@ -698,6 +700,12 @@
           {:else}<div>Your address will be <b class="ag-mono">{name.trim() || 'agents'}</b> on the domain you chose at Cloudflare</div>{/if}
           <button class="ag-link" onclick={() => (naming = true)}>Use a different name</button>
         {/if}
+        {#if cfHeld}
+          <div class="ag-small">
+            <b class="ag-mono">{cfHeld.host}</b> belongs to an earlier Bagholder set-up whose tunnel {cfHeld.lastConnected ? 'was last connected ' + whenWord(cfHeld.lastConnected) : 'never connected'}. If no computer of yours still runs it, Bagholder can delete that tunnel and its address at Cloudflare and use the address here.
+          </div>
+          <div><button class="btn btn-secondary" disabled={!!busy} onclick={() => fromReach(cfHeld.host)}>Take over {cfHeld.host}</button></div>
+        {/if}
       {:else if picked === 'ngrok'}
         {#if !program('ngrok')}
           {@render installNote('ngrok', 'ngrok', '')}
@@ -724,7 +732,7 @@
         {:else}<button class="ag-link" onclick={() => (hostDiffers = true)}>My proxy sends a different Host</button>{/if}
       {/if}
       <div class="ag-foot">
-        <button class="btn btn-primary ag-right" disabled={!canGoOn || !!busy} onclick={fromReach}>{busy === 'save' || busy === 'start' || busy === 'switch' ? 'Starting…' : 'Continue'}</button>
+        <button class="btn btn-primary ag-right" disabled={!canGoOn || !!busy} onclick={() => fromReach()}>{busy === 'save' || busy === 'start' || busy === 'switch' ? 'Starting…' : 'Continue'}</button>
       </div>
 
     {:else if view === 'ready'}

@@ -197,6 +197,8 @@ struct SignIn {
     child: Option<std::process::Child>,
     url: Option<String>,
     last: String,
+    /// The address a set-up met held by a stale tunnel, and when it was last connected.
+    held: Option<(String, String)>,
 }
 
 /// How the name of a sign-in's domain is asked of Cloudflare's API.
@@ -361,7 +363,13 @@ impl Agents {
             sign_in_url: if running { s.url.clone() } else { None },
             said: if signed_in || running { String::new() } else { s.last.clone() },
             domain,
+            held: s.held.clone().map(|(host, last_connected)| crate::http::remote::RemoteHeld { host, last_connected }),
         }
+    }
+
+    /// Say, or clear, the address a Cloudflare set-up found held by a stale tunnel.
+    pub fn set_cloudflare_held(&self, held: Option<(String, String)>) {
+        self.cloudflare.lock().unwrap_or_else(|e| e.into_inner()).held = held;
     }
 
     /// The domain's name for the sign-in `access` holds: asked of Cloudflare (`ask`,
