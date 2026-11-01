@@ -233,6 +233,39 @@ jobs:
           body=$(curl -s -H 'X-Bagholder: 1' http://127.0.0.1:8792/api/status)
           echo "$body" | jq -e '.ok == true and (.version | length > 0) and (.updateUrl | length > 0) and has("canUpdate") and .dataVersion == null and .error == "The market cache could not be opened: file is not a database."' \
             || { echo "$body"; exit 1; }
+      # the image as the repository's docker-compose.yml runs it: read-only, with only
+      # the powers its start needs, on a data folder root made; it takes the folder
+      # over and runs as its own user
+      - name: The image as shipped runs as its own user on a data folder root made
+        run: |
+          docker rm -f bagholder
+          sudo mkdir -m 700 "$RUNNER_TEMP/rooted"
+          cat > "$RUNNER_TEMP/rooted.yml" <<EOF
+          services:
+            bagholder:
+              image: bagholder:ci
+              environment:
+                - BAGHOLDER_OFFLINE=1
+                - BAGHOLDER_DRY_ORDERS=1
+              volumes: !override
+                - $RUNNER_TEMP/rooted:/data
+          EOF
+          BAGHOLDER_PORT=8792 docker compose -f docker-compose.yml -f "$RUNNER_TEMP/rooted.yml" up -d
+          until curl -sf -o /dev/null -H 'X-Bagholder: 1' http://127.0.0.1:8792/api/status; do
+            [ "$(docker inspect -f '{{.State.Running}}' bagholder)" = true ] || { docker logs bagholder; exit 1; }
+            sleep 1
+          done
+          docker exec bagholder grep -E '^Uid:\s+1000\s+1000\s+1000\s+1000$' /proc/1/status
+          docker exec bagholder grep -E '^CapEff:\s+0+$' /proc/1/status
+          [ "$(sudo stat -c %u "$RUNNER_TEMP/rooted")" = 1000 ]
+          docker exec -u bagholder bagholder sh -c 'echo written > "$HOME/.home-probe"'
+          [ "$(sudo cat "$RUNNER_TEMP/rooted/.home-probe")" = written ]
+          until [ "$(docker inspect -f '{{.State.Health.Status}}' bagholder)" = healthy ]; do
+            [ "$(docker inspect -f '{{.State.Health.Status}}' bagholder)" = unhealthy ] && { docker inspect -f '{{json .State.Health}}' bagholder; exit 1; }
+            sleep 2
+          done
+          BAGHOLDER_PORT=8792 docker compose -f docker-compose.yml -f "$RUNNER_TEMP/rooted.yml" down
+          sudo rm -rf "$RUNNER_TEMP/rooted"
       - name: Who the image answers, on a local network and from the internet, directly and through Traefik, Caddy and nginx
         run: sh bin/container-network.test.sh bagholder:ci
       - name: The container's log
