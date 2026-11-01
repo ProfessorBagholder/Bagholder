@@ -61,6 +61,11 @@ pub struct Trade {
     pub side: String,
     /// `long` or `short`: what the trade holds, said plainly (an agent reads it).
     pub direction: String,
+    /// A short option's coverage when it was written; none for anything else.
+    pub coverage: Option<Coverage>,
+    /// What the Side column reads (`side_label`): `Long`, `Short`, `Covered call`,
+    /// `Uncovered call`, `Secured put` or `Uncovered put`.
+    pub side_label: String,
     pub qty: Fig<Dec>,
     pub entry: Fig<Dec>,
     /// None before the first sale.
@@ -79,6 +84,23 @@ pub struct Trade {
     pub grade: String,
     pub thesis: String,
     pub tags: Vec<String>,
+}
+
+/// What a short option was held against when it was written (SPEC.md §2 Trade):
+/// a call's units of its underlying, a put's cash.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[serde(rename_all = "camelCase")]
+pub struct Coverage {
+    /// `call` or `put`.
+    pub right: String,
+    /// The contracts covered (a call) or secured (a put), of `of`; none where it
+    /// isn't told (`untold`).
+    pub covered: Option<Dec>,
+    pub of: Option<Dec>,
+    /// Why it isn't told, as the trade's page says it.
+    pub untold: Option<String>,
+    /// Every contract covered or secured.
+    pub whole: bool,
 }
 
 /// A holding: what one account holds of one instrument, one way.
@@ -100,6 +122,10 @@ pub struct Position {
     pub instrument: String,
     pub security: String,
     pub short: bool,
+    /// What its trade's Side column reads (`Trade::side_label`), and a short
+    /// option's coverage: the holding's page is its trade's.
+    pub side_label: String,
+    pub coverage: Option<Coverage>,
     pub qty: Fig<Dec>,
     pub avg: Fig<Dec>,
     /// What the units held cost (long) or brought in (short), as Wealthsimple

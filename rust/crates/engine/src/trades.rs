@@ -93,6 +93,9 @@ pub struct TradeFig {
     pub journal: JournalEntry,
     /// A saved group: shown as one trade and never regrouped.
     pub locked: bool,
+    /// A short option's coverage (`crate::coverage`), judged over every trade
+    /// once they are built; none for anything else.
+    pub coverage: Option<crate::coverage::Coverage>,
 }
 
 impl TradeFig {
@@ -288,6 +291,7 @@ fn collapse(inputs: &Inputs, matched: &Matched, key: TradeKey, trade: Option<Tra
         flags,
         journal,
         locked,
+        coverage: None,
     })
 }
 

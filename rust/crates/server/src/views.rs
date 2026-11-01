@@ -691,7 +691,7 @@ struct Trades {
 
 impl Trades {
     fn new(filters: bagholder_engine::scope::Filters, sort: Sort, limit: usize) -> Result<Trades, String> {
-        const COLUMNS: [&str; 14] = ["activity", "entryDate", "exitDate", "symbol", "exchange", "qty", "entry", "exit", "currency", "pnl", "pnlPct", "holdDays", "grade", "tags"];
+        const COLUMNS: [&str; 15] = ["activity", "entryDate", "exitDate", "symbol", "sideLabel", "exchange", "qty", "entry", "exit", "currency", "pnl", "pnlPct", "holdDays", "grade", "tags"];
         if !COLUMNS.contains(&sort.key.as_str()) {
             return Err(format!("the trades have no column {:?} to sort by", sort.key));
         }

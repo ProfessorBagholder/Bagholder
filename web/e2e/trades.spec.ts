@@ -1,11 +1,11 @@
 import { expect, test, type APIRequestContext, type Page } from '@playwright/test'
-import { ready, figures, money, pct, px, qty as fqty, hold, symText, subUrl, tradesInListOrder } from './helpers'
+import { ready, figures, money, pct, px, qty as fqty, hold, symText, subUrl, tradesInListOrder, openWithStatus } from './helpers'
 
 // SPEC.md "### Trades" (list columns, sorts, detail header, chart, executions,
 // journal) plus §3/§6 where they name the trade page. Figures are checked against
 // the figures document (GET /api/figures), formatted from its exact decimal text.
 
-const COLS = ['Open', 'Close', 'Symbol', 'Exchange', 'Qty', 'Entry', 'Exit', 'FX', 'P&L', 'P&L %', 'Hold', 'Grade', 'Tags']
+const COLS = ['Open', 'Close', 'Symbol', 'Side', 'Exchange', 'Qty', 'Entry', 'Exit', 'FX', 'P&L', 'P&L %', 'Hold', 'Grade', 'Tags']
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function getModel(request: APIRequestContext): Promise<any> {
@@ -35,7 +35,7 @@ test.describe('Trades list', () => {
     await expect(rows(page)).toHaveCount(model.trades.length)
   })
 
-  test('a row shows Symbol, Exchange, Qty, Entry, Exit, FX, P&L, P&L %, Hold, Grade and Tags formatted per SPEC.md §3', async ({ page, request }) => {
+  test('a row shows Symbol, Side, Exchange, Qty, Entry, Exit, FX, P&L, P&L %, Hold, Grade and Tags formatted per SPEC.md §3', async ({ page, request }) => {
     const model = await getModel(request)
     await page.goto('/#trades')
     await ready(page)
@@ -45,16 +45,17 @@ test.describe('Trades list', () => {
     await expect(cells.nth(0)).toHaveText(t.entryDate)
     await expect(cells.nth(1)).toHaveText(t.exitDate)
     await expect(cells.nth(2)).toHaveText(symText(t.symbol))
-    await expect(cells.nth(3)).toHaveText(t.exchange)
-    await expect(cells.nth(4)).toHaveText(fqty(t.qty))
-    await expect(cells.nth(5)).toHaveText(px(t.entry))
-    await expect(cells.nth(6)).toHaveText(px(t.exit))
-    await expect(cells.nth(7)).toHaveText(t.currency)
-    await expect(cells.nth(8)).toHaveText(money(t.pnl))
-    await expect(cells.nth(9)).toHaveText(pct(t.pnlPct))
-    await expect(cells.nth(10)).toHaveText(hold(t.holdDays))
-    await expect(cells.nth(11)).toContainText(t.grade)
-    await expect(cells.nth(12)).toContainText(t.tags[0])
+    await expect(cells.nth(3)).toHaveText(t.sideLabel)
+    await expect(cells.nth(4)).toHaveText(t.exchange)
+    await expect(cells.nth(5)).toHaveText(fqty(t.qty))
+    await expect(cells.nth(6)).toHaveText(px(t.entry))
+    await expect(cells.nth(7)).toHaveText(px(t.exit))
+    await expect(cells.nth(8)).toHaveText(t.currency)
+    await expect(cells.nth(9)).toHaveText(money(t.pnl))
+    await expect(cells.nth(10)).toHaveText(pct(t.pnlPct))
+    await expect(cells.nth(11)).toHaveText(hold(t.holdDays))
+    await expect(cells.nth(12)).toContainText(t.grade)
+    await expect(cells.nth(13)).toContainText(t.tags[0])
   })
 
   test('newest activity first by default: an open trade by its latest fill, a closed one by its close', async ({ page, request }) => {
@@ -128,7 +129,7 @@ test.describe('Trades list', () => {
     await page.goto('/#trades')
     await ready(page)
     const openCol = () => page.locator('#page table tbody tr td:nth-child(1)').allTextContents()
-    const qtyCol = async () => (await page.locator('#page table tbody tr td:nth-child(5)').allTextContents()).map((s) => Number(s.replace(/,/g, '')))
+    const qtyCol = async () => (await page.locator('#page table tbody tr td:nth-child(6)').allTextContents()).map((s) => Number(s.replace(/,/g, '')))
     await headerCell(page, 'Open').click() // desc
     await expect.poll(async () => sortedBy(await openCol(), (a, b) => text(b, a))).toBe(true)
     await headerCell(page, 'Open').click() // asc -- now the direction held on Open is ascending
@@ -144,7 +145,7 @@ test.describe('Trades list', () => {
   test('Grade sorts A first on the first click, and ungraded trades sink to the bottom either way', async ({ page }) => {
     await page.goto('/#trades')
     await ready(page)
-    const grades = () => page.locator('#page table tbody tr td:nth-child(12) .grade').allTextContents()
+    const grades = () => page.locator('#page table tbody tr td:nth-child(13) .grade').allTextContents()
     const rank: Record<string, number> = { F: 0, C: 1, B: 2, A: 3 }
     // graded first, in the order asked, and every ungraded trade after them
     const inOrder = (g: string[], dir: 1 | -1) => {
@@ -489,5 +490,51 @@ test.describe('The chart, on stored bars', () => {
     const weekly = Number((await chart.getAttribute('aria-label'))!.match(/(\d+) bars/)![1])
     expect(weekly).toBeLessThan(daily)
     expect(await canvas.evaluate((el) => (el as unknown as { mark?: number }).mark)).toBe(1)
+  })
+})
+
+test.describe('Side', () => {
+  // SPEC.md trades-1, trade-69 to trade-74: the direction, and a short option's coverage
+  test('the made-up book\'s covered calls read Covered call, every long Long, as the server says', async ({ page, request }) => {
+    const model = await getModel(request)
+    await page.goto('/#trades')
+    await ready(page)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const calls = model.trades.filter((t: any) => t.coverage)
+    expect(calls.length).toBeGreaterThan(0)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    for (const t of calls) expect(t.sideLabel).toBe(t.coverage.whole ? (t.coverage.right === 'call' ? 'Covered call' : 'Secured put') : t.coverage.right === 'call' ? 'Uncovered call' : 'Uncovered put')
+    const order = tradesInListOrder(model.trades as { lastDate: string; sideLabel: string }[])
+    for (let i = 0; i < order.length; i++) await expect(rows(page).nth(i).locator('td').nth(3)).toHaveText(order[i].sideLabel)
+  })
+
+  test('sorts by its text, first descending', async ({ page, request }) => {
+    await page.goto('/#trades')
+    await ready(page)
+    const side = () => rows(page).locator('td:nth-child(4)').allTextContents()
+    await headerCell(page, 'Side').click()
+    await expect.poll(async () => { const v = await side(); return v.join('|') === [...v].sort().reverse().join('|') }).toBe(true)
+    await headerCell(page, 'Side').click()
+    await expect.poll(async () => { const v = await side(); return v.join('|') === [...v].sort().join('|') }).toBe(true)
+  })
+
+  test('each of the six readings shows as the server sends it, and the trade page says how many contracts were covered', async ({ page, request }) => {
+    const labels = ['Long', 'Short', 'Covered call', 'Uncovered call', 'Secured put', 'Uncovered put']
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    let shown: any[] = []
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    await openWithStatus(page, request, {}, '#trades', (m: any) => {
+      m.trades = m.trades.slice(0, labels.length).map((t: Record<string, unknown>, i: number) => ({
+        ...t,
+        sideLabel: labels[i],
+        coverage: i < 2 ? null : { right: labels[i].endsWith('call') ? 'call' : 'put', covered: labels[i].startsWith('Uncovered') ? '1' : '2', of: '2', untold: null, whole: !labels[i].startsWith('Uncovered') },
+      }))
+      shown = m.trades
+    })
+    await expect(rows(page)).toHaveCount(labels.length)
+    await expect(rows(page).locator('td:nth-child(4)')).toHaveText(labels)
+    const uncovered = shown[3]
+    await page.goto('/#trades/' + encodeURIComponent(uncovered.id))
+    await expect(page.getByTestId('trade-side')).toHaveText('Uncovered call · 1 of 2 contracts covered')
   })
 })
