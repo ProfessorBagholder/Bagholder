@@ -355,26 +355,22 @@ async fn choose(State(state): State<AppState>, Required(asked): Required<Setup>)
             // nowhere, is offered to the person and taken over once they choose to, as the
             // page's address is (`http::remote`): a computer asleep is connected nowhere
             // too, so it is never taken unasked
-            let made = match cf.set_up(&program, s.name.trim()) {
-                Err(e) if e == agents::cloudflare::NAME_TAKEN => {
-                    let access = cf.access().ok_or("Sign in to Cloudflare first.")?;
-                    match stale_holder(&access, s.name.trim(), cf.tunnel_id().as_deref())? {
-                        Some(h) if take.eq_ignore_ascii_case(&h.host) => {
-                            take_over(&access, &h)?;
-                            cf.set_up(&program, s.name.trim())
-                        }
-                        Some(h) => {
-                            let said = format!("{} is held by an earlier Bagholder set-up whose tunnel isn’t connected.", h.host);
-                            app.agents.set_cloudflare_held(Some((h.host, h.last_connected)));
-                            app.events.signal();
-                            Err(said)
-                        }
-                        None => Err(e),
-                    }
+            let access = cf.access();
+            let made = set_up_or_offer(
+                &|| cf.set_up(&program, s.name.trim()),
+                &|| stale_holder(access.as_ref().ok_or("Sign in to Cloudflare first.")?, s.name.trim(), cf.tunnel_id().as_deref()),
+                &|h| take_over(access.as_ref().ok_or("Sign in to Cloudflare first.")?, h),
+                &take,
+            )?;
+            s.name = match made {
+                SetUp::Made(name) => name,
+                SetUp::Held(h) => {
+                    let said = format!("{} is held by an earlier Bagholder set-up whose tunnel isn’t connected.", h.host);
+                    app.agents.set_cloudflare_held(Some((h.host, h.last_connected)));
+                    app.events.signal();
+                    return Err(said);
                 }
-                other => other,
             };
-            s.name = made?;
             app.agents.set_cloudflare_held(None);
         }
         // ngrok with Bagholder's authtoken: its address is the account's dev domain,
@@ -523,6 +519,33 @@ pub(crate) struct StaleHolder {
     pub last_connected: String,
     record: String,
     tunnel: String,
+}
+
+/// What a Cloudflare set-up came to where its name may be held.
+pub(crate) enum SetUp {
+    /// The address made.
+    Made(String),
+    /// Held by an earlier set-up's tunnel, connected nowhere, and not taken over: the
+    /// person is offered it.
+    Held(StaleHolder),
+}
+
+/// The set-up run (`set_up`); where Cloudflare refuses the name as taken, the holder
+/// found (`holder`) is taken over (`take_over`) and the set-up run again only when
+/// the person named it (`take`): a computer asleep is connected nowhere too, so an
+/// address is never taken unasked. Any other refusal stands.
+pub(crate) fn set_up_or_offer(set_up: &dyn Fn() -> Result<String, String>, holder: &dyn Fn() -> Result<Option<StaleHolder>, String>, take_over: &dyn Fn(&StaleHolder) -> Result<(), String>, take: &str) -> Result<SetUp, String> {
+    match set_up() {
+        Err(e) if e == agents::cloudflare::NAME_TAKEN => match holder()? {
+            Some(h) if !take.is_empty() && take.eq_ignore_ascii_case(&h.host) => {
+                take_over(&h)?;
+                set_up().map(SetUp::Made)
+            }
+            Some(h) => Ok(SetUp::Held(h)),
+            None => Err(e),
+        },
+        other => other.map(SetUp::Made),
+    }
 }
 
 /// The address's DNS record, where it points at a tunnel Bagholder made that runs
@@ -865,6 +888,40 @@ mod tests {
 
     /// A container's host name is its id: the panel names a computer only for an
     /// app on its own computer.
+    #[test]
+    fn an_address_held_by_a_stale_tunnel_is_taken_over_only_when_asked() {
+        use std::cell::Cell;
+        // a stand-in Cloudflare: the name refused as taken until its holder is deleted
+        let deleted = Cell::new(0);
+        let set_ups = Cell::new(0);
+        let set_up = || {
+            set_ups.set(set_ups.get() + 1);
+            if deleted.get() == 0 { Err(agents::cloudflare::NAME_TAKEN.to_string()) } else { Ok("agents.example.com".to_string()) }
+        };
+        let holder = || Ok(Some(StaleHolder { host: "agents.example.com".into(), last_connected: "2026-10-29T12:00:00Z".into(), record: "r1".into(), tunnel: "t1".into() }));
+        let take_over = |_: &StaleHolder| {
+            deleted.set(deleted.get() + 1);
+            Ok(())
+        };
+        // not asked: the holder kept and offered, nothing deleted
+        let not_asked = set_up_or_offer(&set_up, &holder, &take_over, "").unwrap();
+        assert!(matches!(&not_asked, SetUp::Held(h) if h.host == "agents.example.com"), "offered, not taken");
+        assert_eq!((deleted.get(), set_ups.get()), (0, 1), "no delete without the person's choice");
+        // asked for another address: still not taken
+        assert!(matches!(set_up_or_offer(&set_up, &holder, &take_over, "other.example.com").unwrap(), SetUp::Held(_)));
+        assert_eq!(deleted.get(), 0);
+        // asked for this one: deleted once, and the set-up run again
+        set_ups.set(0);
+        let asked = set_up_or_offer(&set_up, &holder, &take_over, "AGENTS.example.com").unwrap();
+        assert!(matches!(&asked, SetUp::Made(a) if a == "agents.example.com"));
+        assert_eq!((deleted.get(), set_ups.get()), (1, 2), "one delete, then the set-up again");
+        // a name taken by something that is no stale holder of Bagholder's: refused as it was
+        let none = || Ok(None);
+        let refused = |_: &StaleHolder| -> Result<(), String> { panic!("nothing to take over") };
+        let always_taken = || Err(agents::cloudflare::NAME_TAKEN.to_string());
+        assert_eq!(set_up_or_offer(&always_taken, &none, &refused, "agents.example.com").err().as_deref(), Some(agents::cloudflare::NAME_TAKEN));
+    }
+
     #[test]
     fn a_container_names_no_computer() {
         assert_eq!(computer_named("0.0.0.0"), "");

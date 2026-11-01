@@ -467,23 +467,22 @@ async fn set_up(State(state): State<AppState>, Required(asked): Required<SetUpAs
         // an address an earlier set-up of Bagholder's still holds, its tunnel connected
         // nowhere, is offered to the person, and taken over once they choose to: a
         // computer asleep is connected nowhere too, so it is never taken unasked
-        let made = match files.set_up(&program, asked.name.trim()) {
-            Err(e) if e == agents::cloudflare::NAME_TAKEN => match super::agents::stale_holder(&access, asked.name.trim(), files.tunnel_id().as_deref())? {
-                Some(h) if asked.take_over.eq_ignore_ascii_case(&h.host) => {
-                    super::agents::take_over(&access, &h)?;
-                    files.set_up(&program, asked.name.trim())
-                }
-                Some(h) => {
-                    let said = format!("{} is held by an earlier Bagholder set-up whose tunnel isn’t connected.", h.host);
-                    app.remote.set_held(Some((h.host, h.last_connected)));
-                    app.events.signal();
-                    Err(said)
-                }
-                None => Err(e),
-            },
-            other => other,
+        let made = super::agents::set_up_or_offer(
+            &|| files.set_up(&program, asked.name.trim()),
+            &|| super::agents::stale_holder(&access, asked.name.trim(), files.tunnel_id().as_deref()),
+            &|h| super::agents::take_over(&access, h),
+            &asked.take_over,
+        )?;
+        let made = match made {
+            super::agents::SetUp::Made(name) => name,
+            super::agents::SetUp::Held(h) => {
+                let said = format!("{} is held by an earlier Bagholder set-up whose tunnel isn’t connected.", h.host);
+                app.remote.set_held(Some((h.host, h.last_connected)));
+                app.events.signal();
+                return Err(said);
+            }
         };
-        let host = tunnel::clean_name(&made?)?;
+        let host = tunnel::clean_name(&made)?;
         app.remote.set_held(None);
         if !before.host.is_empty() && before.host != host {
             if let (Some(id), Some(a)) = (files.tunnel_id(), files.access()) {
