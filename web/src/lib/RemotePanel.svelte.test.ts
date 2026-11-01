@@ -14,7 +14,7 @@ function agents(over: Partial<AgentsStatus> = {}): AgentsStatus {
     on: false, port: null, addresses: [],
     programs: [{ provider: 'cloudflare', path: '/usr/local/bin/cloudflared' }],
     computer: 'box', os: 'linux', installing: [], tailscale: null,
-    cloudflare: { signedIn: true, signingIn: false, signInUrl: null, said: '', domain: 'example.com' },
+    cloudflare: { signedIn: true, signingIn: false, signInUrl: null, said: '', domain: 'example.com', held: null },
     waiting: [], allowed: [], refused: [], codesPaused: false, error: '',
     ...over,
   }
@@ -50,7 +50,7 @@ describe('Open from anywhere is set up in order', () => {
     expect(steps()[0].text).toContain('Install Cloudflare’s connector on box')
     expect(queryByRole('button', { name: 'Install' })).not.toBeNull()
     expect(queryByRole('button', { name: 'Sign in' })).toBeNull()
-    set(agents({ cloudflare: { signedIn: false, signingIn: false, signInUrl: null, said: '', domain: null } }), remote({ token: false }))
+    set(agents({ cloudflare: { signedIn: false, signingIn: false, signInUrl: null, said: '', domain: null, held: null } }), remote({ token: false }))
     expect(steps()[0].text).toContain('Cloudflare’s connector is installed on box')
     expect(steps().map((s) => s.later)).toEqual([false, false, true, true, true, true, true])
     expect(queryByRole('button', { name: 'Sign in' })).not.toBeNull()
@@ -63,7 +63,7 @@ describe('Open from anywhere is set up in order', () => {
   it('a sign-in under way with no tab opened here says it is ready to open, never that it waits in a tab', () => {
     server()
     // the page reloaded while Cloudflare's sign-in ran: no tab was opened from this page
-    set(agents({ cloudflare: { signedIn: false, signingIn: true, signInUrl: 'https://dash.cloudflare.com/argotunnel?x', said: '', domain: null } }), remote({ token: false }))
+    set(agents({ cloudflare: { signedIn: false, signingIn: true, signInUrl: 'https://dash.cloudflare.com/argotunnel?x', said: '', domain: null, held: null } }), remote({ token: false }))
     const { container, getByRole } = render(RemotePanel)
     expect(container.textContent).toContain('Cloudflare’s sign-in is ready')
     expect(container.textContent).not.toContain('Waiting for you in Cloudflare’s tab')
@@ -85,7 +85,7 @@ describe('Open from anywhere is set up in order', () => {
     const tab = { closed: false, close: vi.fn(), location: { href: 'about:blank' } }
     const open = vi.fn(() => tab)
     vi.stubGlobal('open', open)
-    const out = { signedIn: false, signingIn: false, signInUrl: null, said: '', domain: null }
+    const out = { signedIn: false, signingIn: false, signInUrl: null, said: '', domain: null, held: null }
     set(agents({ cloudflare: out }), remote({ token: false }))
     const { getByRole } = render(RemotePanel)
     await fireEvent.click(getByRole('button', { name: 'Sign in' }))
@@ -229,7 +229,7 @@ describe('Open from anywhere, set up', () => {
     // the sign-in kept for an agents' tunnel: only the token made for Bagholder is left to delete
     expect(container.textContent).toContain('The token, named Bagholder, stays in your Cloudflare account')
     // the sign-in forgotten too: its tokens are said as well
-    set(agents({ cloudflare: { signedIn: false, signingIn: false, signInUrl: null, said: '', domain: null } }), remote({ url: '', on: false, running: false, token: false }))
+    set(agents({ cloudflare: { signedIn: false, signingIn: false, signInUrl: null, said: '', domain: null, held: null } }), remote({ url: '', on: false, running: false, token: false }))
     expect(container.textContent).toContain('the ones Cloudflare made each time you signed in, named for Cloudflare Tunnel')
   })
 })

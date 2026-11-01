@@ -347,9 +347,35 @@ async fn choose(State(state): State<AppState>, Required(asked): Required<Setup>)
         // Cloudflare signed in through Bagholder: its tunnel and the address's DNS record
         // are made here, and the address is the one Cloudflare made (brief 81 §3)
         let cf = agents::cloudflare::Files::new(&app.home);
+        let take = s.take_over.take().unwrap_or_default();
         if s.provider == Provider::Cloudflare && cf.signed_in() {
             let program = tunnel::find_here(&app.home, Provider::Cloudflare).ok_or("Cloudflare’s connector isn’t installed: install it first.")?;
-            s.name = cf.set_up(&program.display().to_string(), s.name.trim())?;
+            let program = program.display().to_string();
+            // an address an earlier set-up of Bagholder's still holds, its tunnel connected
+            // nowhere, is offered to the person and taken over once they choose to, as the
+            // page's address is (`http::remote`): a computer asleep is connected nowhere
+            // too, so it is never taken unasked
+            let made = match cf.set_up(&program, s.name.trim()) {
+                Err(e) if e == agents::cloudflare::NAME_TAKEN => {
+                    let access = cf.access().ok_or("Sign in to Cloudflare first.")?;
+                    match stale_holder(&access, s.name.trim(), cf.tunnel_id().as_deref())? {
+                        Some(h) if take.eq_ignore_ascii_case(&h.host) => {
+                            take_over(&access, &h)?;
+                            cf.set_up(&program, s.name.trim())
+                        }
+                        Some(h) => {
+                            let said = format!("{} is held by an earlier Bagholder set-up whose tunnel isn’t connected.", h.host);
+                            app.agents.set_cloudflare_held(Some((h.host, h.last_connected)));
+                            app.events.signal();
+                            Err(said)
+                        }
+                        None => Err(e),
+                    }
+                }
+                other => other,
+            };
+            s.name = made?;
+            app.agents.set_cloudflare_held(None);
         }
         // ngrok with Bagholder's authtoken: its address is the account's dev domain,
         // known once ngrok says it as it starts
@@ -891,7 +917,7 @@ mod tests {
         let a = store(&app).unwrap();
         let now = bagholder_core::jiff::Timestamp::now();
         for (provider, kept) in [(Provider::Ngrok, false), (Provider::Own, true)] {
-            let s = Setup { provider, name: "agents.example.com".into(), funnel_port: None, sends_host: None };
+            let s = Setup { provider, name: "agents.example.com".into(), funnel_port: None, sends_host: None, take_over: None };
             keep(&a, &[s], &BTreeMap::from([(provider, "agents.example.com".to_string())]), &BTreeSet::new()).unwrap();
             app.agents.set_sites(sites(&a).unwrap());
             app.agents.set_ready(provider, Some(Ready::Ready));
@@ -915,7 +941,7 @@ mod tests {
         switch_on(&app, rt.handle()).unwrap();
         let a = store(&app).unwrap();
         let now = bagholder_core::jiff::Timestamp::now();
-        let s = Setup { provider: Provider::Own, name: "agents.example.com".into(), funnel_port: None, sends_host: None };
+        let s = Setup { provider: Provider::Own, name: "agents.example.com".into(), funnel_port: None, sends_host: None, take_over: None };
         keep(&a, &[s], &BTreeMap::from([(Provider::Own, "agents.example.com".to_string())]), &BTreeSet::from([Provider::Own])).unwrap();
         // every one of the agents' settings set, `agents.running` with them, so
         // Clear is shown to remove each (brief 80, round 3, 5)

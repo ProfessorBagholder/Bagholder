@@ -74,6 +74,11 @@ pub struct Setup {
     /// Their own proxy only: the `Host` it sends, when not the public name.
     #[serde(default)]
     pub sends_host: Option<String>,
+    /// Cloudflare only, as asked and never kept: the address an earlier set-up's
+    /// tunnel, connected nowhere, holds, which the person chose to take over.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
+    pub take_over: Option<String>,
 }
 
 /// A name a person typed for a host: lower case, no scheme, no path, a port kept.
@@ -218,6 +223,9 @@ pub struct CloudflareSays {
     pub said: String,
     /// The domain the sign-in was made for, once Cloudflare said its name.
     pub domain: Option<String>,
+    /// An address an earlier set-up's tunnel holds, connected nowhere, offered to
+    /// take over: none until a set-up met one.
+    pub held: Option<crate::http::remote::RemoteHeld>,
 }
 
 /// What Tailscale states of this machine, by which the panel shows each of its

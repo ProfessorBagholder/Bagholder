@@ -17,7 +17,12 @@ funnelPort: number | null,
 /**
  * Their own proxy only: the `Host` it sends, when not the public name.
  */
-sendsHost: string | null, };
+sendsHost: string | null, 
+/**
+ * Cloudflare only, as asked and never kept: the address an earlier set-up's
+ * tunnel, connected nowhere, holds, which the person chose to take over.
+ */
+takeOver?: string, };
 
 export type Address = { provider: Provider, 
 /**
@@ -54,7 +59,12 @@ said: string,
 /**
  * The domain the sign-in was made for, once Cloudflare said its name.
  */
-domain: string | null, };
+domain: string | null, 
+/**
+ * An address an earlier set-up's tunnel holds, connected nowhere, offered to
+ * take over: none until a set-up met one.
+ */
+held: RemoteHeld | null, };
 
 export type Installing = { provider: Provider, 
 /**
