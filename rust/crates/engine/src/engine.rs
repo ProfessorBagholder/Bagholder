@@ -299,6 +299,9 @@ pub struct Engine {
     kept: BTreeMap<Node, MatchState>,
     /// The round trips the saved groups hold.
     group_held: BTreeSet<TripKey>,
+    /// Each written option's coverage as last judged, with its account: what a
+    /// change compares with, and keeps where it touches nothing coverage reads.
+    coverage: BTreeMap<TradeKey, (AccountId, crate::coverage::Coverage)>,
     /// Each family matched, and how, over the engine's life: what a test reads,
     /// on whichever thread the change ran.
     #[cfg(feature = "oracles")]
@@ -445,6 +448,7 @@ impl Engine {
             listings: BTreeMap::new(),
             kept: BTreeMap::new(),
             group_held: BTreeSet::new(),
+            coverage: BTreeMap::new(),
             #[cfg(feature = "oracles")]
             paths: Vec::new(),
         };
@@ -468,6 +472,7 @@ impl Engine {
         let i = &self.inputs;
         self.trades = build_trades(i, &self.matched, &self.identity);
         crate::coverage::assign(&self.inputs, &self.matched, &mut self.trades);
+        self.coverage = self.trades.iter().filter_map(|t| t.coverage.clone().map(|c| (t.key.clone(), (t.account, c)))).collect();
         self.group_held = self.trades.iter().filter_map(|t| if let TradeKey::Group(_) = t.key { Some(t.trips.clone()) } else { None }).flatten().collect();
         self.positions = build_positions(i, &self.matched, &self.identity, None, None);
         self.cash = build_cashflow(i, &self.matched);
@@ -731,14 +736,56 @@ impl Engine {
     pub fn apply(&mut self, change: Change) -> Moved {
         // a contract's coverage reads other trades and a past day's positions read:
         // judged again whatever changed, and a trade whose coverage moved is said
-        let was: BTreeMap<TradeKey, crate::coverage::Coverage> = self.trades.iter().filter_map(|t| t.coverage.clone().map(|c| (t.key.clone(), c))).collect();
+        // a coverage reads only written options, their terms and the broker's
+        // reads: an account is judged again only where a change moved one of those
+        let broker = if let Change::Broker(a, _) = &change { Some(*a) } else { None };
         let mut moved = self.apply_change(change);
-        crate::coverage::assign(&self.inputs, &self.matched, &mut self.trades);
+        let mut touched: BTreeSet<AccountId> = broker.into_iter().collect();
+        for e in moved.0.keys() {
+            let Entity::Trade(k) = e else { continue };
+            match self.trades.iter().find(|t| &t.key == k) {
+                Some(t) if crate::coverage::written(t) => {
+                    touched.insert(t.account);
+                }
+                _ => {
+                    if let Some((a, _)) = self.coverage.get(k) {
+                        touched.insert(*a);
+                    }
+                }
+            }
+        }
+        // the accounts touched judged again; every other written option keeps its
+        // judgement, put back where the change rebuilt its trade
+        let mut was: BTreeMap<TradeKey, crate::coverage::Coverage> = BTreeMap::new();
+        if !touched.is_empty() {
+            let keys: Vec<TradeKey> = self.coverage.iter().filter(|(_, (a, _))| touched.contains(a)).map(|(k, _)| k.clone()).collect();
+            for k in keys {
+                if let Some((_, c)) = self.coverage.remove(&k) {
+                    was.insert(k, c);
+                }
+            }
+        }
+        let mut judged = if touched.is_empty() { BTreeMap::new() } else { crate::coverage::coverages(&self.inputs, &self.matched, self.trades.iter().filter(|t| touched.contains(&t.account))) };
+        for t in self.trades.iter_mut().filter(|t| crate::coverage::written(t)) {
+            if touched.contains(&t.account) {
+                t.coverage = judged.remove(&t.key);
+                if let Some(c) = &t.coverage {
+                    self.coverage.insert(t.key.clone(), (t.account, c.clone()));
+                }
+            } else if t.coverage.is_none() {
+                t.coverage = self.coverage.get(&t.key).map(|(_, c)| c.clone());
+            }
+        }
         // a trade rebuilt by the change was compared before its coverage was
-        // judged: whether its coverage moved is settled here, against before
-        for t in &self.trades {
+        // judged: whether its coverage moved is settled here, against before (an
+        // account not touched kept its judgement)
+        let moved_trades: Vec<TradeKey> = moved.0.keys().filter_map(|e| if let Entity::Trade(k) = e { Some(k.clone()) } else { None }).collect();
+        let before = |k: &TradeKey, a: AccountId| if touched.contains(&a) { was.get(k) } else { self.coverage.get(k).map(|(_, c)| c) };
+        let mut check: Vec<&TradeFig> = self.trades.iter().filter(|t| touched.contains(&t.account) && crate::coverage::written(t)).collect();
+        check.extend(self.trades.iter().filter(|t| moved_trades.contains(&t.key) && !touched.contains(&t.account)));
+        for t in check {
             let e = trade_entity(t);
-            let moved_now = was.get(&t.key) != t.coverage.as_ref();
+            let moved_now = before(&t.key, t.account) != t.coverage.as_ref();
             match moved.0.get_mut(&e) {
                 Some(fields) if fields.contains("*") => {}
                 Some(fields) => {

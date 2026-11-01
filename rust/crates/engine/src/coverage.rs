@@ -83,9 +83,9 @@ enum Holding {
 
 /// Each short option trade's coverage, judged in the order the contracts were
 /// written, account by account.
-pub fn coverages(inputs: &Inputs, matched: &Matched, trades: &[TradeFig]) -> BTreeMap<TradeKey, Coverage> {
+pub fn coverages<'a>(inputs: &Inputs, matched: &Matched, trades: impl IntoIterator<Item = &'a TradeFig>) -> BTreeMap<TradeKey, Coverage> {
     let mut openings: Vec<Opening> = Vec::new();
-    for t in trades.iter().filter(|t| t.direction == Direction::Short && t.kind == InstrumentKind::OptionContract) {
+    for t in trades.into_iter().filter(|t| written(t)) {
         let mut by: BTreeMap<(TransactionId, InstrumentId), Opening> = BTreeMap::new();
         let mut add = |instrument: InstrumentId, id: &TransactionId, day: Date, at: Option<Timestamp>, qty: Dec, premium: Option<Dec>, closed: Option<Date>| {
             let o = by.entry((id.clone(), instrument)).or_insert_with(|| Opening { trade: t.key.clone(), account: t.account, instrument, by: id.clone(), day, at, qty: Dec::ZERO, premium: Some(Dec::ZERO), pieces: Vec::new() });
@@ -189,9 +189,14 @@ fn sum(items: impl Iterator<Item = Dec>) -> Dec {
     items.fold(Dec::ZERO, |a, b| a.checked_add(b).unwrap_or(a))
 }
 
+/// A short option: the trades a coverage is judged for.
+pub fn written(t: &TradeFig) -> bool {
+    t.direction == Direction::Short && t.kind == InstrumentKind::OptionContract
+}
+
 /// Each trade's coverage set from `coverages`.
 pub fn assign(inputs: &Inputs, matched: &Matched, trades: &mut [TradeFig]) {
-    let mut c = coverages(inputs, matched, trades);
+    let mut c = coverages(inputs, matched, trades.iter());
     for t in trades.iter_mut() {
         t.coverage = c.remove(&t.key);
     }

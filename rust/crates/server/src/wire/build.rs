@@ -467,7 +467,10 @@ pub fn links(engine: &Engine) -> Links {
         if let Some(t) = p.key.as_ref().and_then(|k| by_trip.get(k)) {
             holding_of.insert(trade_id(t), position_id(p));
             trade_of.insert(position_id(p), trade_id(t));
-            side_of.insert(position_id(p), (side_label(t), t.coverage.as_ref().map(coverage)));
+            // a holding's own direction says the rest
+            if t.coverage.is_some() {
+                side_of.insert(position_id(p), (side_label(t), t.coverage.as_ref().map(coverage)));
+            }
         }
     }
     Links { holding_of, trade_of, side_of }
