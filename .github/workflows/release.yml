@@ -245,6 +245,18 @@ jobs:
       TAG: ${{ needs.release.outputs.tag }}
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
     steps:
+      # the notes name the image and its digest, so a copy can be pinned to exactly
+      # what this release published
+      - name: The image's tag and digest in the notes
+        run: |
+          version="${TAG#v}"
+          digest=$(docker buildx imagetools inspect "ghcr.io/professorbagholder/bagholder:$version" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$digest" in sha256:*) ;; *) echo "no digest for the image $version: $digest"; exit 1;; esac
+          gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq .body > notes.md
+          if ! grep -q '^Image: ' notes.md; then
+            printf '\nImage: `ghcr.io/professorbagholder/bagholder:%s` (`%s`)\n' "$version" "$digest" >> notes.md
+            gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
+          fi
       - name: Publish the release as the latest
         run: |
           if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true" ]; then

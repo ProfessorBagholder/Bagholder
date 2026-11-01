@@ -12,7 +12,40 @@ services:
       - BAGHOLDER_PORT=${BAGHOLDER_PORT:-8765}
     ports:
       - "127.0.0.1:${BAGHOLDER_PORT:-8765}:${BAGHOLDER_PORT:-8765}"
-    # the database and the login
+    # the database and the login, taken over at the first start by the image's own
+    # user (uid 1000), which the app runs as
     volumes:
       - ./data:/data
     restart: unless-stopped
+    # nothing but /data and /tmp is written; no privilege is gained, and of root's
+    # powers only what the start needs to take ./data over and become its user
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - CHOWN
+      - DAC_READ_SEARCH
+      - SETUID
+      - SETGID
+    # Chromium, its display, the summarizer's threads, a tunnel and its guard
+    pids_limit: 512
+    # about 1 GB at rest and about 2 GB more while the summarizer runs here; with
+    # BAGHOLDER_LLM_URL pointing at a model elsewhere, 2g is enough
+    # mem_limit: 6g
+    # memswap_limit: 6g
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    # healthy only when the app itself answers its status (the image has no curl)
+    healthcheck:
+      test: ["CMD", "bash", "-c", "exec 3<>/dev/tcp/127.0.0.1/$${BAGHOLDER_PORT} && printf 'GET /api/status HTTP/1.1\\r\\nHost: 127.0.0.1:%s\\r\\nConnection: close\\r\\n\\r\\n' \"$${BAGHOLDER_PORT}\" >&3 && IFS= read -r l <&3 && [[ $$l == 'HTTP/1.1 200'* ]]"]
+      interval: 60s
+      timeout: 10s
+      start_period: 60s
+      retries: 3

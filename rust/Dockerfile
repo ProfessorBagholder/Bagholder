@@ -36,6 +36,8 @@ FROM debian:bookworm-slim
 # Docker. Passkeys need a real browser; sign in with the password and 2FA.
 RUN apt-get update && apt-get install -y --no-install-recommends chromium xvfb fonts-liberation ca-certificates libssl3 poppler-utils tzdata \
     && rm -rf /var/lib/apt/lists/*
+# the user the app runs as, at home in its data folder
+RUN useradd --uid 1000 --user-group --home-dir /data --no-create-home --shell /usr/sbin/nologin bagholder
 COPY rust/docker-entrypoint.sh /usr/local/bin/bagholder-entrypoint
 RUN chmod +x /usr/local/bin/bagholder-entrypoint
 
@@ -43,7 +45,7 @@ WORKDIR /app
 COPY --from=binaries /src/target/release/bagholder /src/target/release/bagholder-browser /src/target/release/disclosures-mcp /src/target/release/sedar ./
 COPY --from=web /web/dist ./web/dist
 
-RUN mkdir -p /data
+RUN mkdir -p /data && chown bagholder:bagholder /data && chmod 700 /data
 
 # /data holds the database and the login; the server answers every interface of
 # the container (compose publishes it on the host's loopback only); no browser
@@ -56,10 +58,12 @@ ENV BAGHOLDER_HOME=/data \
     BAGHOLDER_NO_UPDATE=1 \
     BAGHOLDER_LOGIN_VIEW=1 \
     BAGHOLDER_CHROME=/usr/bin/chromium \
-    DISPLAY=:99
+    DISPLAY=:99 \
+    HOME=/data
 
-# root inside the container, so a data folder mounted from any host user is writable
-# as it is; the process touches nothing but /data, and the port is loopback-only.
+# Started as root only long enough to take the mounted data folder over for the
+# `bagholder` user (uid 1000), whoever made it on the host; the app runs as that user
+# and touches nothing but /data and /tmp (bagholder-entrypoint).
 VOLUME ["/data"]
 EXPOSE 8765
 ENTRYPOINT ["bagholder-entrypoint"]

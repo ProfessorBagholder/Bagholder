@@ -146,7 +146,7 @@ The Docker copy restarts with Docker itself (`restart: unless-stopped` in `docke
 
 ## Docker
 
-For a copy that runs in the background on a machine you keep on. Nothing is needed on the host but Docker: the image carries Chromium for the sign-in, and the database and the login live in `./data` beside the compose file. The image is published with every release as `ghcr.io/professorbagholder/bagholder:latest` and `:X.Y.Z`; moving to a new one is under Keeping up to date below.
+For a copy that runs in the background on a machine you keep on. Nothing is needed on the host but Docker: the image carries Chromium for the sign-in, and the database and the login live in `./data` beside the compose file. The app runs as the image's own user (`bagholder`, uid 1000), never root: at its first start the container takes `./data` over for that user, whoever made the folder on the host, so after that the host's own user needs root (`sudo`) to read it. The compose file runs it read-only, with none of root's powers but the few its start needs to take `./data` over. The image is published with every release as `ghcr.io/professorbagholder/bagholder:latest` and `:X.Y.Z`; moving to a new one is under Keeping up to date below.
 
 Bagholder answers your local network (its addresses, and names like `server.local` or a name a reverse proxy routes to it) and refuses visitors from the internet, whichever way they reach it. From outside your network, turn on **Open from anywhere**. Publish a port only where nothing else reaches the container:
 
