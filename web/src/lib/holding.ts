@@ -37,6 +37,8 @@ export function holdingAsTrade(p: Position): Trade {
     get security() { return p.security },
     get side() { return p.short ? 'COVER' : 'SELL' },
     get direction() { return p.short ? 'short' : 'long' },
+    get sideLabel() { return p.sideLabel },
+    get coverage() { return p.coverage },
     get qty() { return p.qty },
     get entry() { return p.avg },
     get exit() { return p.last },

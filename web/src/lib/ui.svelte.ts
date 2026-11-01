@@ -522,7 +522,7 @@ export async function exportCsv(): Promise<void> {
   const q = (v: unknown) => '"' + String(v == null ? '' : cell(v)).replace(/"/g, '""') + '"'
   const lines = [cols.map(q).join(',')].concat(
     (m.trades || []).map((t) =>
-      [t.entryDate, t.exitDate, t.symbol, t.name, t.account, t.kind, t.side, t.status, t.qty, t.entry, t.exit, t.currency, t.pnl, t.pnlCad, t.fees, t.holdDays, t.grade, (t.tags || []).join('; '), t.thesis].map(q).join(','),
+      [t.entryDate, t.exitDate, t.symbol, t.name, t.account, t.kind, t.sideLabel, t.status, t.qty, t.entry, t.exit, t.currency, t.pnl, t.pnlCad, t.fees, t.holdDays, t.grade, (t.tags || []).join('; '), t.thesis].map(q).join(','),
     ),
   )
   const blob = new Blob([lines.join('\n')], { type: 'text/csv' })

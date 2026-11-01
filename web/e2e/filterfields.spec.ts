@@ -92,7 +92,7 @@ test('a custom date range sets the chip and clears the preset, and picking a yea
 test('Grade, Side and Result each narrow the book and show it as a chip', async ({ page }) => {
   await page.goto('/#trades')
   await ready(page)
-  for (const [key, label, value] of [['grade', 'Grade', 'A'], ['side', 'Side', 'SELL'], ['result', 'Result', 'Winners']] as const) {
+  for (const [key, label, value] of [['grade', 'Grade', 'A'], ['side', 'Side', 'Long'], ['result', 'Result', 'Winners']] as const) {
     const filters = await selectListValue(page, label, value)
     expect((filters.lists as Record<string, string[]>)[key]).toEqual([value])
     await expect(page.locator('.chip', { hasText: label + ' is' })).toContainText(value)

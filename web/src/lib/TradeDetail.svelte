@@ -1,4 +1,12 @@
 <script lang="ts">
+  // the side, and for a short option how many of its contracts were covered when written
+  function coverageText(t: Trade): string {
+    const c = t.coverage
+    if (!c) return t.sideLabel
+    if (c.covered == null || c.of == null) return `${t.sideLabel} · ${c.untold ?? ''}`
+    const word = c.right === 'put' ? 'secured' : 'covered'
+    return `${t.sideLabel} · ${qty(c.covered)} of ${qty(c.of)} contracts ${word}`
+  }
   import { positions, book } from './subs.svelte'
   // The trade / holding / listing detail — the largest screen. A faithful port of
   // the old page's tradeDetailHtml + listingDetailHtml: the header card (symbol,
@@ -304,6 +312,7 @@
       <div style="min-width:0">
         <h4>{symText(trade.symbol)}</h4>
         <div class="dim" style="font-size:11.5px;margin-top:2px">{trade.name || trade.symbol}{trade.exchange ? ' · ' + trade.exchange + ': ' + listingTicker(trade) : ''}{trade.flags?.includes('entered') ? ' · Entered by you' : ''}</div>
+        {#if trade.sideLabel}<div class="dim" style="font-size:11.5px;margin-top:2px" data-testid="trade-side">{coverageText(trade)}</div>{/if}
       </div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
         {@render tkbtns()}

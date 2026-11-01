@@ -1,0 +1,1042 @@
+[
+ {
+  "name": "covered call, 2 contracts against 200 shares",
+  "working": [
+   "t1 sells 2 C1 calls on 2026-03-02: a short call, size = multiplier 100",
+   "needs 100 x 2 = 200 units of U held long in A as of 2026-03-02",
+   "the 2026-03-02 read states U 200; no earlier open short calls in A, so 200 available",
+   "whole contracts covered = floor(200/100)=2, capped at 2 -> 2 of 2",
+   "every contract covered -> Covered call"
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "C1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 CALL",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "call",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "C1",
+     "qty": "-2",
+     "cash": "300"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "C1",
+     "qty": "2",
+     "cash": "-100"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-02": {
+       "held": {
+        "U": "200",
+        "C1": "-2"
+       },
+       "cash": {
+        "USD": "5000"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t1",
+    "side": "Covered call",
+    "covered": "2",
+    "of": "2"
+   }
+  ]
+ },
+ {
+  "name": "call of 2 contracts against 150 shares: 1 of 2",
+  "working": [
+   "t1 sells 2 C1 calls (size 100) on 2026-03-02",
+   "the 2026-03-02 read states U 150, no earlier open short calls",
+   "floor(150/100)=1 contract covered, of 2",
+   "not every contract covered -> Uncovered call, 1 of 2"
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "C1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 CALL",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "call",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "C1",
+     "qty": "-2",
+     "cash": "300"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "C1",
+     "qty": "2",
+     "cash": "-100"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-02": {
+       "held": {
+        "U": "150",
+        "C1": "-2"
+       },
+       "cash": {
+        "USD": "5000"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t1",
+    "side": "Uncovered call",
+    "covered": "1",
+    "of": "2"
+   }
+  ]
+ },
+ {
+  "name": "two calls in one account, 100 shares cover the first only",
+  "working": [
+   "t1 sells 1 C1 call on 2026-03-02; the read that day states U 100, no earlier open short calls -> 1 of 1, Covered call",
+   "t2 sells 1 C2 call (a different contract, so a separate trade) on 2026-03-09, while C1 is still open (bought back 2026-04-01, after that day)",
+   "the 2026-03-09 read states U 100; the earlier C1 call, open at that day's close, holds 1 x 100 = 100 units first",
+   "available = 100 - 100 = 0 -> 0 of 1 -> Uncovered call"
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "C1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 CALL",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "call",
+     "multiplier": "100"
+    },
+    {
+     "id": "C2",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 17JUL26 12.00 CALL",
+     "underlying": "U",
+     "expiry": "2026-07-17",
+     "strike": "12",
+     "right": "call",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "C1",
+     "qty": "-1",
+     "cash": "150"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-03-09",
+     "at": "2026-03-09T15:00:00Z",
+     "kind": "sell",
+     "instrument": "C2",
+     "qty": "-1",
+     "cash": "80"
+    },
+    {
+     "id": "t3",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "C1",
+     "qty": "1",
+     "cash": "-50"
+    },
+    {
+     "id": "t4",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "C2",
+     "qty": "1",
+     "cash": "-30"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-02": {
+       "held": {
+        "U": "100",
+        "C1": "-1"
+       },
+       "cash": {
+        "USD": "5000"
+       }
+      },
+      "2026-03-09": {
+       "held": {
+        "U": "100",
+        "C1": "-1",
+        "C2": "-1"
+       },
+       "cash": {
+        "USD": "5000"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t1",
+    "side": "Covered call",
+    "covered": "1",
+    "of": "1"
+   },
+   {
+    "opened_by": "t2",
+    "side": "Uncovered call",
+    "covered": "0",
+    "of": "1"
+   }
+  ]
+ },
+ {
+  "name": "secured put",
+  "working": [
+   "t1 sells 2 P1 puts (strike 10, size 100) on 2026-03-02 for 200 cash (the premium)",
+   "needed = 10 x 100 x 2 - 200 = 1800 USD; per contract 1800/2 = 900",
+   "the 2026-03-02 read states USD cash 2000; no earlier open secured puts",
+   "floor(2000/900)=2, capped at 2 -> 2 of 2 -> Secured put"
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "cash"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "P1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 PUT",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "put",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "P1",
+     "qty": "-2",
+     "cash": "200"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "P1",
+     "qty": "2",
+     "cash": "-60"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-02": {
+       "held": {
+        "P1": "-2"
+       },
+       "cash": {
+        "USD": "2000"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t1",
+    "side": "Secured put",
+    "covered": "2",
+    "of": "2"
+   }
+  ]
+ },
+ {
+  "name": "put with too little cash",
+  "working": [
+   "t1 sells 2 P1 puts (strike 10, size 100) on 2026-03-02 for 200 premium",
+   "needed = 10 x 100 x 2 - 200 = 1800; per contract 900",
+   "the 2026-03-02 read states USD cash 1000, no earlier open secured puts",
+   "floor(1000/900)=1 -> 1 of 2 -> not every contract secured -> Uncovered put",
+   "Amended after the plan's review (#659): the positions read may state cash already net of the put's own hold, so cash at or above nothing that doesn't cover strike x size x contracts - premium can't tell either way: Short, untold."
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "P1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 PUT",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "put",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "P1",
+     "qty": "-2",
+     "cash": "200"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "P1",
+     "qty": "2",
+     "cash": "-60"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-02": {
+       "held": {
+        "P1": "-2"
+       },
+       "cash": {
+        "USD": "1000"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t1",
+    "side": "Short",
+    "untold": true
+   }
+  ]
+ },
+ {
+  "name": "put written on a day with no positions read",
+  "working": [
+   "t1 sells 1 P1 put on 2026-03-02",
+   "A has a read for 2026-03-09 only, none for 2026-03-02 (the opening day)",
+   "so the trade reads Short with no covered/of, waits_on 2026-03-02 (a read of another day is never used)"
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "P1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 PUT",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "put",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "P1",
+     "qty": "-1",
+     "cash": "100"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-09": {
+       "held": {
+        "P1": "-1"
+       },
+       "cash": {
+        "USD": "50000"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t1",
+    "side": "Short",
+    "waits_on": "2026-03-02"
+   }
+  ]
+ },
+ {
+  "name": "roll as two separate trades (fallback), far leg uncovered",
+  "working": [
+   "The input format has no field joining fills into one multi-leg order, so per SPEC trade-15 these are separate orders and separate trades: this is the fallback the task allows",
+   "t1 buys 100 U on 2026-02-02 (a long trade of its own, not listed in expect)",
+   "t2 sells 1 C1 call on 2026-03-02; that day's read states U 100, no earlier open short calls -> 1 of 1, Covered call",
+   "t3 sells the 100 U on 2026-03-31; t4 buys back C1 on 2026-04-01; t5 sells 1 C2 call on 2026-04-01",
+   "for t5 the 2026-04-01 read states no U; C1 closed on that day holds nothing at its close anyway -> 0 available -> 0 of 1 -> Uncovered call"
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "C1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 CALL",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "call",
+     "multiplier": "100"
+    },
+    {
+     "id": "C2",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 17JUL26 12.00 CALL",
+     "underlying": "U",
+     "expiry": "2026-07-17",
+     "strike": "12",
+     "right": "call",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-02-02",
+     "at": "2026-02-02T15:00:00Z",
+     "kind": "buy",
+     "instrument": "U",
+     "qty": "100",
+     "cash": "-900"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "C1",
+     "qty": "-1",
+     "cash": "150"
+    },
+    {
+     "id": "t3",
+     "account": "A",
+     "day": "2026-03-31",
+     "at": "2026-03-31T15:00:00Z",
+     "kind": "sell",
+     "instrument": "U",
+     "qty": "-100",
+     "cash": "950"
+    },
+    {
+     "id": "t4",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "C1",
+     "qty": "1",
+     "cash": "-40"
+    },
+    {
+     "id": "t5",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "sell",
+     "instrument": "C2",
+     "qty": "-1",
+     "cash": "120"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-02": {
+       "held": {
+        "U": "100",
+        "C1": "-1"
+       },
+       "cash": {
+        "USD": "5000"
+       }
+      },
+      "2026-04-01": {
+       "held": {
+        "C2": "-1"
+       },
+       "cash": {
+        "USD": "6000"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t2",
+    "side": "Covered call",
+    "covered": "1",
+    "of": "1"
+   },
+   {
+    "opened_by": "t5",
+    "side": "Uncovered call",
+    "covered": "0",
+    "of": "1"
+   }
+  ]
+ },
+ {
+  "name": "contract size 10: 3 contracts against 25 shares",
+  "working": [
+   "t1 sells 3 C10 calls on 2026-03-02; size is the option's multiplier, 10 (not 100)",
+   "the 2026-03-02 read states U 25, no earlier open short calls",
+   "floor(25/10)=2 -> 2 of 3 -> Uncovered call"
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "C10",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 CALL",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "call",
+     "multiplier": "10"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "C10",
+     "qty": "-3",
+     "cash": "30"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "C10",
+     "qty": "3",
+     "cash": "-9"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-02": {
+       "held": {
+        "U": "25",
+        "C10": "-3"
+       },
+       "cash": {
+        "USD": "5000"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t1",
+    "side": "Uncovered call",
+    "covered": "2",
+    "of": "3"
+   }
+  ]
+ },
+ {
+  "name": "shares transferred in the same day, never seen by the journal",
+  "working": [
+   "no transaction row brings U into A: the journal's own lots hold none",
+   "the 2026-03-01 read states no U; the 2026-03-02 read states U 200 (transferred in that day)",
+   "t1 sells 2 C1 calls on 2026-03-02; coverage comes from that day's read, never the journal's lots: 200 units",
+   "floor(200/100)=2 -> 2 of 2 -> Covered call"
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "C1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 CALL",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "call",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "C1",
+     "qty": "-2",
+     "cash": "300"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "C1",
+     "qty": "2",
+     "cash": "-100"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-01": {
+       "held": {},
+       "cash": {
+        "USD": "5000"
+       }
+      },
+      "2026-03-02": {
+       "held": {
+        "U": "200",
+        "C1": "-2"
+       },
+       "cash": {
+        "USD": "5300"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t1",
+    "side": "Covered call",
+    "covered": "2",
+    "of": "2"
+   }
+  ]
+ },
+ {
+  "name": "put written with the account's cash below nothing: uncovered",
+  "working": [
+   "The day's cash is below nothing (borrowed), so no reading of it covers the hold: 0 of 2 secured, Uncovered put."
+  ],
+  "book": {
+   "today": "2026-06-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "P1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 PUT",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "put",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "transactions": [
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "sell",
+     "instrument": "P1",
+     "qty": "-2",
+     "cash": "200"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "P1",
+     "qty": "2",
+     "cash": "-60"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {},
+     "days_held": {
+      "2026-03-02": {
+       "held": {
+        "P1": "-2"
+       },
+       "cash": {
+        "USD": "-500"
+       }
+      }
+     }
+    }
+   }
+  },
+  "expect": [
+   {
+    "opened_by": "t1",
+    "side": "Uncovered put",
+    "covered": "0",
+    "of": "2"
+   }
+  ]
+ }
+]

@@ -16,16 +16,17 @@
   const cols: { key: string; label: string; align?: string; width?: string; padLeft?: string }[] = [
     { key: 'entryDate', label: 'Open', width: '8%' },
     { key: 'exitDate', label: 'Close', width: '8%' },
-    { key: 'symbol', label: 'Symbol', width: '15.5%' },
-    { key: 'exchange', label: 'Exchange', width: '8%' },
-    { key: 'qty', label: 'Qty', align: 'right', width: '7.5%' },
+    { key: 'symbol', label: 'Symbol', width: '10.5%' },
+    { key: 'sideLabel', label: 'Side', width: '9%' },
+    { key: 'exchange', label: 'Exchange', width: '6%' },
+    { key: 'qty', label: 'Qty', align: 'right', width: '6.5%' },
     { key: 'entry', label: 'Entry', align: 'right', width: '7%' },
     { key: 'exit', label: 'Exit', align: 'right', width: '7%' },
     { key: 'currency', label: 'FX', align: 'center', width: '5%' },
     { key: 'pnl', label: 'P&L', align: 'right', width: '8%' },
     { key: 'pnlPct', label: 'P&L %', align: 'right', width: '7%' },
     { key: 'holdDays', label: 'Hold', align: 'right', width: '5%' },
-    { key: 'grade', label: 'Grade', padLeft: '50px', width: '7.5%' },
+    { key: 'grade', label: 'Grade', padLeft: '50px', width: '6.5%' },
     { key: 'tags', label: 'Tags' },
   ]
 
@@ -64,6 +65,7 @@
               <td class="dim" style="white-space:nowrap;padding-right:12px">{t.entryDate}</td>
               <td class="dim" style="white-space:nowrap">{t.exitDate ?? 'Open'}</td>
               <td style="font-weight:500;font-variant-numeric:normal;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">{symText(t.symbol)}</td>
+              <td style="font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{t.sideLabel}</td>
               <td class="dim" style="font-variant-numeric:normal;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{t.exchange || '—'}</td>
               <td style="text-align:right">{fqty(t.qty)}</td>
               <td style="text-align:right">{px(t.entry)}</td>

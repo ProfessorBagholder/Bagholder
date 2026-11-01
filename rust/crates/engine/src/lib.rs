@@ -15,6 +15,7 @@ pub mod positions;
 pub mod stated;
 pub mod stat;
 pub mod trades;
+pub mod coverage;
 pub mod cashflow;
 pub mod equity;
 pub mod scope;
