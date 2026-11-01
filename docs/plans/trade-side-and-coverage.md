@@ -41,24 +41,27 @@ So the side follows the journals, as a column. The coverage follows the brokers'
 ## The rule (SPEC.md §2 Trade, new)
 
 - **Side:** the direction the trade opened in, `Long` or `Short`. It is already decided per lot (trade-2), and never changes within a round trip.
-- **When coverage is decided:** a short option's coverage is decided once, at each contract's opening fill, from that account's book at that instant. A writer's later sale of the shares doesn't relabel a trade written covered, as a journal records what was done.
-- **A short call** is covered by units of its underlying held long in the same account at that instant, `contract size × contracts` of them (trade-18: the size the terms state). Units already covering earlier calls still open in that account are left out, earlier opens first.
-- **A short put** is secured by that account's cash in the option's currency at that instant: `strike × contract size × contracts − premium received`, net of what earlier secured puts still open there hold.
+- **When coverage is decided:** a short option's coverage is decided once, for each contract, from Wealthsimple's positions read of that account as of the contract's opening day (`days_held`, brief 79 §2.4). That is the day's units of the underlying and the day's cash line in the option's currency, read on demand and kept, as a past Portfolio's day is. The journal's lots are never an amount (brief 79), and the ledger keeps no running cash.
+  - The read is as of the day's close, so a contract written and covered within one day is judged by that close.
+  - A writer's later sale of the shares doesn't relabel a trade written covered, as a journal records what was done.
+- **A short call** is covered by the units of its underlying that day's read states held long in that account, `contract size × contracts` of them (trade-18: the size the terms state). Units already covering earlier calls still open in that account are left out, earlier opens first.
+- **A short put** is secured by that day's read's cash in the option's currency: `strike × contract size × contracts − premium received`, net of what earlier secured puts still open there hold.
 - **A trade of several contracts or several fills:**
   - it reads covered (or secured) only when every contract was;
   - otherwise it reads uncovered;
   - the detail page says how many were: `1 of 2 contracts covered`.
 - **A roll:** each leg's coverage is decided at its own open, and the trade reads uncovered if any leg was.
-- **Not known:** where the book can't say (a holding or cash figure waiting on a read, trade-68), the trade reads `Short` with no coverage word, and the detail page says why. Never a guess.
+- **Not known:** a day not read yet leaves the trade reading `Short` with no coverage word, and the detail page says it waits on that day's read. `needs` asks for the day, and the trade is matched again once it's in. Never a guess.
 - **Brokers:** no broker is a case of its own. The rule reads only the book's own lots and cash, so a broker that allows uncovered writing gets `Uncovered`, and Wealthsimple's rules show up as covered and secured on their own.
 
 ## Approach
 
-- **Engine:** the ledger already walks each account's lots and cash in time order (`engine::ledger`). At a short option lot's open it reads:
-  - the underlying's long units in that account, less those taken by open covering calls;
-  - the account's cash in the currency, less open secured puts' holds.
+- **Engine:** for each short option lot, the engine reads the account's `HeldDay` of the lot's opening day (`input::HeldDay`: `held` and `cash`, already per currency):
+  - the underlying's long units, less those taken by earlier open covering calls;
+  - the cash in the option's currency, less earlier open secured puts' holds.
 
-  It records each contract's coverage on the lot, as `Covered`, `Secured`, `Uncovered` or `Unknown`. A trade's coverage is the least of its lots'.
+  It records each contract's coverage, as `Covered`, `Secured`, `Uncovered` or `Unknown` (the day not read: added to `needs`). A trade's coverage is the least of its lots'.
+- **Open question, settled before building:** whether the read's cash line already nets the hold Wealthsimple places for a secured put (brief 16: the `TRADING` balance is net of holds). If it does, a secured put's own hold sits inside that day's cash, and the rule adds it back (its own `strike × size × contracts − premium`) before comparing. It is answered from a recorded positions read of a day with a secured put open, and the answer is written into `SPEC.md` with the reply it rests on.
 - **Wire:** `Trade.coverage: Option<Coverage>`, null for a long trade and for anything not an option. Generated `wire.ts` is regenerated.
 - **Page:**
   - `Trades.svelte` gains a `Side` column after Symbol. It reads `Long`, `Short`, `Covered call`, `Secured put`, `Uncovered call` or `Uncovered put`, and sorts by that text.
@@ -68,7 +71,8 @@ So the side follows the journals, as a column. The coverage follows the brokers'
 
 ## Acceptance criteria
 
-- [ ] Engine cases, their expected coverage written by an agent that had not read the engine:
+- [ ] The cash-line question above, answered from a recorded read and written into `SPEC.md`.
+- [ ] Engine cases. The stand-in states each day's units and cash; the expected coverage is written by an agent that had not read the engine, against the read, not the lots:
   - a covered call (shares held);
   - a call of 2 contracts with 150 shares (uncovered, 1 of 2);
   - two calls, where the shares cover the first only (the second uncovered);
@@ -76,7 +80,8 @@ So the side follows the journals, as a column. The coverage follows the brokers'
   - a put with too little cash (uncovered);
   - a put written while the cash read waits (unknown);
   - a roll whose far leg is uncovered;
-  - a contract size other than 100.
+  - a contract size other than 100;
+  - shares transferred in the same day the call is written, with no row the journal sees: covered, by the read. Plant: coverage taken from the journal's lots instead of the read fails this case.
 
   `cargo test -p bagholder-engine --test cases` green.
 - [ ] `cargo test --workspace` green with no warnings, and clippy as CI runs it clean.
