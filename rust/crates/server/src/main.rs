@@ -189,6 +189,7 @@ fn serve() -> i32 {
         let b = app::env_text("BAGHOLDER_BIND")?.unwrap_or_default().trim().to_string();
         let bind_host = if b.is_empty() { "127.0.0.1".to_string() } else { b };
         let hosts = app::parse_hosts(&app::env_text("BAGHOLDER_HOSTS")?.unwrap_or_default())?;
+        update::set_updater(update::read_updater(app::env_text("BAGHOLDER_UPDATER_URL")?.as_deref(), app::env_text("BAGHOLDER_UPDATER_TOKEN_FILE")?.as_deref(), app::env_text("BAGHOLDER_CONTAINER_NAME")?.as_deref())?)?;
         let proxy_sees_visitors = app::parse_proxy_sees_visitors(app::env_text("BAGHOLDER_PROXY_SEES_VISITORS")?.as_deref())?;
         // a copy started for some work stops through its own stop when that work ends
         // (brief 64); one whose work has already ended is refused here, before anything

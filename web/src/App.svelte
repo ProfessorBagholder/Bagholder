@@ -25,7 +25,8 @@
   import Menu from './lib/Menu.svelte'
   import ConfirmDialog from './lib/ConfirmDialog.svelte'
   import LoginView from './lib/LoginView.svelte'
-  import { cancelConnect, closeNotice, showing, tell, followConnect, loginInput, quiet, updateNow, openAgents } from './lib/ui.svelte'
+  import { cancelConnect, closeNotice, showing, tell, followConnect, loginInput, quiet, openAgents } from './lib/ui.svelte'
+  import UpdateNotice from './lib/UpdateNotice.svelte'
   import Modals from './lib/Modals.svelte'
   import AgentsPanel from './lib/AgentsPanel.svelte'
   import RemotePanel from './lib/RemotePanel.svelte'
@@ -452,14 +453,7 @@
       <img src="/favicon.png" alt="" style="width:24px;height:24px;border-radius:6px" />
       <span style="font-size:15px;font-weight:600;letter-spacing:var(--brand-spacing);color:var(--brand-color);text-transform:var(--brand-transform)">Bagholder</span>
       {#if status?.version}<span class="muted ver" style="font-size:11px;margin-left:8px">v{status.version}</span>{/if}
-      <!-- nothing to press while an update installs: its progress is in the header's line -->
-      {#if status?.updateAvailable && !status.updating}
-        {#if status.canUpdate}
-          <button class="pill" style="font-size:11px;margin-left:8px;padding:1px 8px;width:auto;color:var(--accent-300)" onclick={updateNow}>Update to {status.latestVersion}</button>
-        {:else}
-          <a href={status.updateUrl || '#'} target="_blank" rel="noopener" style="font-size:11px;margin-left:8px;color:var(--accent-300);text-decoration:none">{status.updateBy === 'image' ? status.latestVersion + ' image available' : 'Update available'}</a>
-        {/if}
-      {/if}
+      {#if status}<UpdateNotice {status} />{/if}
       <!-- a sign-in waiting on the person, as an update on offer waits (docs/plans/agents-from-anywhere.md §3) -->
       {#if status?.agents?.waiting?.length}
         <button class="pill" style="font-size:11px;margin-left:8px;padding:1px 8px;width:auto;color:var(--accent-300)" onclick={openAgents}>An agent is asking · {status.agents.waiting[0].code}</button>

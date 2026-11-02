@@ -1,6 +1,7 @@
 services:
   bagholder:
     # published on every release; update with: docker compose pull && docker compose up -d
+    # or, with docker-compose.updater.yml beside this file, with the page's button
     image: ghcr.io/professorbagholder/bagholder:latest
     container_name: bagholder
     # on this computer alone: behind a reverse proxy, publish no port and route to it

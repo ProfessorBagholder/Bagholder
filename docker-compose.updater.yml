@@ -1,0 +1,51 @@
+# The update button for the Docker copy (README, Docker, Keeping up to date): an
+# updater beside Bagholder that pulls the new image and recreates Bagholder's
+# container when the page's button asks it to. Turn it on with both files:
+#   docker compose -f docker-compose.yml -f docker-compose.updater.yml up -d
+# or COMPOSE_FILE=docker-compose.yml:docker-compose.updater.yml in a .env beside them.
+services:
+  bagholder:
+    # the updater updates only containers carrying this label, and Bagholder asks
+    # it for this container by name
+    labels:
+      - com.centurylinklabs.watchtower.enable=true
+    environment:
+      - BAGHOLDER_UPDATER_URL=http://bagholder-updater:8080
+      # made by Bagholder at its first start with a token of its own, readable by
+      # its user alone; the updater reads the same file
+      - BAGHOLDER_UPDATER_TOKEN_FILE=/data/updater-token
+      - BAGHOLDER_CONTAINER_NAME=bagholder
+
+  bagholder-updater:
+    # pinned by digest, so the image that holds Docker's controls changes only when
+    # the pin is moved (README, Docker, The update button)
+    image: nickfedor/watchtower@sha256:62fb91130ddb493f869cad7e198fa260dd16c5da293ed092cbd5d8781566f7a6
+    container_name: bagholder-updater
+    # The button is the only trigger: the HTTP API's update endpoint alone, with no
+    # schedule (no --interval, --schedule or --http-api-periodic-polls), so nothing
+    # updates until the button is pressed. Only containers labelled above, and only
+    # the one Bagholder names; the image replaced is removed.
+    command:
+      - --http-api-endpoints=update
+      - --http-api-token=/bagholder-data/updater-token
+      - --label-enable
+      - --cleanup
+    volumes:
+      # Docker's controls: root on this machine, which is why they live here and
+      # never in Bagholder's container
+      - /var/run/docker.sock:/var/run/docker.sock
+      # the token Bagholder made, read and never written
+      - ./data:/bagholder-data:ro
+    # no published port: Bagholder reaches it on the compose network by name
+    depends_on:
+      bagholder:
+        # the token file is there once Bagholder answers
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
