@@ -37,8 +37,9 @@ Read from the code on 2026-11-02: the page's `GET` routes and view documents aga
 ## How the leading products do it
 
 Read 2026-11-02.
-- **Brokers' and platforms' MCP servers expose the same data as their apps, read-only first.** Coinbase's MCP server for agents states that its tools mirror what the account shows, with write access only where the person authorized it (its own server instructions). Alpaca's and Interactive Brokers' agent APIs read positions, orders, market data and news from the same endpoints their apps use. A separate, narrower server per data source is the shape no one ships.
-- **The Model Context Protocol's own guidance is one server per application, its tools named by what they read,** with `readOnlyHint` annotations (modelcontextprotocol.io, tools specification).
+- **The Model Context Protocol's tools specification** describes a server's tools with annotations, `readOnlyHint` among them, for a client to tell reads from writes (modelcontextprotocol.io, specification, tools). Bagholder's ten tools already carry it; the new ones do too.
+- **One application, one server.** Coinbase's MCP server for agents, in use in this workspace, serves one account's balances, portfolios, orders and products from a single server, with writes only on the portfolios the person authorized (its own server instructions). The application's data isn't split across servers by kind.
+- No journal (TradeZella, Tradervue, TraderSync, Edgewonk) documents an MCP server, so the category gives no other shape to follow.
 
 ## Approach
 
