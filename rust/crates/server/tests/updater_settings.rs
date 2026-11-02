@@ -41,7 +41,7 @@ fn free_port() -> u16 {
 #[test]
 fn an_updater_without_the_container_name_refuses_the_start_naming_it() {
     let (home, user_home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let token = home.path().join("updater-token");
+    let token = home.path().join("updater").join("token");
     let extra = [("BAGHOLDER_UPDATER_URL", "http://bagholder-updater:8080".to_string()), ("BAGHOLDER_UPDATER_TOKEN_FILE", token.display().to_string())];
     let status = server(home.path(), user_home.path(), free_port(), &extra).status().unwrap();
     assert!(!status.success(), "refused");
@@ -54,7 +54,7 @@ fn an_updater_without_the_container_name_refuses_the_start_naming_it() {
 #[test]
 fn with_all_three_the_copy_makes_the_token_and_offers_the_button() {
     let (home, user_home) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
-    let token = home.path().join("updater-token");
+    let token = home.path().join("updater").join("token");
     let port = free_port();
     let extra = [
         ("BAGHOLDER_UPDATER_URL", "http://bagholder-updater:8080".to_string()),

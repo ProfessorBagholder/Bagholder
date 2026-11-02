@@ -12,8 +12,9 @@ services:
     environment:
       - BAGHOLDER_UPDATER_URL=http://bagholder-updater:8080
       # made by Bagholder at its first start with a token of its own, readable by
-      # its user alone; the updater reads the same file
-      - BAGHOLDER_UPDATER_TOKEN_FILE=/data/updater-token
+      # its user alone, in a folder of its own: the only part of ./data the updater
+      # is given
+      - BAGHOLDER_UPDATER_TOKEN_FILE=/data/updater/token
       - BAGHOLDER_CONTAINER_NAME=bagholder
 
   bagholder-updater:
@@ -27,15 +28,16 @@ services:
     # the one Bagholder names; the image replaced is removed.
     command:
       - --http-api-endpoints=update
-      - --http-api-token=/bagholder-data/updater-token
+      - --http-api-token=/bagholder-data/token
       - --label-enable
       - --cleanup
     volumes:
       # Docker's controls: root on this machine, which is why they live here and
       # never in Bagholder's container
       - /var/run/docker.sock:/var/run/docker.sock
-      # the token Bagholder made, read and never written
-      - ./data:/bagholder-data:ro
+      # the token's folder alone, read and never written: never the book, the
+      # sign-in or the rest of ./data
+      - ./data/updater:/bagholder-data:ro
     # no published port: Bagholder reaches it on the compose network by name
     depends_on:
       bagholder:

@@ -210,7 +210,7 @@ Every copy checks GitHub for the latest release when it starts and once an hour.
 
 A container can't replace itself, and Bagholder's container never holds Docker's controls. The shipped `docker-compose.updater.yml` adds an updater beside it, [Watchtower](https://github.com/nicholas-fedor/watchtower), which holds them in a container of its own. Press `Update to vX.Y.Z` and Bagholder asks the updater, once, to update its container; the updater pulls the new image, recreates the container on it with the same settings and `./data`, and removes the old image. The page shows `Updating to vX.Y.Z…` and comes back on the new version. What the updater refused, or that it could not be reached, is said in the header.
 
-The button is the only trigger: the updater runs no schedule and checks nothing on its own. It publishes no port, answers only Bagholder on the compose network, only with the token Bagholder made at its first start (`./data/updater-token`, readable by Bagholder's user alone), and updates only the container Bagholder names, which carries the updater's label. Its access to Docker's socket is root on the host, as Docker's own command line is.
+The button is the only trigger: the updater runs no schedule and checks nothing on its own. It publishes no port, answers only Bagholder on the compose network, only with the token Bagholder made at its first start (`./data/updater/token`, readable by Bagholder's user alone; that folder is all of `./data` the updater is given, never the book or the sign-in), and updates only the container Bagholder names, which carries the updater's label. Its access to Docker's socket is root on the host, as Docker's own command line is.
 
 Start both with both files:
 
@@ -218,7 +218,7 @@ Start both with both files:
 docker compose -f docker-compose.yml -f docker-compose.updater.yml up -d
 ```
 
-or put `COMPOSE_FILE=docker-compose.yml:docker-compose.updater.yml` in a `.env` file beside them, and `docker compose up -d` starts both from then on. The updater starts once Bagholder answers, about a minute after the first start. With your own compose file, copy the updater's service, Bagholder's label and its three settings: `BAGHOLDER_UPDATER_URL` (the updater's address on the compose network), `BAGHOLDER_UPDATER_TOKEN_FILE` (a file under `/data`, made at the first start when it is not there) and `BAGHOLDER_CONTAINER_NAME` (Bagholder's `container_name`, required with the address; a container's hostname is its id, so the name is never guessed). Bagholder refuses to start, naming the setting, when one is missing or wrong.
+or put `COMPOSE_FILE=docker-compose.yml:docker-compose.updater.yml` in a `.env` file beside them, and `docker compose up -d` starts both from then on. The updater starts once Bagholder answers, about a minute after the first start. With your own compose file, copy the updater's service, Bagholder's label and its three settings: `BAGHOLDER_UPDATER_URL` (the updater's address on the compose network), `BAGHOLDER_UPDATER_TOKEN_FILE` (`/data/updater/token`, made with its folder at the first start when it is not there; mount only that folder into the updater) and `BAGHOLDER_CONTAINER_NAME` (Bagholder's `container_name`, required with the address; a container's hostname is its id, so the name is never guessed). Bagholder refuses to start, naming the setting, when one is missing or wrong.
 
 The updater's image is pinned by its digest, so it changes only when you move the pin. To move it to a newer release of Watchtower, read the release's digest:
 

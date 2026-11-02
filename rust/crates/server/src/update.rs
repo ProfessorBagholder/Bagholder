@@ -108,9 +108,18 @@ pub fn read_updater(url: Option<&str>, token_file: Option<&str>, container: Opti
     Ok(Some(Updater { url: url.trim_end_matches('/').to_string(), token, container: container.to_string() }))
 }
 
-/// A new token file at `path`: 32 random bytes, readable by this user alone.
+/// A new token file at `path`: 32 random bytes, readable by this user alone, in a
+/// folder of its own made private where it is not there yet, since that folder is
+/// all the updater is given of the data folder.
 fn make_token_file(path: &str) -> std::io::Result<()> {
     use std::io::Write;
+    if let Some(dir) = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
+        let mut b = std::fs::DirBuilder::new();
+        b.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+        b.create(dir)?;
+    }
     let mut o = std::fs::OpenOptions::new();
     o.write(true).create_new(true);
     #[cfg(unix)]
@@ -1197,11 +1206,13 @@ mod host_tests {
         assert!(super::read_updater(Some("http://bagholder-updater:8080"), Some(t), None).unwrap_err().contains("BAGHOLDER_CONTAINER_NAME is needed"));
         assert!(super::read_updater(Some("http://bagholder-updater:8080"), None, Some("bagholder")).unwrap_err().contains("BAGHOLDER_UPDATER_TOKEN_FILE is needed"));
         // a token file not there yet is made, private, and read the same way after
-        let made = dir.path().join("made");
+        let made = dir.path().join("updater").join("token");
         let first = super::read_updater(Some("http://u:8080"), Some(made.to_str().unwrap()), Some("bagholder")).unwrap().unwrap().token;
         assert!(first.len() >= 32, "{first}");
         #[cfg(unix)]
         assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&made).unwrap().permissions()) & 0o777, 0o600);
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(made.parent().unwrap()).unwrap().permissions()) & 0o777, 0o700, "its folder is private");
         assert_eq!(super::read_updater(Some("http://u:8080"), Some(made.to_str().unwrap()), Some("bagholder")).unwrap().unwrap().token, first, "kept, not made again");
         assert!(super::read_updater(Some("bagholder-updater:8080"), Some(t), Some("bagholder")).unwrap_err().starts_with("BAGHOLDER_UPDATER_URL is"));
         assert!(super::read_updater(Some("http://bagholder-updater:8080/v1"), Some(t), Some("bagholder")).unwrap_err().contains("no path"));
