@@ -96,4 +96,18 @@ fn test_the_canada_read_asks_a_sector_only_where_none_is_known_younger_than_a_mo
         None
     });
     assert_eq!(asked_again, 0);
+    // a constituent TMX leaves unclassified: that answer is kept, and not asked
+    // again on the next read
+    let mut known_none = std::collections::BTreeMap::new();
+    let (_, kept_none) = universes::canada_rows(&constituents()[2..], &changes, &known_none, now, &mut |_| Some("Not classified".to_string()));
+    assert_eq!(kept_none, [("CCC".to_string(), "Not classified".to_string())]);
+    for (s, sec) in kept_none {
+        known_none.insert(s, (sec, now));
+    }
+    let mut asked_none = 0;
+    universes::canada_rows(&constituents()[2..], &changes, &known_none, now + 1800.0, &mut |_| {
+        asked_none += 1;
+        None
+    });
+    assert_eq!(asked_none, 0, "Not classified, read within the month, is not asked again");
 }

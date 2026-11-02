@@ -902,3 +902,33 @@ fn every_copy_the_repository_starts_on_another_folder_ends_with_its_starter() {
     assert!(starts >= 4, "the scratch command, the browser tests' server, the capacity probes and the tunnel's guard: {starts}");
 }
 
+
+/// Every background loop the server has (`pub fn …_loop`, in any module) is started
+/// by `serve()`, in a `spawn_with` of its own: a loop written and never started
+/// would leave its work undone with every test passing.
+#[test]
+fn test_every_loop_is_started_by_serve() {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let main = std::fs::read_to_string(src.join("main.rs")).unwrap();
+    let from = main.find("fn serve() -> i32 {").expect("serve() in main.rs");
+    let serve = &main[from..];
+    let serve = &serve[..serve.find("\n}\n").expect("serve()'s end")];
+    let spawned: Vec<&str> = serve.lines().filter(|l| l.contains("spawn_with(")).collect();
+    let loop_fn = regex::Regex::new(r"(?m)^pub fn ([a-z_]+_loop)\(").unwrap();
+    let mut dirs = vec![src.clone()];
+    let mut loops = Vec::new();
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                let text = std::fs::read_to_string(&p).unwrap();
+                loops.extend(loop_fn.captures_iter(&text).map(|c| c[1].to_string()));
+            }
+        }
+    }
+    assert!(loops.len() >= 10, "the loops were found: {loops:?}");
+    let not_started: Vec<&String> = loops.iter().filter(|name| !spawned.iter().any(|l| l.contains(&format!("::{name}")) || l.contains(&format!(" {name}")) || l.contains(&format!("({name}")))).collect();
+    assert!(not_started.is_empty(), "loops serve() never starts: {not_started:?}");
+}

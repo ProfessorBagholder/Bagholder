@@ -356,7 +356,8 @@ pub fn fetch_canada(known: &std::collections::BTreeMap<String, (String, f64)>, n
     let mut ask = |symbol: &str| -> Option<String> {
         pace("app-money.tmx.com", 0.6);
         let d = post_json(crate::tmx::TMX_URL, &json!({"operationName": "getQuoteBySymbol", "variables": {"symbol": symbol, "locale": "en"}, "query": TMX_TILE_QUERY}), &tmx_headers()).ok()?;
-        parse_tile_quote(&d).map(|q| q.sector).filter(|s| s != "Not classified")
+        // `Not classified` is TMX's answer too: kept, and asked again in a month like any other
+        parse_tile_quote(&d).map(|q| q.sector)
     };
     Ok(canada_rows(&constituents, &changes, known, now, &mut ask))
 }
