@@ -4,6 +4,7 @@ Every decision the owner has made about the app and the work, newest first, one 
 
 ## 2026-11-02
 
+- **The market heatmaps are read when Bagholder starts and kept fresh while it runs, whether or not a page shows them.** The owner, after the Canada heatmap said "Not read yet." for several minutes the first time it was opened on a server copy: "this can't happen if the app is designed properly", and of reading them at start and keeping them fresh: "yes Bagholder should read the market heatmaps and then keep them fresh". Held by: a test that a started app reads each market's universe with no page open (`docs/plans/heatmaps-always-ready.md`).
 - **An agent reads everything a person can see in Bagholder's page, through the one MCP server.** News, press releases, disclosures and their summaries, short interest, quotes, charts' history, the Markets tab, notifications and orders: whatever the page shows, an agent can read, read-only, as the page answers it, and a screen or figure added later ships its agent tool in the same change. `disclosures-mcp` was the first cut of that server and is retired, never a separate product. The owner: "agents need to be able to access all the news/disclosures/short interest things that Bagholder users would be able to see in the normal web interface", and of `disclosures-mcp`: "that's not a separate thing". Held by: a test that every read the page makes has an agent tool (`docs/plans/agents-read-what-the-page-shows.md`).
 
 ## 2026-10-30
