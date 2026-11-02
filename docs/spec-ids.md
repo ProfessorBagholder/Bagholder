@@ -895,6 +895,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `agents-5`
 - `agents-6`
 - `agents-7`
+- `agents-8`
 - `remote-1`
 - `remote-2`
 - `remote-3`
