@@ -3,16 +3,11 @@
 //! the MCP server's protocol. No network.
 use bagholder_market::sedar::{self, ReportingIssuer};
 use regex::Regex;
-use serde_json::Value;
 use std::collections::HashMap;
 
 fn fixture(name: &str) -> String {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures").join(name);
     std::fs::read_to_string(p).unwrap()
-}
-
-fn s(v: &Value) -> &str {
-    v.as_str().unwrap_or("")
 }
 
 // --- ParseFilingsTest
