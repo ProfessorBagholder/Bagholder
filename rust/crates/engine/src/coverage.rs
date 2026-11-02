@@ -302,8 +302,11 @@ pub fn counted<'a>(counted_from: &[&'a TradeFig], all: &'a [TradeFig]) -> Vec<Co
 }
 
 /// Each shares' trade with covered calls written against it: the calls, and the
-/// position's P&L, its own and theirs as `counted` adds them. Only those trades.
-pub fn positions(all: &[TradeFig]) -> BTreeMap<&TradeKey, Counted<'_>> {
+/// position's P&L, its own and theirs as `counted` adds them. While the shares
+/// are held, their own is what they realized so far and what the holding's
+/// units would make now (`holdings`, its unrealized P&L), so a call bought back
+/// at a loss while they rose never reads as the position's loss. Only those trades.
+pub fn positions<'a>(all: &'a [TradeFig], holdings: &[crate::positions::PositionFig]) -> BTreeMap<&'a TradeKey, Counted<'a>> {
     let mut calls: BTreeMap<&TradeKey, Vec<&TradeFig>> = BTreeMap::new();
     for t in all {
         if let Some((k, _, _)) = written_against(t) {
@@ -314,6 +317,12 @@ pub fn positions(all: &[TradeFig]) -> BTreeMap<&TradeKey, Counted<'_>> {
     for t in all {
         let Some(mine) = calls.remove(&t.key) else { continue };
         let (mut pnl, mut pnl_cad) = (t.pnl.clone(), t.pnl_cad.clone());
+        if let TradeKey::Trip(k) = &t.key {
+            if let Some(h) = holdings.iter().find(|h| h.key.as_ref() == Some(k)) {
+                pnl = add(pnl, h.unrealized.clone());
+                pnl_cad = add(pnl_cad, h.unrealized_cad.clone());
+            }
+        }
         for c in &mine {
             let (_, covered, of) = written_against(c).expect("listed by it");
             if c.currency == t.currency {

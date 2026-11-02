@@ -551,6 +551,14 @@ test.describe('A covered call and its shares', () => {
     expect(shares, 'the made-up book\'s covered calls are written against its AAPL shares').toBeTruthy()
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     expect(shares.callsWritten.map((c: any) => c.id).sort()).toEqual(calls.filter((c: any) => c.writtenAgainst?.id === shares.id).map((c: any) => c.id).sort())
+    // held still: its holding's row carries the same position
+    if (shares.position) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const holding = model.positions.find((p: any) => p.id === shares.position)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(holding.callsWritten.map((c: any) => c.id).sort()).toEqual(shares.callsWritten.map((c: any) => c.id).sort())
+      expect(holding.positionPnl).toEqual(shares.positionPnl)
+    }
     await page.goto('/#trades')
     await ready(page)
     const order = tradesInListOrder(model.trades as { id: string; lastDate: string }[])

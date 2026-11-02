@@ -492,7 +492,7 @@ pub fn links(engine: &Engine) -> Links {
         let part = bagholder_engine::coverage::written_against(t);
         Leg { id: trade_id(t), symbol: shown(inputs, t.instrument).symbol, status: if t.status == TradeStatus::Closed { Status::Closed } else { Status::Open }, pnl: fig_money(&t.pnl), covered: part.map(|(_, c, _)| Dec(c)), of: part.map(|(_, _, o)| Dec(o)) }
     };
-    for (_, c) in bagholder_engine::coverage::positions(figs.trades) {
+    for (_, c) in bagholder_engine::coverage::positions(figs.trades, figs.positions) {
         let shares = leg(c.trade);
         let calls: Vec<Leg> = c.calls.iter().map(|t| leg(t)).collect();
         for call in &calls {

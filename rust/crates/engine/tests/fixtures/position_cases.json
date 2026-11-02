@@ -1018,5 +1018,136 @@
    "wins": 2,
    "losses": 0
   }
+ },
+ {
+  "name": "shares still held, the call bought back at a loss: no trade counted, the position is the holding's unrealized plus the call",
+  "working": [
+   "b1 buys 100 U at 8 (-800); t1 writes 1 C1 (strike 10) for 50 on 2026-03-03; read of 2026-03-03 states 100 U, covered 1 of 1, against b1",
+   "U rises; t2 buys C1 back for 200 on 2026-04-01: call P&L = 50 - 200 = -150",
+   "the shares are never sold: b1's trade is open, its own (realized) P&L 0.00; the current read states 100 U held",
+   "U quoted at 12 on 2026-08-01 (close of 2026-07-31 also 12): holding's unrealized = (12 - 8) * 100 = 400",
+   "position = 0 + 400 - 150 = 250.00",
+   "stats count closed trades only and the covered call counts inside its shares' position: no counted row, 0 wins, 0 losses",
+   "The broker's current read states the holding's cost as 800.00 USD (100 \u00d7 8), which a holding's cost is taken from (brief 79), so its unrealized is 1200 \u2212 800 = 400."
+  ],
+  "book": {
+   "today": "2026-08-01",
+   "accounts": [
+    {
+     "id": "A",
+     "kind": "margin"
+    }
+   ],
+   "instruments": [
+    {
+     "id": "U",
+     "currency": "USD",
+     "symbol": "UUU"
+    },
+    {
+     "id": "C1",
+     "kind": "option",
+     "currency": "USD",
+     "symbol": "UUU 19JUN26 10.00 CALL",
+     "underlying": "U",
+     "expiry": "2026-06-19",
+     "strike": "10",
+     "right": "call",
+     "multiplier": "100"
+    }
+   ],
+   "rates": {
+    "USD": {
+     "2026-01-02": "1.35"
+    }
+   },
+   "covered": {
+    "USD": [
+     [
+      "2026-01-01",
+      "2026-12-31"
+     ]
+    ]
+   },
+   "quotes": {
+    "U": {
+     "price": "12",
+     "at": "2026-08-01T20:00:00Z"
+    }
+   },
+   "closes": {
+    "U": {
+     "2026-07-31": "12"
+    }
+   },
+   "transactions": [
+    {
+     "id": "b1",
+     "account": "A",
+     "day": "2026-03-02",
+     "at": "2026-03-02T15:00:00Z",
+     "kind": "buy",
+     "instrument": "U",
+     "qty": "100",
+     "cash": "-800"
+    },
+    {
+     "id": "t1",
+     "account": "A",
+     "day": "2026-03-03",
+     "at": "2026-03-03T15:00:00Z",
+     "kind": "sell",
+     "instrument": "C1",
+     "qty": "-1",
+     "cash": "50"
+    },
+    {
+     "id": "t2",
+     "account": "A",
+     "day": "2026-04-01",
+     "at": "2026-04-01T15:00:00Z",
+     "kind": "buy",
+     "instrument": "C1",
+     "qty": "1",
+     "cash": "-200"
+    }
+   ],
+   "brokers": {
+    "A": {
+     "held": {
+      "U": "100"
+     },
+     "days_held": {
+      "2026-03-03": {
+       "held": {
+        "U": "100",
+        "C1": "-1"
+       },
+       "cash": {
+        "USD": "1000"
+       }
+      }
+     },
+     "held_book": {
+      "U": "800.00 USD"
+     }
+    }
+   }
+  },
+  "expect": {
+   "positions": [
+    {
+     "shares_opened_by": "b1",
+     "calls": [
+      "t1"
+     ],
+     "pnl": "250.00"
+    }
+   ],
+   "linked_to_nothing": [],
+   "counted": [],
+   "wins": 0,
+   "losses": 0
+  }
  }
 ]
