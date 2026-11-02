@@ -1,6 +1,8 @@
-//! The market universes (SPEC §4 Markets, the heatmap): read while a page shows
-//! one, when it has no rows or they are stale, and not otherwise. The sources are
-//! stood in for (`feeds::fetch_universes` under test), which counts each read.
+//! The market universes (SPEC §4 Markets, the heatmap): read as the app starts and
+//! kept fresh while it runs (`feeds::markets_universes_loop`, the owner,
+//! 2026-11-02), and by a page showing one, when it has no rows or they are stale,
+//! and not otherwise. The sources are stood in for (`feeds::fetch_universes`
+//! under test), which counts each read.
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -71,7 +73,7 @@ fn test_a_shown_universe_with_no_rows_is_read_from_its_own_source_only() {
         until("the read, stored for every universe its source carries", || reads(&app) == vec![source] && stored());
         settle();
         assert_eq!(reads(&app), vec![source], "{key}: read once, and a universe nobody shows ({other:?}) is not read");
-        assert_eq!(doc(&app, &format!("universe:{key}")), json!({"failed": null}));
+        assert_eq!(doc(&app, &format!("universe:{key}")), json!({"failed": null, "reading": false}), "read, and no longer being read");
     }
 }
 
@@ -105,7 +107,7 @@ fn test_a_shown_universe_whose_rows_are_fresh_is_not_read() {
 }
 
 #[test]
-fn test_no_universe_is_read_while_no_page_shows_one() {
+fn test_a_page_showing_something_else_reads_no_universe() {
     let (_home, app) = app();
     // a page open on something else
     let _page = page_showing(&app, &["orders"]);
@@ -116,6 +118,39 @@ fn test_no_universe_is_read_while_no_page_shows_one() {
     let _other = page_showing(&app, &["universe:holdings"]);
     settle();
     assert!(reads(&app).is_empty());
+}
+
+/// Started with the app, book open or not and no page open, the loop reads every
+/// source once, and stops with the app.
+#[test]
+fn test_a_started_app_reads_every_market_universe_with_no_page_open() {
+    let (_home, app) = app();
+    assert!(app.figures.get().is_none(), "no book open");
+    let a = app.clone();
+    let looping = std::thread::spawn(move || crate::feeds::markets_universes_loop(a));
+    until("both sources read", || {
+        let r = reads(&app);
+        r.contains(&Source::Tmx) && r.contains(&Source::Screener)
+    });
+    assert_eq!(reads(&app).len(), 2, "each source once");
+    assert_eq!(doc(&app, "universe:ca")["reading"], json!(false), "read, so no longer reading");
+    app.request_stop();
+    looping.join().unwrap();
+}
+
+/// Rows read within the half hour are fresh: the loop asks nothing until they
+/// come due.
+#[test]
+fn test_the_loop_reads_no_source_whose_rows_are_fresh() {
+    let (_home, app) = app();
+    stored(&app, Source::Tmx, 60.0);
+    stored(&app, Source::Screener, UNIVERSE_STALE_SEC / 2.0);
+    let a = app.clone();
+    let looping = std::thread::spawn(move || crate::feeds::markets_universes_loop(a));
+    settle();
+    assert!(reads(&app).is_empty(), "nothing due: {:?}", reads(&app));
+    app.request_stop();
+    looping.join().unwrap();
 }
 
 #[test]

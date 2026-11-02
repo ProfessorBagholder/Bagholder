@@ -22,7 +22,7 @@ use rusqlite::{params, Connection, OptionalExtension};
 use crate::contract::{Benchmark, DataKind};
 use crate::outcome::OutcomeKind;
 
-pub static MIGRATIONS: [Migration; 9] = [
+pub static MIGRATIONS: [Migration; 10] = [
     Migration { number: 1, name: "the market cache", sql: include_str!("../migrations/001-the-market-cache.sql") },
     Migration { number: 2, name: "reads", sql: include_str!("../migrations/002-reads.sql") },
     Migration { number: 3, name: "benchmark trackers and option chains", sql: include_str!("../migrations/003-benchmark-trackers-and-option-chains.sql") },
@@ -32,6 +32,7 @@ pub static MIGRATIONS: [Migration; 9] = [
     Migration { number: 7, name: "reads that failed", sql: include_str!("../migrations/007-reads-that-failed.sql") },
     Migration { number: 8, name: "documents no longer listed", sql: include_str!("../migrations/008-documents-no-longer-listed.sql") },
     Migration { number: 9, name: "the earlier app gone", sql: include_str!("../migrations/009-the-earlier-app-gone.sql") },
+    Migration { number: 10, name: "universe sectors", sql: include_str!("../migrations/010-universe-sectors.sql") },
 ];
 
 pub static SCHEMA: Schema = Schema {

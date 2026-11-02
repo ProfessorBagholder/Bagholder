@@ -309,6 +309,7 @@ fn serve() -> i32 {
     a.spawn_with("bagholder-exposure-loop", feeds::exposure_loop);
     a.spawn_with("bagholder-news-loop", feeds::news_loop);
     a.spawn_with("bagholder-market-loop", feeds::market_loop);
+    a.spawn_with("bagholder-universes", feeds::markets_universes_loop);
     a.spawn_with("bagholder-archive", feeds::archive_loop);
     a.spawn_with("bagholder-watch", feeds::watch_loop);
     a.spawn_with("bagholder-filings-sweep", feeds::filings_sweep_loop);

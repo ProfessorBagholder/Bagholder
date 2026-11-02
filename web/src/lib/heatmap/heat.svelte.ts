@@ -5,6 +5,16 @@ import { HEAT_UNIVERSES, type HeatAddress } from '../router.svelte'
 
 export const MARKET_U: Record<string, string> = { ca: 'Canada', us: 'US', intl: 'International' }
 
+/** What a heatmap with no tiles says: a market's read under way, by its source
+ *  (the S&P/TSX 60 from TMX, the US and International from Nasdaq's screener),
+ *  or why it failed, or that nothing is read yet; a book's scope, what it lacks. */
+export function emptyWord(universe: string, doc: { failed?: string | null; reading?: boolean } | null | undefined): string {
+  if (universe === 'watchlist') return 'Nothing watched.'
+  if (!MARKET_U[universe]) return 'No open positions.'
+  if (doc?.reading) return universe === 'ca' ? 'Reading the S&P/TSX 60…' : "Reading Nasdaq's screener…"
+  return doc?.failed || 'Not read yet.'
+}
+
 function remembered(): { universe: string; size: string } {
   try {
     return { universe: 'holdings', size: 'value', ...JSON.parse(localStorage.getItem('bh2.heatmap') || '{}') }

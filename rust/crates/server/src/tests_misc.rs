@@ -466,7 +466,7 @@ const TIMED_WAITS: [(&str, usize, &str); 24] = [
     ("server/src/docs.rs", 1, "a ticket's quote, every five seconds while a page shows that ticket and not a moment longer: Wealthsimple offers no quote push"),
     ("server/src/due.rs", 1, "the figure path's reads: until the next known deadline (the day turning in the person's zone, the Bank's 16:30, a close settling, a payer's window, a source's rest ending, a minute for quotes only while a page shows them)"),
     ("server/src/events.rs", 7, "`park_until_or` itself, the 40 ms gather; four in its tests (the day turning is the scheduler's, `due.rs`; signals that never stop, bounded so the old gathering fails rather than hangs)"),
-    ("server/src/feeds.rs", 10, "outside sources that offer no push, each only while wanted; known deadlines"),
+    ("server/src/feeds.rs", 11, "outside sources that offer no push, each only while wanted; known deadlines; the market universes kept fresh every half hour while the app runs (the owner, 2026-11-02)"),
     ("server/src/filings.rs", 3, "the regulators offer no push: the daily sweep of the filers held, the gap between two reads at one regulator, and a person's pace at SEDAR+"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
     ("server/src/http/remote.rs", 1, "the page's address asked from outside while it comes up, every few seconds for at most ten minutes, until it asks for the sign-in: Cloudflare offers no push for a name beginning to answer"),

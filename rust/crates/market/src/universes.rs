@@ -19,6 +19,13 @@ pub const TOP: usize = 100;
 
 pub const TMX_CONSTITUENTS_QUERY: &str = "query getIndexConstituents($symbol: String!) { constituents: getIndexConstituents(symbol: $symbol) { symbol quotedMarketValue longName shortName weight exShortName exchange exLongName } }";
 pub const TMX_TILE_QUERY: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name price percentChange sector } }";
+/// Every constituent's day in one request: TMX's `Quote` type answers many
+/// symbols at once, though with no sector (`getQuoteForSymbols` refuses `sector`).
+pub const TMX_QUOTES_QUERY: &str = "query getQuoteForSymbols($symbols: [String]) { getQuoteForSymbols(symbols: $symbols) { symbol longname price percentChange } }";
+/// How long a constituent's sector, once read, stands before it is asked again:
+/// TMX reclassifies a company's sector rarely, and a month bounds how long a
+/// reclassification stays wrong.
+pub const SECTOR_STALE_SEC: f64 = 30.0 * 86_400.0;
 pub const SCREENER_URL: &str =
     "https://api.nasdaq.com/api/screener/stocks?tableonly=true&limit=25&offset=0&download=true";
 
@@ -278,9 +285,58 @@ pub fn fetch_screener() -> Result<Vec<ScreenerRow>, String> {
     Ok(rows)
 }
 
-/// The S&P/TSX 60, its constituents by index weight,
-/// each quoted for the day's change and its sector, or what failed.
-pub fn fetch_canada() -> Result<Vec<UniverseRow>, String> {
+/// Each symbol's day's change from `getQuoteForSymbols`: none for a symbol the
+/// answer leaves out or states no change for.
+pub fn parse_quotes(data: &Value) -> std::collections::BTreeMap<String, Option<f64>> {
+    #[derive(Deserialize)]
+    #[serde(rename_all = "camelCase")]
+    struct Row {
+        #[serde(deserialize_with = "lenient::text")]
+        symbol: String,
+        #[serde(default, deserialize_with = "maybe_figure")]
+        percent_change: Option<f64>,
+    }
+    let rows = data.get("data").and_then(|d| d.get("getQuoteForSymbols")).unwrap_or(&Value::Null);
+    lenient::rows::<Row>(rows).into_iter().filter(|r| !r.symbol.is_empty()).map(|r| (r.symbol.trim().to_string(), r.percent_change)).collect()
+}
+
+/// The S&P/TSX 60's tiles from its constituents and their day (`changes`), each
+/// sector the one `known` holds for it (with when it was read, unix seconds)
+/// while younger than `SECTOR_STALE_SEC`, else asked of `ask`: a sector asked and
+/// answered is said in the second list, to be kept. A sector asked and not
+/// answered stays the one known, however old, or `Not classified`.
+pub fn canada_rows(constituents: &[Constituent], changes: &std::collections::BTreeMap<String, Option<f64>>, known: &std::collections::BTreeMap<String, (String, f64)>, now: f64, ask: &mut dyn FnMut(&str) -> Option<String>) -> (Vec<UniverseRow>, Vec<(String, String)>) {
+    let mut asked = Vec::new();
+    let rows = constituents
+        .iter()
+        .map(|c| {
+            let fresh = known.get(&c.symbol).filter(|(_, at)| now - at < SECTOR_STALE_SEC).map(|(s, _)| s.clone());
+            let sector = match fresh {
+                Some(s) => Some(s),
+                None => match ask(&c.symbol) {
+                    Some(s) => {
+                        asked.push((c.symbol.clone(), s.clone()));
+                        Some(s)
+                    }
+                    None => known.get(&c.symbol).map(|(s, _)| s.clone()),
+                },
+            };
+            canada_tile(c, Some(&TileQuote { percent_change: changes.get(&c.symbol).copied().flatten(), sector: sector.unwrap_or_else(|| "Not classified".into()), name: String::new() }))
+        })
+        .collect();
+    (rows, asked)
+}
+
+/// What one read of a source came to: each universe's rows, and the sectors it
+/// asked for and was told (Canada's), to be kept with when they were read.
+pub struct Read {
+    pub universes: Vec<(&'static str, Vec<UniverseRow>)>,
+    pub sectors: Vec<(String, String)>,
+}
+
+/// The S&P/TSX 60: its constituents, every one's day in one request, and a
+/// sector asked only where `known` holds none younger than a month.
+pub fn fetch_canada(known: &std::collections::BTreeMap<String, (String, f64)>, now: f64) -> Result<(Vec<UniverseRow>, Vec<(String, String)>), String> {
     let label = Source::Tmx.label();
     pace("app-money.tmx.com", 0.6);
     let payload = json!({
@@ -293,32 +349,30 @@ pub fn fetch_canada() -> Result<Vec<UniverseRow>, String> {
     if constituents.is_empty() {
         return Err(format!("{label} answered with no constituents of the S&P/TSX 60."));
     }
-    let mut out = Vec::new();
-    for c in constituents {
+    pace("app-money.tmx.com", 0.6);
+    let symbols: Vec<&str> = constituents.iter().map(|c| c.symbol.as_str()).collect();
+    let quoted = post_json(crate::tmx::TMX_URL, &json!({"operationName": "getQuoteForSymbols", "variables": {"symbols": symbols}, "query": TMX_QUOTES_QUERY}), &tmx_headers()).map_err(|e| format!("{label} {}.", describe_failure(&e)))?;
+    let changes = parse_quotes(&quoted);
+    let mut ask = |symbol: &str| -> Option<String> {
         pace("app-money.tmx.com", 0.6);
-        let q = post_json(
-            crate::tmx::TMX_URL,
-            &json!({
-                "operationName": "getQuoteBySymbol",
-                "variables": {"symbol": c.symbol, "locale": "en"},
-                "query": TMX_TILE_QUERY,
-            }),
-            &tmx_headers(),
-        )
-        .ok()
-        .and_then(|d| parse_tile_quote(&d));
-        out.push(canada_tile(&c, q.as_ref()));
-    }
-    Ok(out)
+        let d = post_json(crate::tmx::TMX_URL, &json!({"operationName": "getQuoteBySymbol", "variables": {"symbol": symbol, "locale": "en"}, "query": TMX_TILE_QUERY}), &tmx_headers()).ok()?;
+        parse_tile_quote(&d).map(|q| q.sector).filter(|s| s != "Not classified")
+    };
+    Ok(canada_rows(&constituents, &changes, known, now, &mut ask))
 }
 
-/// Read one source: the rows of each universe it carries, by key, or what failed.
-pub fn read(source: Source) -> Result<Vec<(&'static str, Vec<UniverseRow>)>, String> {
+/// Read one source: the rows of each universe it carries, by key, and the
+/// sectors it asked for, or what failed. `known` is each Canadian constituent's
+/// sector as last read, with when.
+pub fn read(source: Source, known: &std::collections::BTreeMap<String, (String, f64)>, now: f64) -> Result<Read, String> {
     match source {
         Source::Screener => {
             let rows = fetch_screener()?;
-            Ok(vec![("us", us_rows(&rows, TOP)), ("intl", intl_rows(&rows, TOP))])
+            Ok(Read { universes: vec![("us", us_rows(&rows, TOP)), ("intl", intl_rows(&rows, TOP))], sectors: Vec::new() })
         }
-        Source::Tmx => Ok(vec![("ca", fetch_canada()?)]),
+        Source::Tmx => {
+            let (rows, sectors) = fetch_canada(known, now)?;
+            Ok(Read { universes: vec![("ca", rows)], sectors })
+        }
     }
 }
