@@ -139,6 +139,17 @@ fn every_read_the_page_makes_is_an_agent_tool() {
     }
 }
 
+/// A path the read client does not list is refused by name, before any request
+/// is made: here no server answers at all, so a request made would say so instead.
+#[test]
+fn a_page_read_not_listed_is_refused_before_any_request() {
+    let r = ReadOnly::own("http://127.0.0.1:1");
+    for path in ["/api/figures/trades", "/api/watch", "/api/filings/doc"] {
+        let said = r.page(path, &[]).unwrap_err();
+        assert_eq!(said, format!("{path} is not a read an agent is given"));
+    }
+}
+
 /// The adapter makes one request, a `GET`, through the one client; nothing else
 /// in its module can send one.
 #[test]
