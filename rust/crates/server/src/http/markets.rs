@@ -22,6 +22,7 @@ pub fn routes() -> Routed {
         get "/api/filings" => filings;
         get "/api/filings/feed" => filings_feed;
         get "/api/filings/enrich" => filings_enrich;
+        get "/api/filings/text" => filings_text;
         get "/api/news/symbol" => news_symbol;
         get "/api/fear" => fear;
         get "/api/shorts" => shorts;
@@ -134,7 +135,7 @@ pub struct SymbolSearchAnswer {
     pub unread: Vec<String>,
 }
 
-async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> super::Api<SymbolSearchAnswer> {
+pub(crate) async fn symbol_search(State(state): State<AppState>, Params(s): Params<Search>) -> super::Api<SymbolSearchAnswer> {
     let app = state.app.clone();
     answer(move || {
         let found = bagholder_market::search::symbol_search(&s.q);
@@ -234,7 +235,7 @@ pub(crate) fn resolve(held: Vec<(bagholder_core::ListingKey, bagholder_model::wi
     out
 }
 
-async fn listings(State(state): State<AppState>, Params(r): Params<Resolve>) -> super::Api<ResolveAnswer> {
+pub(crate) async fn listings(State(state): State<AppState>, Params(r): Params<Resolve>) -> super::Api<ResolveAnswer> {
     let app = state.app.clone();
     answer(move || {
         if r.symbol.is_empty() {
@@ -269,7 +270,7 @@ pub enum GlanceAnswer {
     },
 }
 
-async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<GlanceAnswer> {
+pub(crate) async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<GlanceAnswer> {
     let app = state.app;
     answer(move || match following::glance(&app, &l.symbol, &l.exchange, &l.currency) {
         Ok(g) => GlanceAnswer::Ok { ok: true, price: g.price, change: g.change, percent_change: g.percent_change },
@@ -279,7 +280,7 @@ async fn symbol_quote(State(state): State<AppState>, Params(l): Params<Listing>)
 }
 
 /// `GET /api/listing`: one listing's own page, held or not.
-async fn listing(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<feeds::ListingAnswer> {
+pub(crate) async fn listing(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<feeds::ListingAnswer> {
     answer(move || feeds::listing_payload(&state.app, &l.key, &l.exchange, &l.currency, &l.name)).await
 }
 
@@ -293,7 +294,7 @@ pub struct Filings {
     refresh: bool,
 }
 
-async fn filings(State(state): State<AppState>, Params(q): Params<Filings>) -> Api<feeds::FilingsAnswer> {
+pub(crate) async fn filings(State(state): State<AppState>, Params(q): Params<Filings>) -> Api<feeds::FilingsAnswer> {
     let l = q.listing;
     answer(move || feeds::filings_payload(&state.app, &l.key, q.refresh)).await
 }
@@ -304,7 +305,7 @@ pub struct Scope {
     scope: String,
 }
 
-async fn filings_feed(State(state): State<AppState>, Params(s): Params<Scope>) -> Api<crate::feeds::FilingsFeed> {
+pub(crate) async fn filings_feed(State(state): State<AppState>, Params(s): Params<Scope>) -> Api<crate::feeds::FilingsFeed> {
     answer(move || feeds::filings_feed(&state.app, &s.scope, 200)).await
 }
 
@@ -351,7 +352,15 @@ async fn filings_doc(State(state): State<AppState>, Params(d): Params<Document>,
     }
 }
 
-async fn filings_enrich(State(state): State<AppState>, Params(d): Params<Document>) -> Api<feeds::EnrichAnswer> {
+/// `GET /api/filings/text`: one stored filing's text, as the summary reads it, with
+/// the regulator's own address for it where it has one an agent can open (an SEC
+/// filing's on EDGAR): an agent's read of the document the page serves itself.
+pub(crate) async fn filings_text(State(state): State<AppState>, Params(d): Params<Document>) -> Api<feeds::FilingTextAnswer> {
+    let (source, id) = d.named()?;
+    answer(move || feeds::filings_text(&state.app, source, &id)).await
+}
+
+pub(crate) async fn filings_enrich(State(state): State<AppState>, Params(d): Params<Document>) -> Api<feeds::EnrichAnswer> {
     let (source, id) = d.named()?;
     answer(move || feeds::filings_enrich(&state.app, source, &id)).await
 }
@@ -362,7 +371,7 @@ pub struct Fear {
     index: Option<String>,
 }
 
-async fn fear(State(state): State<AppState>, Params(q): Params<Fear>) -> Api<feeds::FearAnswer> {
+pub(crate) async fn fear(State(state): State<AppState>, Params(q): Params<Fear>) -> Api<feeds::FearAnswer> {
     answer(move || feeds::fear_payload(&state.app, q.index.as_deref().unwrap_or("stocks")).into()).await
 }
 
@@ -376,22 +385,22 @@ pub struct ShortsQuery {
     trend: bool,
 }
 
-async fn shorts(State(state): State<AppState>, Params(q): Params<ShortsQuery>) -> Api<feeds::ShortsAnswer> {
+pub(crate) async fn shorts(State(state): State<AppState>, Params(q): Params<ShortsQuery>) -> Api<feeds::ShortsAnswer> {
     let l = q.listing;
     answer(move || feeds::shorts_payload(&state.app, &l.key, &l.exchange, q.trend).into()).await
 }
 
-async fn shorts_feed(State(state): State<AppState>) -> Api<crate::feeds::ShortsFeed> {
+pub(crate) async fn shorts_feed(State(state): State<AppState>) -> Api<crate::feeds::ShortsFeed> {
     answer(move || feeds::shorts_feed(&state.app)).await
 }
 
-async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<feeds::NewsSymbolAnswer> {
+pub(crate) async fn news_symbol(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<feeds::NewsSymbolAnswer> {
     answer(move || feeds::news_symbol_payload(&state.app, &l.key, &l.exchange, &l.currency)).await
 }
 
 /// `GET /api/history`: a chart's bars. Its parameters are read by the history
 /// module itself, which is also handed them by the documents (`history:<query>`).
-async fn history(State(state): State<AppState>, Params(q): Params<feeds::HistoryQuery>) -> Api<feeds::HistoryAnswer> {
+pub(crate) async fn history(State(state): State<AppState>, Params(q): Params<feeds::HistoryQuery>) -> Api<feeds::HistoryAnswer> {
     answer(move || feeds::history_payload(&state.app, &q)).await
 }
 

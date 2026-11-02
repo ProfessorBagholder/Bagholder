@@ -18,7 +18,7 @@ pub fn routes() -> Routed {
     }
 }
 
-async fn list(State(state): State<AppState>) -> Api<notify::NotificationsAnswer> {
+pub(crate) async fn list(State(state): State<AppState>) -> Api<notify::NotificationsAnswer> {
     let app = state.app.clone();
     with_notices(&state, move |book| {
         Ok(notify::NotificationsAnswer {

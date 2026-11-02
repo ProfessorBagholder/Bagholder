@@ -74,6 +74,10 @@ export type FilingsAnswer = FilingsPayload | OkOr;
 
 export type EnrichAnswer = Enriched | OkOr;
 
+export type FilingText = { source: string, id: string, title: string, date: string, url: string | null, text: string, };
+
+export type FilingTextAnswer = FilingText | OkOr;
+
 export type Filings = { 
 /**
  * ask the sources again rather than answering from what is stored

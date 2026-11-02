@@ -92,7 +92,7 @@ fn filings_declarations() -> String {
     }
     let decls: Vec<String> = decls![
         Regulator, FiledDocument, Filing, SourceStatus, FilingsDoc, FilingsPayload, FeedFiling, FilingsFeed, Enriched,
-        crate::feeds::FilingsAnswer, crate::feeds::EnrichAnswer, crate::http::markets::Filings, crate::http::markets::Scope, crate::http::markets::Document,
+        crate::feeds::FilingsAnswer, crate::feeds::EnrichAnswer, crate::feeds::FilingText, crate::feeds::FilingTextAnswer, crate::http::markets::Filings, crate::http::markets::Scope, crate::http::markets::Document,
     ];
     let mut out = String::from("// Generated from rust/crates/market/src/stored/feeds.rs and the server's filings documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_filing_types`.\n\nimport type { OkOr } from './common'\nimport type { Listing } from './markets'\n\n");
     for d in decls {
@@ -362,7 +362,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" | "ListingOf" | "OrderListingAnswer" => "orders",
         "StatusAnswer" => "status",
         "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "DebtAnswerRequest" | "DebtAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "ImportTold" | "WatchRequest" | "WatchStatus" => "model_api",
-        "FilingsAnswer" | "EnrichAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
+        "FilingsAnswer" | "EnrichAnswer" | "FilingText" | "FilingTextAnswer" | "Filings" | "Scope" | "Document" | "FilingsFeed" => "filings",
         "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "Resolve" | "ResolvedListing" | "ResolveAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",
         "TradesDoc" | "Detail" | "Details" => "figures",

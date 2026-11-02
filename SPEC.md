@@ -1137,7 +1137,7 @@
 
 ### What a published copy carries
 
-<a id="what-a-published-copy-carries-1"></a>The image and the release archives carry the four binaries (`bagholder`, `bagholder-browser`, `disclosures-mcp`, `sedar`); the page is built into `bagholder` for an archive and beside it in the image.
+<a id="what-a-published-copy-carries-1"></a>The image and the release archives carry the three binaries (`bagholder`, `bagholder-browser`, `sedar`); the page is built into `bagholder` for an archive and beside it in the image.
 <a id="what-a-published-copy-carries-2"></a>A list of what to publish was kept by hand once: four modules were added after it was written, every image built for three days crashed on its first import, and nothing noticed until a user reported it.
 <a id="what-a-published-copy-carries-3"></a>Tests read the Dockerfile and `.dockerignore` and fail if anything the image builds from would be missing.
 

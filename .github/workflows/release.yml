@@ -102,7 +102,7 @@ jobs:
         run: npm ci && npm run build
       - name: Build
         working-directory: rust
-        run: cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
+        run: cargo build --release --locked --bin bagholder --bin bagholder-browser --bin sedar
       # the archive's server carries no developer's subcommand (features no release
       # enables), not even its name, by its words or its symbols
       - name: No developer's subcommand in the release
@@ -120,7 +120,7 @@ jobs:
           name="bagholder-${TAG}-rust-${{ matrix.target }}"
           mkdir -p dist/pkg
           ext=""; [ "${{ runner.os }}" = "Windows" ] && ext=".exe"
-          for b in bagholder bagholder-browser disclosures-mcp sedar; do cp "rust/target/release/$b$ext" dist/pkg/; done
+          for b in bagholder bagholder-browser sedar; do cp "rust/target/release/$b$ext" dist/pkg/; done
           cd dist/pkg
           if [ "${{ runner.os }}" = "Windows" ]; then
             7z a "../$name.zip" . >/dev/null; cd .. && sha256sum "$name.zip" > "$name.zip.sha256"

@@ -22,7 +22,7 @@ mod error;
 mod extract;
 pub(crate) mod markets;
 pub(crate) mod model;
-mod notifications;
+pub(crate) mod notifications;
 pub(crate) mod orders;
 pub(crate) mod remote;
 mod session;

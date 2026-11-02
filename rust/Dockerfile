@@ -13,7 +13,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends cmake clang lib
 WORKDIR /src
 COPY rust/rust-toolchain.toml rust/Cargo.toml rust/Cargo.lock ./
 COPY rust/crates crates
-RUN cargo build --release --locked --bin bagholder --bin bagholder-browser --bin disclosures-mcp --bin sedar
+RUN cargo build --release --locked --bin bagholder --bin bagholder-browser --bin sedar
 
 # The release's own binaries, for the platform being built.
 FROM scratch AS prebuilt
@@ -42,7 +42,7 @@ COPY rust/docker-entrypoint.sh /usr/local/bin/bagholder-entrypoint
 RUN chmod +x /usr/local/bin/bagholder-entrypoint
 
 WORKDIR /app
-COPY --from=binaries /src/target/release/bagholder /src/target/release/bagholder-browser /src/target/release/disclosures-mcp /src/target/release/sedar ./
+COPY --from=binaries /src/target/release/bagholder /src/target/release/bagholder-browser /src/target/release/sedar ./
 COPY --from=web /web/dist ./web/dist
 
 RUN mkdir -p /data && chown bagholder:bagholder /data && chmod 700 /data

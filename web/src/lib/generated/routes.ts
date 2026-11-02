@@ -5,7 +5,7 @@ import type { AgentId, AgentLog, GitHubAsked, GitHubManifest, KeyAsked, LogAsked
 import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, Details, TradesDoc } from './figures'
-import type { Document, EnrichAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
+import type { Document, EnrichAnswer, FilingTextAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Resolve, ResolveAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
 import type { Clear, ClearAnswer, DebtAnswer, DebtAnswerRequest, EntryAnswer, EntryRequest, ImportAccepted, ImportQuery, ImportTold, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, TransactionsAnswer, TransactionsQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer, PushAnswer, PushEndpoint, PushSubscription } from './notifications'
@@ -47,6 +47,7 @@ export interface Routes {
   'GET /api/filings': { query: Filings; answer: FilingsAnswer }
   'GET /api/filings/feed': { query: Scope; answer: FilingsFeed }
   'GET /api/filings/enrich': { query: Document; answer: EnrichAnswer }
+  'GET /api/filings/text': { query: Document; answer: FilingTextAnswer }
   'GET /api/news/symbol': { query: Listing; answer: NewsSymbolAnswer }
   'GET /api/fear': { query: Fear; answer: FearAnswer }
   'GET /api/shorts': { query: ShortsQuery; answer: ShortsAnswer }

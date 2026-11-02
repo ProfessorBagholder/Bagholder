@@ -70,7 +70,7 @@ Futures are not supported yet.
 
 ## Install
 
-Download `bagholder-vX.Y.Z-rust-<platform>.tar.gz` (`.zip` on Windows) from the latest release and unpack it. The server carries its page; the archive holds the server, `bagholder-browser` (which presents a browser's TLS handshake to Yahoo and SEDAR+), and the disclosures tools (`disclosures-mcp`, `sedar`, see [DISCLOSURES.md](DISCLOSURES.md)).
+Download `bagholder-vX.Y.Z-rust-<platform>.tar.gz` (`.zip` on Windows) from the latest release and unpack it. The server carries its page; the archive holds the server, `bagholder-browser` (which presents a browser's TLS handshake to Yahoo and SEDAR+), and `sedar`, a SEDAR+ command line (see [DISCLOSURES.md](DISCLOSURES.md)).
 
 Or build a clone, the page first, since the server's build carries it:
 
