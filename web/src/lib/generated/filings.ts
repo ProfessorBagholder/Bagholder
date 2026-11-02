@@ -74,7 +74,15 @@ export type FilingsAnswer = FilingsPayload | OkOr;
 
 export type EnrichAnswer = Enriched | OkOr;
 
-export type FilingText = { source: string, id: string, title: string, date: string, url: string | null, text: string, };
+export type FilingText = { source: string, id: string, title: string, date: string, url: string | null, 
+/**
+ * At most `FILING_TEXT_PART` characters of the text, from `offset`.
+ */
+text: string, offset: number, 
+/**
+ * The text goes on past this part: ask again from `next`.
+ */
+more: boolean, next: number | null, };
 
 export type FilingTextAnswer = FilingText | OkOr;
 
@@ -87,3 +95,5 @@ refresh: boolean, symbol: string, exchange: string, currency: string, name: stri
 export type Scope = { scope: string, };
 
 export type Document = { source: string | null, id: string | null, };
+
+export type DocumentPart = { source: string | null, id: string | null, offset: string | null, };

@@ -13,7 +13,7 @@ use rmcp::schemars;
 use serde_json::{json, Value};
 
 use super::listener::said;
-use super::tools::{self, Caller, ExposureArgs, FearArgs, FilingArgs, FilingsFeedArgs, HeatmapArgs, HistoryArgs, IncomeArgs, ListingArgs, ListsArgs, MarketsArgs, NetWorthArgs, NewsArgs, NoArgs, OrderQuoteArgs, PositionsArgs, SearchArgs, ShortsArgs, StatsArgs, SymbolArgs, TradeArgs, TradesArgs, TransactionsArgs};
+use super::tools::{self, Caller, ExposureArgs, FearArgs, FilingArgs, FilingTextArgs, FilingsFeedArgs, HeatmapArgs, HistoryArgs, IncomeArgs, ListingArgs, ListsArgs, MarketsArgs, NetWorthArgs, NewsArgs, NoArgs, OrderQuoteArgs, PositionsArgs, SearchArgs, ShortsArgs, StatsArgs, SymbolArgs, TradeArgs, TradesArgs, TransactionsArgs};
 use super::Ctx;
 
 /// Each route: its path, the tool it answers as, what it says, and its arguments' schema.
@@ -35,7 +35,7 @@ pub fn routes() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("/api/agents/filings", "filings", "One listing's regulatory filings from SEDAR+ and SEC EDGAR, merged as its page shows them.", schema(schemars::schema_for!(ListingArgs))),
         ("/api/agents/filings-feed", "filings_feed", "The Disclosures card: the newest filings of all, the holdings' or the watchlist's listings.", schema(schemars::schema_for!(FilingsFeedArgs))),
         ("/api/agents/filing-summary", "filing_summary", "One filing's subject and one-sentence summary.", schema(schemars::schema_for!(FilingArgs))),
-        ("/api/agents/filing-text", "filing_text", "One filing's document itself, as text, with the regulator's own address where it has one.", schema(schemars::schema_for!(FilingArgs))),
+        ("/api/agents/filing-text", "filing_text", "One filing's document itself, as text, with the regulator's own address where it has one; at most 200,000 characters an answer, `next` the offset to ask from where it goes on.", schema(schemars::schema_for!(FilingTextArgs))),
         ("/api/agents/short-interest", "short_interest", "One listing's short interest, from FINRA or CIRO, and its series with trend.", schema(schemars::schema_for!(ShortsArgs))),
         ("/api/agents/short-interest-feed", "short_interest_feed", "The Short interest card: the holdings' and watchlist's listings, most shorted first.", schema(schemars::schema_for!(NoArgs))),
         ("/api/agents/heatmap", "heatmap", "The Markets tab's heatmap.", schema(schemars::schema_for!(HeatmapArgs))),
@@ -231,7 +231,7 @@ read_with!(listing_news, ListingArgs, tools::listing_news);
 read_with!(filings, ListingArgs, tools::filings);
 read_with!(filings_feed, FilingsFeedArgs, tools::filings_feed);
 read_with!(filing_summary, FilingArgs, tools::filing_summary);
-read_with!(filing_text, FilingArgs, tools::filing_text);
+read_with!(filing_text, FilingTextArgs, tools::filing_text);
 read_with!(short_interest, ShortsArgs, tools::short_interest);
 read_alone!(short_interest_feed, tools::short_interest_feed);
 read_with!(fear_greed, FearArgs, tools::fear_greed);

@@ -355,9 +355,25 @@ async fn filings_doc(State(state): State<AppState>, Params(d): Params<Document>,
 /// `GET /api/filings/text`: one stored filing's text, as the summary reads it, with
 /// the regulator's own address for it where it has one an agent can open (an SEC
 /// filing's on EDGAR): an agent's read of the document the page serves itself.
-pub(crate) async fn filings_text(State(state): State<AppState>, Params(d): Params<Document>) -> Api<feeds::FilingTextAnswer> {
-    let (source, id) = d.named()?;
-    answer(move || feeds::filings_text(&state.app, source, &id)).await
+pub(crate) async fn filings_text(State(state): State<AppState>, Params(q): Params<DocumentPart>) -> Api<feeds::FilingTextAnswer> {
+    let offset = match q.offset.as_deref().map(str::parse::<usize>) {
+        None => 0,
+        Some(Ok(n)) => n,
+        Some(Err(_)) => return Err(ApiError::BadRequest("offset is a number of characters".into())),
+    };
+    let (source, id) = Document { source: q.source, id: q.id }.named()?;
+    answer(move || feeds::filings_text(&state.app, source, &id, offset)).await
+}
+
+/// One stored filing, and where in its text to start (characters, 0 by default).
+#[derive(Deserialize, TS)]
+pub struct DocumentPart {
+    #[serde(default, deserialize_with = "trimmed")]
+    source: Option<String>,
+    #[serde(default, deserialize_with = "trimmed")]
+    id: Option<String>,
+    #[serde(default, deserialize_with = "trimmed")]
+    offset: Option<String>,
 }
 
 pub(crate) async fn filings_enrich(State(state): State<AppState>, Params(d): Params<Document>) -> Api<feeds::EnrichAnswer> {

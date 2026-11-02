@@ -182,6 +182,18 @@ pub struct FilingArgs {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema, Default, Clone, Debug)]
+pub struct FilingTextArgs {
+    /// The regulator, as a filing names it: `SEDAR+` or `SEC`.
+    pub source: String,
+    /// The regulator's own id for the filing, as a filing names it.
+    pub id: String,
+    /// Where in the text to start, in characters: 0 for the start, else the `next`
+    /// the previous part gave.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub offset: Option<usize>,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema, Default, Clone, Debug)]
 pub struct ShortsArgs {
     /// The listing's symbol, as the trades and holdings show it.
     pub symbol: String,
@@ -389,8 +401,8 @@ pub fn filing_summary(r: &ReadOnly, a: FilingArgs) -> Result<Value, String> {
 }
 
 /// A filing's text, the document itself.
-pub fn filing_text(r: &ReadOnly, a: FilingArgs) -> Result<Value, String> {
-    r.page("/api/filings/text", &[("source", a.source), ("id", a.id)])
+pub fn filing_text(r: &ReadOnly, a: FilingTextArgs) -> Result<Value, String> {
+    r.page("/api/filings/text", &[("source", a.source), ("id", a.id), ("offset", a.offset.map(|n| n.to_string()).unwrap_or_default())])
 }
 
 /// A listing's short interest.
@@ -676,8 +688,8 @@ impl Tools {
         self.run(&ctx, "filing_summary", args, move |r| filing_summary(r, a)).await
     }
 
-    #[tool(description = "One filing's document itself, as text, with the regulator's own address for it where it has one (an SEC filing on EDGAR).", annotations(title = "A filing's text", read_only_hint = true))]
-    async fn filing_text(&self, Parameters(a): Parameters<FilingArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+    #[tool(description = "One filing's document itself, as text, with the regulator's own address for it where it has one (an SEC filing on EDGAR). At most 200,000 characters an answer: where the text goes on, `more` is true and `next` is the `offset` to ask from.", annotations(title = "A filing's text", read_only_hint = true))]
+    async fn filing_text(&self, Parameters(a): Parameters<FilingTextArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
         let args = json!(a);
         self.run(&ctx, "filing_text", args, move |r| filing_text(r, a)).await
     }

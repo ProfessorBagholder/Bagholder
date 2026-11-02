@@ -1577,8 +1577,17 @@ pub struct FilingText {
     pub title: String,
     pub date: String,
     pub url: Option<String>,
+    /// At most `FILING_TEXT_PART` characters of the text, from `offset`.
     pub text: String,
+    pub offset: usize,
+    /// The text goes on past this part: ask again from `next`.
+    pub more: bool,
+    pub next: Option<usize>,
 }
+
+/// The most of a filing's text one answer carries, in characters: an annual
+/// report runs to millions, more than an agent's read takes at once.
+pub const FILING_TEXT_PART: usize = 200_000;
 
 /// `GET /api/filings/text`.
 #[derive(Serialize, TS)]
@@ -1588,8 +1597,8 @@ pub enum FilingTextAnswer {
     Refused(OkOr),
 }
 
-pub fn filings_text(app: &Arc<App>, source: Regulator, doc_id: &str) -> FilingTextAnswer {
-    match conn(app).and_then(|c| filings_text_in(&c, source, doc_id, &LiveReaders)) {
+pub fn filings_text(app: &Arc<App>, source: Regulator, doc_id: &str, offset: usize) -> FilingTextAnswer {
+    match conn(app).and_then(|c| filings_text_in(&c, source, doc_id, offset, &LiveReaders)) {
         Ok(t) => FilingTextAnswer::Ok(t),
         Err(e) => FilingTextAnswer::Refused(OkOr::err(e)),
     }
@@ -1597,14 +1606,18 @@ pub fn filings_text(app: &Arc<App>, source: Regulator, doc_id: &str) -> FilingTe
 
 /// `filings_text` on a connection, the document read with `r`: its readable
 /// substance past a cover form, as the summary reads it (`Readers::content`).
-pub fn filings_text_in(c: &Connection, source: Regulator, doc_id: &str, r: &dyn Readers) -> Result<FilingText, String> {
+pub fn filings_text_in(c: &Connection, source: Regulator, doc_id: &str, offset: usize, r: &dyn Readers) -> Result<FilingText, String> {
     let row = sf::filing(c, source, doc_id).map_err(|e| e.to_string())?.ok_or_else(|| format!("no {} document {doc_id} is kept", source.as_str()))?;
     let (data, ct) = r.content(&row.doc).map_err(|e| e.to_string())?;
     if data.is_empty() {
         return Err("empty document".into());
     }
     let url = (source == Regulator::Sec && !row.doc.url.is_empty()).then(|| row.doc.url.clone());
-    Ok(FilingText { source: source.as_str().into(), id: doc_id.into(), title: row.doc.title.clone(), date: row.doc.date.clone(), url, text: enrich::document_text(&data, &ct) })
+    let whole = enrich::document_text(&data, &ct);
+    let text: String = whole.chars().skip(offset).take(FILING_TEXT_PART).collect();
+    let end = offset + text.chars().count();
+    let more = whole.chars().nth(end).is_some();
+    Ok(FilingText { source: source.as_str().into(), id: doc_id.into(), title: row.doc.title.clone(), date: row.doc.date.clone(), url, text, offset, more, next: more.then_some(end) })
 }
 
 /// `filings_enrich` on the app's own connection, typed.
@@ -2588,11 +2601,28 @@ mod tests {
         let c = enrich_store();
         bagholder_market::enrich::hooks::DOCUMENT_TEXT.with(|h| *h.borrow_mut() = Some(Box::new(|data: &[u8], _: &str| format!("text of {} bytes", data.len()))));
         let r = fake(false, ("", ""), false);
-        let t = filings_text_in(&c, Regulator::Sedar, DOC, &r).unwrap();
+        let t = filings_text_in(&c, Regulator::Sedar, DOC, 0, &r).unwrap();
         bagholder_market::enrich::hooks::DOCUMENT_TEXT.with(|h| *h.borrow_mut() = None);
         assert_eq!((t.source.as_str(), t.id.as_str(), t.text.as_str(), t.url), ("SEDAR+", DOC, "text of 13 bytes", None));
         assert_eq!(r.reads.get(), 1, "the document read once");
-        assert!(filings_text_in(&c, Regulator::Sedar, "sedar:404", &r).unwrap_err().contains("no SEDAR+ document"));
+        assert!(filings_text_in(&c, Regulator::Sedar, "sedar:404", 0, &r).unwrap_err().contains("no SEDAR+ document"));
+    }
+
+    /// A long document's text comes in parts of at most `FILING_TEXT_PART`
+    /// characters, each saying where the next starts; the parts make the whole.
+    #[test]
+    fn a_long_filing_s_text_comes_in_parts_that_make_the_whole() {
+        let c = enrich_store();
+        let whole: String = (0..FILING_TEXT_PART + FILING_TEXT_PART / 2).map(|i| char::from(b'a' + (i % 26) as u8)).collect();
+        let w = whole.clone();
+        bagholder_market::enrich::hooks::DOCUMENT_TEXT.with(|h| *h.borrow_mut() = Some(Box::new(move |_: &[u8], _: &str| w.clone())));
+        let r = fake(false, ("", ""), false);
+        let first = filings_text_in(&c, Regulator::Sedar, DOC, 0, &r).unwrap();
+        let second = filings_text_in(&c, Regulator::Sedar, DOC, first.next.unwrap(), &r).unwrap();
+        bagholder_market::enrich::hooks::DOCUMENT_TEXT.with(|h| *h.borrow_mut() = None);
+        assert_eq!((first.text.chars().count(), first.more, first.next), (FILING_TEXT_PART, true, Some(FILING_TEXT_PART)));
+        assert_eq!((second.offset, second.more, second.next), (FILING_TEXT_PART, false, None));
+        assert_eq!(first.text + &second.text, whole, "two parts make the whole text");
     }
 
     fn enrich_store() -> Connection {
