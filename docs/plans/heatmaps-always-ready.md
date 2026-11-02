@@ -26,7 +26,6 @@ Read from the code, 2026-11-02:
 Read 2026-11-02.
 - TMX's own GraphQL service (`app-money.tmx.com/graphql`, the one `fetch_canada` already uses) answers `getQuoteForSymbols(symbols: [String])` with `symbol`, `longname`, `price` and `percentChange` for many symbols in one request. Checked here with three constituents.
 - Its `Quote` type has no sector field (the query is refused with "Cannot query field sector"). `getQuoteBySymbol` carries `sector`.
-- Market dashboards (TradingView's and Finviz's heatmaps) show a map at once on open; neither is empty on first view.
 
 ## Approach
 
