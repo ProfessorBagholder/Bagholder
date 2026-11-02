@@ -31,14 +31,13 @@ Read 2026-11-02.
 
 - **Settings:** `BAGHOLDER_UPDATER_URL`, the updater's address on the compose network (e.g. `http://bagholder-updater:8080`), and `BAGHOLDER_UPDATER_TOKEN_FILE`, a file holding the token, read at start. A bad value refuses the start and names it, as `BAGHOLDER_HOSTS` does.
 - **The button:** `POST /api/update/container`, the page's write, from the page only (the gate's write rule). The server asks the updater `POST /v1/update?container=<this container's name>` with the token, and says what came back. A failure is said in plain words.
-  - **The container's name:** read from the container's own hostname by default, or `BAGHOLDER_CONTAINER_NAME` where the person set another.
+  - **The container's name:** `BAGHOLDER_CONTAINER_NAME`, required whenever `BAGHOLDER_UPDATER_URL` is set and refused at start by name if missing. It's never inferred: Docker's default hostname is the container's id, not its name, and the updater would match nothing.
 - **During the update:** the page says `Updating to vX.Y.Z…`. The stream drops as the container stops, the page reconnects when it answers again, and the new version's status clears the notice.
 - **The shipped `docker-compose.yml` gains:**
-  - an optional `bagholder-updater` service (`nickfedor/watchtower` pinned to a release), on the same network, with `--http-api-update`, `--label-enable`, `--cleanup`, the token from a file, and the Docker socket;
-  - Bagholder labelled `com.centurylinklabs.watchtower.enable=true` and given the two settings.
+  - an optional `bagholder-updater` service, `nickfedor/watchtower` **pinned by digest**, since it's the one container on the host that holds the socket. The README says how to move the pin. It runs on the same network with `--http-api-update` and **without** `--http-api-periodic-polls`, so it never updates on a schedule and the button is the only trigger (said in the compose comment too). It also takes `--label-enable`, `--cleanup`, the token from a file (never an environment variable), and the Docker socket;
+  - Bagholder with `container_name: bagholder`, labelled `com.centurylinklabs.watchtower.enable=true`, and given the three settings.
 
   The updater publishes no port.
-- **The owner's server:** the same service added to its compose, and the token file made with `umask 077`. The firewall rule from 2026-10-31 lets Bagholder reach a container on its own network: the RETURN for the subnet.
 
 ## Acceptance criteria
 
@@ -47,5 +46,6 @@ Read 2026-11-02.
 - [ ] An updater that refuses or can't be reached is said in words, and nothing else changes. Server tests.
 - [ ] Without an updater, the notice says the compose command with a copy button and links nowhere. A page unit test.
 - [ ] The write is refused from anywhere but the page (the gate's write test lists it).
-- [ ] The shipped compose starts with the updater (the container job), and the updater sees only labelled containers.
-- [ ] On the owner's server: a test update from one image to the next, pressed in the page, comes back on the new version.
+- [ ] The shipped compose starts with the updater (the container job), and the updater sees only labelled containers. Its startup log says it runs in HTTP API update mode with no periodic polls; the container job asserts the line the fork logs, or, if it logs none, this is held by review and said here.
+- [ ] `BAGHOLDER_UPDATER_URL` set without `BAGHOLDER_CONTAINER_NAME` refuses the start, naming it. A server test.
+- [ ] An update pressed in the page, on a copy running the shipped compose, comes back on the new version: the container job, from one pinned image to the next.
