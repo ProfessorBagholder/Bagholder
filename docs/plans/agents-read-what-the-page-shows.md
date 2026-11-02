@@ -39,7 +39,6 @@ Read from the code on 2026-11-02: the page's `GET` routes and view documents aga
 Read 2026-11-02.
 - **The Model Context Protocol's tools specification** describes a server's tools with annotations, `readOnlyHint` among them, for a client to tell reads from writes (modelcontextprotocol.io, specification, tools). Bagholder's ten tools already carry it; the new ones do too.
 - **One application, one server.** Coinbase's MCP server for agents, in use in this workspace, serves one account's balances, portfolios, orders and products from a single server, with writes only on the portfolios the person authorized (its own server instructions). The application's data isn't split across servers by kind.
-- No journal (TradeZella, Tradervue, TraderSync, Edgewonk) documents an MCP server, so the category gives no other shape to follow.
 
 ## Approach
 
