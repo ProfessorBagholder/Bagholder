@@ -2,9 +2,11 @@
 
 ## For the owner to decide
 
-1. **Where the combined figure goes: beside the separate ones, or instead of them.** A covered call and its shares are two trades today, each with its own P&L, and every statistic counts each one on its own.
-   - **Recommended: beside them.** Each trade keeps its own P&L, as every journal keeps it. The shares' trade gains the position's combined P&L (shares plus the calls written against them), and the Dashboard gains one switch for its statistics: count a covered call on its own, or as part of its shares' position.
-   - **Instead of them:** the call's own P&L disappears into the shares' figure. That's simpler to read, but it hides what each call did, which is what a journal is for.
+Nothing open. The owner raised that covered calls are misread more than once (most recently 2026-11-01, on an agent's analysis); how a journal counts a covered call is a design question with a standard answer, settled at the gate (Architect, #662):
+
+- **The position is the trade the statistics count.** Every statistic (P&L, win rate, worst trade, by symbol, grades, the P&L curve, the Options and Shorts splits) counts a covered call inside its shares' position, never as a trade of its own. That's how the brokers below show the strategy, and it's the only reading under which a covered call's loss can be "the worst trade".
+- **No switch.** A switch keeps the wrong reading one click away, and agents, which don't click, would read it.
+- **The call keeps its own row and its own P&L** on the Trades page, marked as written against its shares (Side reads Covered call; its row and page link to the shares' trade), so what each call did stays visible; the statistics don't count it twice.
 
 ## Scope
 
@@ -13,7 +15,7 @@
 - **The trade pages:** the shares' trade shows the calls written against it and the position's combined P&L. Each covered call's page names the shares' trade it was written against.
 - **The Trades list:** the shares' row gains the combined P&L.
 - **Agents:** the same link and figure, so an analysis of options never reads a covered call as a standalone short bet.
-- **The Dashboard:** its statistics follow decision 1.
+- **The statistics:** they count the position, not the call (above).
 
 **Not in it:**
 - Puts. A secured put is cash-backed, not a stock position.
@@ -56,7 +58,7 @@ Read 2026-11-01.
   - The Trades list's shares row shows the combined P&L under its own, small, where it has calls.
   - The trade page lists the calls with each one's P&L and the total.
   - A covered call's page links to its shares' trade.
-- **Dashboard:** decision 1's switch, if taken. The statistics' scope gains "covered calls with their shares", meaning a covered call's P&L counts in its shares' trade, not as a trade of its own.
+- **The statistics' scope:** every statistic reads the trades through one scope (`engine::scope`). A covered call's covered fraction counts in its shares' trade's figures (P&L, result, grade bucket, symbol, curve) and is not a trade of its own there; an uncovered fraction stays a trade of its own.
 
 ## Acceptance criteria
 
@@ -67,7 +69,8 @@ Read 2026-11-01.
   - a call partly covered;
   - a call covered by shares transferred in with no row (linked to nothing);
   - two calls in turn against one share trade;
-  - a share trade with no calls (no combined figure).
+  - a share trade with no calls (no combined figure);
+  - a covered call's loss never appears as a trade of its own in worst trade, win rate or by symbol: the position's figure does.
 - [ ] The engine suite, including the step-by-step-versus-fresh-build tests, and the capacity growth test pass.
 - [ ] A browser test drives the combined figure on the Trades list and on the trade page, and the link from a covered call to its shares.
 - [ ] The agents' trade rows carry the link and the combined figure (a server test on the tool's answer).
