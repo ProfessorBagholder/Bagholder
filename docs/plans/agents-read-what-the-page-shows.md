@@ -45,26 +45,29 @@ Read 2026-11-02.
 - **One mechanism.** `agents::tools::ReadOnly` already answers a tool by asking the page's own view (`r.view(...)`), so a tool can never disagree with the screen. Each new tool is that: a view document, or the same handler a page route uses, called through `ReadOnly`, never a second query.
 - **New tools:**
   - **News:** headlines, a listing's news.
-  - **Disclosures:** an instrument's filings from every source (SEDAR+, EDGAR) merged as the page shows them, the feed, a filing's summary, and a filing's document link.
+  - **Disclosures:** an instrument's filings from every source (SEDAR+, EDGAR) merged as the page shows them, the feed, a filing's summary, and **a filing's document itself**: the text the summariser already reads (`disclosures::content` and its text extraction), with the regulator's own URL beside it where there is one (EDGAR's). A SEDAR+ document is served by the page itself (`/api/filings/doc`), and no page route answers on the agents' listener (`no_agents_route_reaches_the_page`), so a link would be one an agent can't open.
   - **Short interest:** a listing's, and the feed.
   - **Heatmap.**
   - **Fear & Greed.**
   - **Price history:** a listing's bars for a range.
   - **Quotes and listings:** a quote, a listing's details, symbol search.
   - **Orders:** open and past, read only.
-  - **Notifications:** read only; reading doesn't mark them read.
+  - **Notifications:** read only; reading doesn't mark them read or change the unread count.
   - **Status:** what the header says.
 
   Each takes the arguments the page passes (filters, listing, range, paging), carries `read_only_hint = true`, and pages as the existing tools do.
 - **The test that holds it:** the page's read routes and view keys are listed from the router and `views.rs`. Each must be named in a table of agent tools or in a short, reasoned list of what is not data: the agents' own panel, the stream. A new page read with neither fails.
-- **Retiring `disclosures-mcp`:** the binary (`market/src/bin/disclosures-mcp.rs`), `rust/mcp/manifest.json`, its lines in `rust/Dockerfile`, `.github/workflows/release.yml`, `README.md`, `DISCLOSURES.md`, `SPEC.md`, `CLAUDE.md` and `docs/architecture.md`. Its one capability the page lacks is downloading a filing's document; that goes into the Disclosures tool as the document's link, which the page already shows. The `sedar` debugging program stays: it's a developer's tool, not an agent surface.
+- **Retiring `disclosures-mcp`:** the binary (`market/src/bin/disclosures-mcp.rs`), `rust/mcp/manifest.json`, its lines in `rust/Dockerfile`, `.github/workflows/release.yml`, `README.md`, `DISCLOSURES.md`, `SPEC.md`, `CLAUDE.md` and `docs/architecture.md`. Its one capability, a filing's document, survives as the Disclosures tool's document text (above). The `sedar` debugging program stays: it's a developer's tool, not an agent surface.
 - **Agents' tool descriptions** say what each reads in the page's own words, as the existing ten do.
 
 ## Acceptance criteria
 
 - [ ] Every row marked **none** above has a tool, each answering the same document the page gets for the same arguments. Held by a server test per tool that compares the tool's answer with the page route's.
 - [ ] The coverage test: every page read is an agent tool or on the reasoned list. Plant: a page route added without a tool fails it.
-- [ ] Every tool carries `read_only_hint = true`, and no tool reaches a handler that writes. Held by a test over the tool list.
+- [ ] Every tool carries `read_only_hint = true` (a test over the tool list). Every tool reads only through `ReadOnly`, whose routes are the page's own GETs, held to the route table. An agent's read changes nothing a person entered or sees as theirs: journal, orders, settings, watchlist, notifications' read marks. A filing summary's cache (`/api/filings/enrich`) is the page's own read memo, the same as when the page asks.
+- [ ] A SEDAR+ filing's document text is answered by the Disclosures tool on the made-up book (a server test).
+- [ ] The Notifications tool, read twice, leaves the list, its unread count and its read marks as they were (a server test).
 - [ ] `disclosures-mcp` is gone from the workspace, the image, the release archives and every document. The release's archive list and the Dockerfile test are updated.
+- [ ] **The version is MINOR** (a visible change: a shipped program and its manifest go). The release notes say they're gone and name, tool by tool, where each of their reads now is on Bagholder's agents' server.
 - [ ] An agent, through the stand-in MCP client, reads a holding's news, filings and short interest on the made-up book.
 - [ ] Capacity: the new tools' reads are the page's own, so no new cost. The capacity test still passes.
