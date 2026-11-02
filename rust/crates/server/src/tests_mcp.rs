@@ -81,10 +81,21 @@ fn every_route_the_read_client_names_is_a_get() {
 #[test]
 fn every_read_the_page_makes_is_an_agent_tool() {
     // not data an agent reads, each with why
-    const NOT_DATA: [(&str, &str); 3] = [
+    const NOT_DATA: [(&str, &str); 14] = [
         ("/api/agents/log", "the agents' own panel: what agents read, for the person"),
         ("/api/figures/trades", "the CSV export: the trades tool's rows, whole"),
         ("/api/watch", "the CSV import's folder: where the person's files come in, not what the book holds"),
+        ("/api/filings/doc", "a filing's document as the page opens it: answered to agents as `filing_text`"),
+        ("/api/events", "the page's live feed of the documents the tools read"),
+        ("/api/notifications/stream", "the page's live feed of the notifications the `notifications` tool reads"),
+        ("/api/login/stream", "the sign-in browser's frames, live: the page itself"),
+        ("/api/login/frame", "the sign-in browser's frame: the page itself"),
+        ("/", "the page itself"),
+        ("/index.html", "the page itself"),
+        ("/assets/{*path}", "the page's own files"),
+        ("/favicon.png", "the page's own files"),
+        ("/favicon.ico", "the page's own files"),
+        ("/sw.js", "the page's own files"),
     ];
     let tools = include_str!("agents/tools.rs");
     let named = routes();
@@ -96,6 +107,27 @@ fn every_read_the_page_makes_is_an_agent_tool() {
         let read = matches!(e.path, "/api/view" | "/api/status" | "/api/figures/detail" | "/api/transactions") || tools.contains(&format!("r.page(\"{}\"", e.path));
         assert!(read, "{} is named and no agent tool reads it", e.path);
     }
+    // and each `GET` a router adds by hand, outside the route table: held to the same rule
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/http");
+    let by_hand = regex::Regex::new(r#"\.route\("([^"]+)",\s*(?:axum::routing::)?get\("#).unwrap();
+    let mut found = 0;
+    for f in std::fs::read_dir(&dir).unwrap() {
+        let f = f.unwrap().path();
+        if f.extension().is_none_or(|e| e != "rs") {
+            continue;
+        }
+        let src = std::fs::read_to_string(&f).unwrap();
+        for c in by_hand.captures_iter(&src) {
+            let path = &c[1];
+            found += 1;
+            if NOT_DATA.iter().any(|(p, _)| *p == path) {
+                continue;
+            }
+            assert!(named.contains(&path), "{path} ({}) is a GET added by hand that the agents' read client does not name", f.display());
+            assert!(tools.contains(&format!("r.page(\"{path}\"")) || matches!(path, "/api/view" | "/api/status" | "/api/figures/detail" | "/api/transactions"), "{path} is named and no agent tool reads it");
+        }
+    }
+    assert!(found >= 10, "the scan finds the routes added by hand: {found}");
     // every document the page subscribes to, as `views` builds them
     let views = include_str!("views.rs");
     let list = regex::Regex::new(r#"if !matches!\(kind, ([^)]*)\)"#).unwrap();
