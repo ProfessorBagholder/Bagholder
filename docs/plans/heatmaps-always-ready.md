@@ -29,21 +29,22 @@ Read 2026-11-02.
 
 ## Approach
 
-- **At start:** a loop on the app's own waits (`App::wait`, listed in `TIMED_WAITS` with its reason). Each source is read when it's due (`source_due_in`, unchanged), at most every 30 minutes, and on start after the book opens. `universe_shown` stays as the page's way to wake it early. The loop stops with the app.
+- **At start:** a loop on the app's own waits (`App::wait`, listed in `TIMED_WAITS` with its reason). Each source is read when it's due (`source_due_in`, unchanged), at most every 30 minutes, and as the app starts, book open or not: the universes read nothing from the book, so an install whose sign-in waits never waits on it. `universe_shown` stays as the page's way to wake it early. The loop stops with the app.
 - **Canada:**
   - The constituents come from `getIndexConstituents` as now.
   - Prices and changes come from one `getQuoteForSymbols` request with every constituent's symbol.
-  - Each row's sector is the one stored for that symbol from an earlier read. A constituent with none stored, or one new to the index, is asked `getQuoteBySymbol` for its sector, paced as now. After the first read that's none, or the few that joined the index.
+  - Each row's sector is the one stored for that symbol from an earlier read. A constituent with none stored, one new to the index, or one whose stored sector is older than `UNIVERSE_SECTOR_STALE_SEC` (30 days, a named constant: TMX reclassifies a company's sector rarely, and a month bounds how long a reclassification stays wrong) is asked `getQuoteBySymbol` for its sector, paced as now. That's a few single calls a day at most, spread out, never the 60 at once after the first read.
 - **The empty state:** while a first read is under way, the heatmap says `Reading the S&P/TSX 60…` (or the screener's name); a failed read says why, as now.
 - **Cost:** two Canada requests and one Nasdaq request every 30 minutes while the app runs. The idle-cost test (`TIMED_WAITS`) gains this one loop, with its reason.
 
 ## Acceptance criteria
 
-- [ ] A started app with no page open reads each source once its book is open. Held by a test with the stand-in source (`fetch_universes`' test seam), counting the reads with no page watching.
+- [ ] A started app with no page open reads each source, book open or not. Held by a test with the stand-in source (`fetch_universes`' test seam), counting the reads with no page watching.
 - [ ] Refreshed at most every 30 minutes, and not again within that while rows are fresh. A test on the clock seam.
 - [ ] The Canada read makes one quote request for all constituents, and asks a sector only for symbols with none stored. Tests with recorded TMX answers:
   - the batch's answer is the one recorded here, made up and cut to its parsed part;
-  - the second read asks no sector.
+  - the second read asks no sector;
+  - a stored sector older than `UNIVERSE_SECTOR_STALE_SEC` is asked again, and one younger is not (a test on the clock seam).
 - [ ] The empty state reads `Reading …` while a first read is under way. A page unit test.
 - [ ] `TIMED_WAITS` lists the loop; `test_no_wait_on_a_clock_that_is_not_accounted_for` passes.
 - [ ] Capacity: the idle cost is unchanged apart from the listed loop.
