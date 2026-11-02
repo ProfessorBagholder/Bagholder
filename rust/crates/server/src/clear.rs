@@ -78,6 +78,8 @@ pub const CACHE_TABLES: &[(&str, Place)] = &[
     ("interlisted", Place::Of(Kind::Market)),
     // the reads that failed and rest before they are asked again (migration 7)
     ("read_failures", Place::Of(Kind::Market)),
+    // the Canadian index's sectors, each asked again a month on (migration 10)
+    ("universe_sectors", Place::Of(Kind::Market)),
     // the tickers the filings were kept under before migration 6, for carrying the
     // book's told marks once
     ("meta", Place::Meta),
