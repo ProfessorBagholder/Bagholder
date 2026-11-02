@@ -861,14 +861,14 @@
   }
  },
  {
-  "name": "worst trade: a covered call's -1,940 is never a counted trade",
+  "name": "worst trade: a covered call's -1,440 is never a counted trade",
   "working": [
    "b1 buys 100 U at 50 (-5000); t1 writes 1 C1 (strike 55) for 60 on 2026-03-03; read states 100 U, covered, against b1",
-   "U rises to 80; t2 buys C1 back for 2000 on 2026-04-01: call P&L = 60 - 2000 = -1940 (the book's only losing row)",
+   "U rises to 80; t2 buys C1 back for 1500 on 2026-04-01: call P&L = 60 - 1500 = -1440 (the book's only losing row)",
    "s1 sells 100 U at 80 (+8000) the same day after the buy-back: shares P&L = 3000",
-   "position = 3000 - 1940 = 1060.00",
+   "position = 3000 - 1440 = 1560.00",
    "v1/v2: an unrelated VVV trade, 100 at 10 then at 30, +2000.00",
-   "stats: 2 counted trades (1060, 2000), 2 wins, 0 losses; minimum counted P&L = 1060.00 (worst trade is b1's position), never -1940"
+   "stats: 2 counted trades (1560, 2000), 2 wins, 0 losses; minimum counted P&L = 1560.00 (worst trade is b1's position), never -1440"
   ],
   "book": {
    "today": "2026-08-01",
@@ -943,7 +943,7 @@
      "kind": "buy",
      "instrument": "C1",
      "qty": "1",
-     "cash": "-2000"
+     "cash": "-1500"
     },
     {
      "id": "s1",
@@ -1001,14 +1001,14 @@
      "calls": [
       "t1"
      ],
-     "pnl": "1060.00"
+     "pnl": "1560.00"
     }
    ],
    "linked_to_nothing": [],
    "counted": [
     {
      "opened_by": "b1",
-     "pnl": "1060.00"
+     "pnl": "1560.00"
     },
     {
      "opened_by": "v1",
