@@ -66,6 +66,14 @@ pub struct Trade {
     /// What the Side column reads (`side_label`): `Long`, `Short`, `Covered call`,
     /// `Uncovered call`, `Secured put` or `Uncovered put`.
     pub side_label: String,
+    /// A covered call: the shares' trade it was written against, whose position
+    /// it is a leg of and whose figures count it (SPEC.md trade-76).
+    pub written_against: Option<Leg>,
+    /// A shares' trade: the covered calls written against it, and the position's
+    /// P&L, its own and theirs, which the statistics count. None without calls.
+    pub calls_written: Vec<Leg>,
+    pub position_pnl: Option<Fig<Dec>>,
+    pub position_pnl_cad: Option<Fig<Dec>>,
     pub qty: Fig<Dec>,
     pub entry: Fig<Dec>,
     /// None before the first sale.
@@ -84,6 +92,20 @@ pub struct Trade {
     pub grade: String,
     pub thesis: String,
     pub tags: Vec<String>,
+}
+
+/// One trade of a covered-call position, as the other names it: its id, symbol,
+/// status and P&L, and for a call the contracts covered of those written.
+#[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]
+#[diff(key = id)]
+#[serde(rename_all = "camelCase")]
+pub struct Leg {
+    pub id: String,
+    pub symbol: String,
+    pub status: Status,
+    pub pnl: Fig<Dec>,
+    pub covered: Option<Dec>,
+    pub of: Option<Dec>,
 }
 
 /// What a short option was held against when it was written (SPEC.md §2 Trade):
@@ -126,6 +148,11 @@ pub struct Position {
     /// option's coverage: the holding's page is its trade's.
     pub side_label: String,
     pub coverage: Option<Coverage>,
+    /// Its trade's covered-call position, as `Trade` says it.
+    pub written_against: Option<Leg>,
+    pub calls_written: Vec<Leg>,
+    pub position_pnl: Option<Fig<Dec>>,
+    pub position_pnl_cad: Option<Fig<Dec>>,
     pub qty: Fig<Dec>,
     pub avg: Fig<Dec>,
     /// What the units held cost (long) or brought in (short), as Wealthsimple

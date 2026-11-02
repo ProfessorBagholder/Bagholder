@@ -313,6 +313,16 @@
         <h4>{symText(trade.symbol)}</h4>
         <div class="dim" style="font-size:11.5px;margin-top:2px">{trade.name || trade.symbol}{trade.exchange ? ' · ' + trade.exchange + ': ' + listingTicker(trade) : ''}{trade.flags?.includes('entered') ? ' · Entered by you' : ''}</div>
         {#if trade.sideLabel}<div class="dim" style="font-size:11.5px;margin-top:2px" data-testid="trade-side">{coverageText(trade)}</div>{/if}
+        {#if trade.writtenAgainst}
+          <!-- a covered call is a leg of its shares' position, which the statistics count -->
+          <div class="dim" style="font-size:11.5px;margin-top:2px" data-testid="written-against">Written against <a href={'#trades/' + encodeURIComponent(trade.writtenAgainst.id)}>{symText(trade.writtenAgainst.symbol)} shares</a>, whose position counts it</div>
+        {/if}
+        {#if trade.callsWritten?.length && trade.positionPnl}
+          <div class="dim" style="font-size:11.5px;margin-top:2px" data-testid="calls-written">
+            With the calls written against it: <span style="font-weight:500;color:{color(trade.positionPnl)}">{money(trade.positionPnl, trade.currency)}</span> ·
+            {#each trade.callsWritten as c, i (c.id)}{i ? ', ' : ''}<a href={'#trades/' + encodeURIComponent(c.id)}>{symText(c.symbol)}</a> {money(c.pnl, trade.currency)}{/each}
+          </div>
+        {/if}
       </div>
       <div style="margin-left:auto;display:flex;align-items:center;gap:12px">
         {@render tkbtns()}

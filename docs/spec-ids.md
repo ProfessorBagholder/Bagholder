@@ -101,6 +101,8 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `trade-73`
 - `trade-74`
 - `trade-75`
+- `trade-76`
+- `trade-77`
 - `what-you-enter-1`
 - `what-you-enter-2`
 - `what-you-enter-3`

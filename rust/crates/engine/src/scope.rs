@@ -624,12 +624,23 @@ fn ratio_of(part: &Fig<Money>, whole: &Fig<Money>) -> Fig<Option<Ratio>> {
     crate::gap::both(part.clone(), whole.clone(), |p, w| Ok(money_ratio(p, w)))
 }
 
-/// The closed-trade statistics over `closed`, and the realized P&L over `parts`.
-fn kpi(closed: &[&TradeFig], parts: &[&Fig<Money>]) -> Kpi {
+/// A counted trade's result: the sign of the P&L the statistics count for it,
+/// in its own currency, as `result` reads a trade's own.
+fn counted_result(c: &crate::coverage::Counted) -> Option<Outcome> {
+    if c.trade.status == TradeStatus::Open || c.pnl_cad.is_err() {
+        return None;
+    }
+    sign_of(c.pnl.as_ref().ok()?)
+}
+
+/// The closed-trade statistics over `closed`, each as the statistics count it
+/// (a covered call inside its shares' position, `crate::coverage::counted`), and
+/// the realized P&L over `parts`.
+fn kpi(closed: &[crate::coverage::Counted], parts: &[&Fig<Money>]) -> Kpi {
     let trades = closed;
     // each with a result, and the CAD amount its sums take as it stands: a win
     // the currency turned negative in CAD stays negative in the gross wins
-    let stated: Vec<(&TradeFig, Money, Outcome)> = trades.iter().filter_map(|t| Some((*t, *t.pnl_cad.as_ref().ok()?, result(t)?))).collect();
+    let stated: Vec<(&TradeFig, Money, Outcome)> = trades.iter().filter_map(|c| Some((c.trade, *c.pnl_cad.as_ref().ok()?, counted_result(c)?))).collect();
     let wins: Vec<Money> = stated.iter().filter(|(_, _, o)| *o == Outcome::Win).map(|(_, p, _)| *p).collect();
     let losses: Vec<Money> = stated.iter().filter(|(_, _, o)| *o == Outcome::Loss).map(|(_, p, _)| *p).collect();
     let gross_win = money_sum(wins.iter().copied());
@@ -694,7 +705,9 @@ pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTr
     let in_scope: Vec<&TradeFig> = trades.iter().filter(|t| trade_matches(f, inputs, t)).collect();
     // closed trades whose close is in the dates: what the statistics count
     let closed: Vec<&TradeFig> = in_scope.iter().copied().filter(|t| closed_in(f, today, t)).collect();
-    let stated: Vec<&&TradeFig> = closed.iter().filter(|t| result(t).is_some()).collect();
+    // what the statistics count: a covered call inside its shares' position
+    let counted = crate::coverage::counted(&closed, trades);
+    let stated: Vec<&crate::coverage::Counted> = counted.iter().filter(|c| counted_result(c).is_some()).collect();
     // each sale in the dates, of an open or a closed trade, on its own day
     let parts: Vec<(&TradeFig, &crate::trades::Realized)> = in_scope.iter().flat_map(|t| t.realized.iter().filter(|r| f.in_dates(today, r.day)).map(move |r| (*t, r))).collect();
 
@@ -717,11 +730,12 @@ pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTr
             by.entry(underlying_of(inputs, t.instrument)).or_default().0.push(*p);
         }
     }
-    for t in &stated {
+    for c in &stated {
+        let t = c.trade;
         let e = by.entry(underlying_of(inputs, t.instrument)).or_default();
-        e.1 += usize::from(result(t) == Some(Outcome::Win));
+        e.1 += usize::from(counted_result(c) == Some(Outcome::Win));
         e.2 += t.hold_days;
-        e.3 += t.slices.len();
+        e.3 += t.slices.len() + c.calls.iter().map(|k| k.slices.len()).sum::<usize>();
         e.4.push(t.key.clone());
         e.5 += 1;
     }
@@ -738,8 +752,8 @@ pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTr
     let grades = [Grade::A, Grade::B, Grade::C, Grade::F]
         .into_iter()
         .map(|g| {
-            let rows: Vec<&&&TradeFig> = stated.iter().filter(|t| t.journal.grade == Some(g)).collect();
-            GradeBucket { grade: g, count: rows.len(), pnl: money_sum(rows.iter().map(|t| *t.pnl_cad.as_ref().expect("stated"))), trades: rows.iter().map(|t| t.key.clone()).collect() }
+            let rows: Vec<&&crate::coverage::Counted> = stated.iter().filter(|c| c.trade.journal.grade == Some(g)).collect();
+            GradeBucket { grade: g, count: rows.len(), pnl: money_sum(rows.iter().map(|c| *c.pnl_cad.as_ref().expect("stated"))), trades: rows.iter().map(|c| c.trade.key.clone()).collect() }
         })
         .collect();
     let ungraded = closed.iter().filter(|t| t.journal.grade.is_none()).count();
@@ -761,7 +775,7 @@ pub fn dashboard(f: &Filters, inputs: &Inputs, trades: &[TradeFig], equity: &BTr
     let pnl_curve = pnl_curve(&parts.iter().map(|(_, r)| *r).collect::<Vec<_>>());
     Dashboard {
         pnl_curve,
-        kpi: kpi(&closed, &parts.iter().map(|(_, r)| &r.pnl_cad).collect::<Vec<_>>()),
+        kpi: kpi(&counted, &parts.iter().map(|(_, r)| &r.pnl_cad).collect::<Vec<_>>()),
         monthly,
         by_underlying,
         grades,

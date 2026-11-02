@@ -206,6 +206,10 @@ pub(crate) fn trade(inputs: &Inputs, names: &Names, t: &TradeFig, position: Opti
         direction: if t.direction == Direction::Short { "short" } else { "long" }.into(),
         coverage: t.coverage.as_ref().map(coverage),
         side_label: side_label(t),
+        written_against: None,
+        calls_written: Vec::new(),
+        position_pnl: None,
+        position_pnl_cad: None,
         qty: fig_dec(&t.qty),
         entry: fig_dec(&t.entry),
         exit: t.exit.as_ref().map(fig_dec),
@@ -245,7 +249,7 @@ fn side_label(t: &TradeFig) -> String {
 fn coverage(c: &bagholder_engine::coverage::Coverage) -> Coverage {
     use bagholder_engine::coverage::Coverage as C;
     match c {
-        C::Read { right, covered, of } => Coverage { right: right.as_str().into(), covered: Some(Dec(*covered)), of: Some(Dec(*of)), untold: None, whole: c.whole() },
+        C::Read { right, covered, of, .. } => Coverage { right: right.as_str().into(), covered: Some(Dec(*covered)), of: Some(Dec(*of)), untold: None, whole: c.whole() },
         C::Waiting { right, day: Some(day) } => Coverage { right: right.as_str().into(), covered: None, of: None, untold: Some(format!("coverage waits on the positions read of {day}")), whole: false },
         C::Waiting { right, day: None } => Coverage { right: right.as_str().into(), covered: None, of: None, untold: Some("coverage waits on the contract's size".into()), whole: false },
         C::Unclear { right } => Coverage { right: right.as_str().into(), covered: None, of: None, untold: Some("the positions read can't tell whether its cash was already held for this put".into()), whole: false },
@@ -276,6 +280,10 @@ pub(crate) fn position(inputs: &Inputs, names: &Names, p: &PositionFig, trade: S
         short: p.direction == Direction::Short,
         side_label: if p.direction == Direction::Short { "Short" } else { "Long" }.into(),
         coverage: None,
+        written_against: None,
+        calls_written: Vec::new(),
+        position_pnl: None,
+        position_pnl_cad: None,
         qty: fig_dec(&p.qty),
         avg: fig_dec(&p.avg),
         cost: fig_money(&p.book),
@@ -452,6 +460,10 @@ pub struct Links {
     pub trade_of: BTreeMap<String, String>,
     /// Each holding's trade's Side and coverage, by the holding's id.
     pub side_of: BTreeMap<String, (String, Option<Coverage>)>,
+    /// Each covered call's shares' trade, by the call's id; each shares' trade's
+    /// calls and position P&L, by its id (`bagholder_engine::coverage::positions`).
+    pub written_against: BTreeMap<String, Leg>,
+    pub positions: BTreeMap<String, (Vec<Leg>, Fig<Dec>, Fig<Dec>)>,
 }
 
 pub fn links(engine: &Engine) -> Links {
@@ -473,12 +485,34 @@ pub fn links(engine: &Engine) -> Links {
             }
         }
     }
-    Links { holding_of, trade_of, side_of }
+    let mut written_against = BTreeMap::new();
+    let mut positions = BTreeMap::new();
+    let inputs = engine.inputs();
+    let leg = |t: &TradeFig| {
+        let part = bagholder_engine::coverage::written_against(t);
+        Leg { id: trade_id(t), symbol: shown(inputs, t.instrument).symbol, status: if t.status == TradeStatus::Closed { Status::Closed } else { Status::Open }, pnl: fig_money(&t.pnl), covered: part.map(|(_, c, _)| Dec(c)), of: part.map(|(_, _, o)| Dec(o)) }
+    };
+    for (_, c) in bagholder_engine::coverage::positions(figs.trades) {
+        let shares = leg(c.trade);
+        let calls: Vec<Leg> = c.calls.iter().map(|t| leg(t)).collect();
+        for call in &calls {
+            written_against.insert(call.id.clone(), shares.clone());
+        }
+        positions.insert(shares.id.clone(), (calls, fig_money(&c.pnl), fig_money(&c.pnl_cad)));
+    }
+    Links { holding_of, trade_of, side_of, written_against, positions }
 }
 
 /// A trade's wire row, its holding linked while it is open.
 pub fn trade_row(inputs: &Inputs, names: &Names, links: &Links, t: &TradeFig) -> Trade {
-    trade(inputs, names, t, links.holding_of.get(&trade_id(t)).cloned().filter(|_| t.status != TradeStatus::Closed))
+    let mut row = trade(inputs, names, t, links.holding_of.get(&trade_id(t)).cloned().filter(|_| t.status != TradeStatus::Closed));
+    row.written_against = links.written_against.get(&row.id).cloned();
+    if let Some((calls, pnl, pnl_cad)) = links.positions.get(&row.id) {
+        row.calls_written = calls.clone();
+        row.position_pnl = Some(pnl.clone());
+        row.position_pnl_cad = Some(pnl_cad.clone());
+    }
+    row
 }
 
 /// A holding's wire row, its trade linked.
@@ -487,6 +521,14 @@ pub fn position_row(inputs: &Inputs, names: &Names, links: &Links, p: &PositionF
     if let Some((side, coverage)) = links.side_of.get(&row.id) {
         row.side_label = side.clone();
         row.coverage = coverage.clone();
+    }
+    if let Some(trade) = links.trade_of.get(&row.id) {
+        row.written_against = links.written_against.get(trade).cloned();
+        if let Some((calls, pnl, pnl_cad)) = links.positions.get(trade) {
+            row.calls_written = calls.clone();
+            row.position_pnl = Some(pnl.clone());
+            row.position_pnl_cad = Some(pnl_cad.clone());
+        }
     }
     row
 }
