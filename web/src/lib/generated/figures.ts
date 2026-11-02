@@ -46,7 +46,17 @@ coverage: Coverage | null,
  * What the Side column reads (`side_label`): `Long`, `Short`, `Covered call`,
  * `Uncovered call`, `Secured put` or `Uncovered put`.
  */
-sideLabel: string, qty: Fig<Dec>, entry: Fig<Dec>, 
+sideLabel: string, 
+/**
+ * A covered call: the shares' trade it was written against, whose position
+ * it is a leg of and whose figures count it (SPEC.md trade-76).
+ */
+writtenAgainst: Leg | null, 
+/**
+ * A shares' trade: the covered calls written against it, and the position's
+ * P&L, its own and theirs, which the statistics count. None without calls.
+ */
+callsWritten: Array<Leg>, positionPnl: Fig<Dec> | null, positionPnlCad: Fig<Dec> | null, qty: Fig<Dec>, entry: Fig<Dec>, 
 /**
  * None before the first sale.
  */
@@ -79,6 +89,8 @@ untold: string | null,
  */
 whole: boolean, };
 
+export type Leg = { id: string, symbol: string, status: Status, pnl: Fig<Dec>, covered: Dec | null, of: Dec | null, };
+
 export type Position = { id: string, 
 /**
  * The trade it is, whose journal it shows.
@@ -88,7 +100,11 @@ trade: string, symbol: string, underlying: string, name: string, exchange: strin
  * What its trade's Side column reads (`Trade::side_label`), and a short
  * option's coverage: the holding's page is its trade's.
  */
-sideLabel: string, coverage: Coverage | null, qty: Fig<Dec>, avg: Fig<Dec>, 
+sideLabel: string, coverage: Coverage | null, 
+/**
+ * Its trade's covered-call position, as `Trade` says it.
+ */
+writtenAgainst: Leg | null, callsWritten: Array<Leg>, positionPnl: Fig<Dec> | null, positionPnlCad: Fig<Dec> | null, qty: Fig<Dec>, avg: Fig<Dec>, 
 /**
  * What the units held cost (long) or brought in (short), as Wealthsimple
  * states it.

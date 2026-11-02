@@ -736,8 +736,8 @@ impl Engine {
     pub fn apply(&mut self, change: Change) -> Moved {
         // a contract's coverage reads other trades and a past day's positions read:
         // judged again whatever changed, and a trade whose coverage moved is said
-        // a coverage reads only written options, their terms and the broker's
-        // reads: an account is judged again only where a change moved one of those
+        // a coverage reads only written options, the shares' trades they were
+        // written against, their terms and the broker's reads: an account is judged again only where a change moved one of those
         let broker = if let Change::Broker(a, _) = &change { Some(*a) } else { None };
         let mut moved = self.apply_change(change);
         let mut touched: BTreeSet<AccountId> = broker.into_iter().collect();
@@ -745,6 +745,11 @@ impl Engine {
             let Entity::Trade(k) = e else { continue };
             match self.trades.iter().find(|t| &t.key == k) {
                 Some(t) if crate::coverage::written(t) => {
+                    touched.insert(t.account);
+                }
+                // a shares' trade moved where calls are written: what they were
+                // written against may have moved with it
+                Some(t) if self.coverage.values().any(|(a, _)| *a == t.account) => {
                     touched.insert(t.account);
                 }
                 _ => {

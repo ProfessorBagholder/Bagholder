@@ -28,8 +28,11 @@ use crate::trades::{TradeFig, TradeKey};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Coverage {
     /// Every contract was judged: `covered` of `of` contracts were covered (a
-    /// call) or secured (a put).
-    Read { right: OptionRight, covered: Dec, of: Dec },
+    /// call) or secured (a put). A covered call's shares' trade, the one open in
+    /// its account at that day's close (`against`): none where the shares came
+    /// with no row the journal holds, or its contracts were written against
+    /// different ones.
+    Read { right: OptionRight, covered: Dec, of: Dec, against: Option<TradeKey> },
     /// Not every contract can be judged yet: the opening day's read is not in
     /// (`day`), or the contract's size is not stated (no day).
     Waiting { right: OptionRight, day: Option<Date> },
@@ -84,8 +87,9 @@ enum Holding {
 /// Each short option trade's coverage, judged in the order the contracts were
 /// written, account by account.
 pub fn coverages<'a>(inputs: &Inputs, matched: &Matched, trades: impl IntoIterator<Item = &'a TradeFig>) -> BTreeMap<TradeKey, Coverage> {
+    let trades: Vec<&TradeFig> = trades.into_iter().collect();
     let mut openings: Vec<Opening> = Vec::new();
-    for t in trades.into_iter().filter(|t| written(t)) {
+    for t in trades.iter().copied().filter(|t| written(t)) {
         let mut by: BTreeMap<(TransactionId, InstrumentId), Opening> = BTreeMap::new();
         let mut add = |instrument: InstrumentId, id: &TransactionId, day: Date, at: Option<Timestamp>, qty: Dec, premium: Option<Dec>, closed: Option<Date>| {
             let o = by.entry((id.clone(), instrument)).or_insert_with(|| Opening { trade: t.key.clone(), account: t.account, instrument, by: id.clone(), day, at, qty: Dec::ZERO, premium: Some(Dec::ZERO), pieces: Vec::new() });
@@ -112,6 +116,8 @@ pub fn coverages<'a>(inputs: &Inputs, matched: &Matched, trades: impl IntoIterat
     // per trade: its right, the contracts covered and written, the first opening
     // that could not be judged, and whether a put's cash could not tell
     let mut per: BTreeMap<TradeKey, (OptionRight, Dec, Dec, Option<Option<Date>>, bool)> = BTreeMap::new();
+    // each covered call's shares' trade: none once two of its openings disagree
+    let mut against: BTreeMap<TradeKey, Option<TradeKey>> = BTreeMap::new();
     let mut holding: BTreeMap<AccountId, Vec<Held>> = BTreeMap::new();
     for o in &openings {
         let Some(terms) = inputs.ledger.instruments.get(&o.instrument).and_then(|i| i.terms.as_ref()) else { continue };
@@ -165,6 +171,20 @@ pub fn coverages<'a>(inputs: &Inputs, matched: &Matched, trades: impl IntoIterat
             o.qty
         };
         entry.1 = entry.1.checked_add(covered).unwrap_or(entry.1);
+        if terms.right == OptionRight::Call && covered.is_positive() {
+            // the shares' trade open in the account at that day's close: one round
+            // trip per account and instrument is open at a time (trade-1)
+            let shares = trades.iter().find(|s| s.account == o.account && s.direction == Direction::Long && s.instruments.contains(&terms.underlying) && s.opened_on <= o.day && s.closed_on.is_none_or(|c| c > o.day)).map(|s| s.key.clone());
+            match against.get(&o.trade) {
+                None => {
+                    against.insert(o.trade.clone(), shares);
+                }
+                Some(was) if *was != shares => {
+                    against.insert(o.trade.clone(), None);
+                }
+                Some(_) => {}
+            }
+        }
         // each piece holds its share of what the covered contracts hold, until it closed
         for (qty, until) in &o.pieces {
             let share = covered.mul_div_rounded(*qty, o.qty, 8, Rounding::HalfEven).unwrap_or(Dec::ZERO);
@@ -178,7 +198,7 @@ pub fn coverages<'a>(inputs: &Inputs, matched: &Matched, trades: impl IntoIterat
             let c = match (waiting, unclear) {
                 (Some(day), _) => Coverage::Waiting { right, day },
                 (None, true) => Coverage::Unclear { right },
-                (None, false) => Coverage::Read { right, covered, of },
+                (None, false) => Coverage::Read { right, covered, of, against: against.remove(&k).flatten() },
             };
             (k, c)
         })
@@ -208,4 +228,109 @@ pub fn days_waited(trades: &[TradeFig]) -> impl Iterator<Item = Date> + '_ {
         Some(Coverage::Waiting { day: Some(d), .. }) => Some(*d),
         _ => None,
     })
+}
+
+/// The shares' trade a covered call was written against, and the part of the
+/// call's contracts covered (`covered` of `of`).
+pub fn written_against(t: &TradeFig) -> Option<(&TradeKey, Dec, Dec)> {
+    match &t.coverage {
+        Some(Coverage::Read { right: OptionRight::Call, covered, of, against: Some(k) }) if covered.is_positive() && of.is_positive() => Some((k, *covered, *of)),
+        _ => None,
+    }
+}
+
+/// A trade's P&L as the statistics count it (SPEC.md trade-76): a covered call
+/// counts inside its shares' position, never as a trade of its own; its
+/// uncovered part, if any, stays its own.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Counted<'a> {
+    pub trade: &'a TradeFig,
+    pub pnl: crate::gap::Fig<bagholder_core::Money>,
+    pub pnl_cad: crate::gap::Fig<bagholder_core::Money>,
+    /// The covered calls written against it, when it is a shares' trade.
+    pub calls: Vec<&'a TradeFig>,
+}
+
+/// `m` × `part` ÷ `whole`, to the cent.
+fn part_of(m: &crate::gap::Fig<bagholder_core::Money>, part: Dec, whole: Dec) -> crate::gap::Fig<bagholder_core::Money> {
+    let m = m.clone()?;
+    Ok(bagholder_core::Money::new(m.amount.mul_div_rounded(part, whole, 2, Rounding::HalfEven)?, m.currency))
+}
+
+fn add(a: crate::gap::Fig<bagholder_core::Money>, b: crate::gap::Fig<bagholder_core::Money>) -> crate::gap::Fig<bagholder_core::Money> {
+    crate::gap::both(a, b, |x, y| Ok(x.checked_add(y)?))
+}
+
+/// Each trade of `counted_from` as the statistics count it, with `all` the whole
+/// book's trades (a covered call outside the filters still counts in its shares'
+/// position). A wholly covered call linked to its shares is left out: it counts
+/// there. A call's P&L adds to its shares' in the shares' currency where they
+/// share it, as a covered call's does (the same underlying); in CAD always.
+pub fn counted<'a>(counted_from: &[&'a TradeFig], all: &'a [TradeFig]) -> Vec<Counted<'a>> {
+    let mut calls: BTreeMap<&TradeKey, Vec<&'a TradeFig>> = BTreeMap::new();
+    for t in all {
+        if let Some((k, _, _)) = written_against(t) {
+            calls.entry(k).or_default().push(t);
+        }
+    }
+    let shares_known: std::collections::BTreeSet<&TradeKey> = all.iter().map(|t| &t.key).collect();
+    let mut out = Vec::with_capacity(counted_from.len());
+    for t in counted_from.iter().copied() {
+        let (mut pnl, mut pnl_cad) = (t.pnl.clone(), t.pnl_cad.clone());
+        if let Some((k, covered, of)) = written_against(t) {
+            if shares_known.contains(k) {
+                if covered == of {
+                    continue;
+                }
+                // the uncovered contracts stay a trade of their own
+                let left = of.checked_sub(covered).unwrap_or(Dec::ZERO);
+                pnl = part_of(&t.pnl, left, of);
+                pnl_cad = part_of(&t.pnl_cad, left, of);
+            }
+        }
+        let mine: Vec<&'a TradeFig> = calls.get(&t.key).cloned().unwrap_or_default();
+        for c in &mine {
+            let (_, covered, of) = written_against(c).expect("listed by it");
+            if c.currency == t.currency {
+                pnl = add(pnl, part_of(&c.pnl, covered, of));
+            }
+            pnl_cad = add(pnl_cad, part_of(&c.pnl_cad, covered, of));
+        }
+        out.push(Counted { trade: t, pnl, pnl_cad, calls: mine });
+    }
+    out
+}
+
+/// Each shares' trade with covered calls written against it: the calls, and the
+/// position's P&L, its own and theirs as `counted` adds them. While the shares
+/// are held, their own is what they realized so far and what the holding's
+/// units would make now (`holdings`, its unrealized P&L), so a call bought back
+/// at a loss while they rose never reads as the position's loss. Only those trades.
+pub fn positions<'a>(all: &'a [TradeFig], holdings: &[crate::positions::PositionFig]) -> BTreeMap<&'a TradeKey, Counted<'a>> {
+    let mut calls: BTreeMap<&TradeKey, Vec<&TradeFig>> = BTreeMap::new();
+    for t in all {
+        if let Some((k, _, _)) = written_against(t) {
+            calls.entry(k).or_default().push(t);
+        }
+    }
+    let mut out = BTreeMap::new();
+    for t in all {
+        let Some(mine) = calls.remove(&t.key) else { continue };
+        let (mut pnl, mut pnl_cad) = (t.pnl.clone(), t.pnl_cad.clone());
+        if let TradeKey::Trip(k) = &t.key {
+            if let Some(h) = holdings.iter().find(|h| h.key.as_ref() == Some(k)) {
+                pnl = add(pnl, h.unrealized.clone());
+                pnl_cad = add(pnl_cad, h.unrealized_cad.clone());
+            }
+        }
+        for c in &mine {
+            let (_, covered, of) = written_against(c).expect("listed by it");
+            if c.currency == t.currency {
+                pnl = add(pnl, part_of(&c.pnl, covered, of));
+            }
+            pnl_cad = add(pnl_cad, part_of(&c.pnl_cad, covered, of));
+        }
+        out.insert(&t.key, Counted { trade: t, pnl, pnl_cad, calls: mine });
+    }
+    out
 }

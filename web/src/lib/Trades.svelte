@@ -76,7 +76,7 @@
                 <td style="text-align:right" class="dim">—</td>
                 <td style="text-align:right" class="dim">{waiting(t.pnl).replace(/^— ?/, '')}</td>
               {:else}
-                <td style="text-align:right;font-weight:500;color:{color(t.pnl)}">{money(t.pnl, t.currency)}</td>
+                <td style="text-align:right;font-weight:500;color:{color(t.pnl)}">{money(t.pnl, t.currency)}{#if t.positionPnl}<div class="position-pnl" style="font-size:10.5px;font-weight:400;color:{color(t.positionPnl)}">with calls {money(t.positionPnl, t.currency)}</div>{/if}</td>
                 <td style="text-align:right;color:{color(t.pnl)}">{pct(t.pnlPct)}</td>
               {/if}
               <td style="text-align:right" class="dim">{hold(t.holdDays)}</td>

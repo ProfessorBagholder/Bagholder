@@ -53,7 +53,7 @@ test('each trade: a positive quantity, Hold the calendar days it spans, and its 
   }
 })
 
-test("the Dashboard's Realized P&L is the trades' realized P&L in CAD, and its counts are the closed trades'", async ({ request }) => {
+test("the Dashboard's Realized P&L is the trades' realized P&L in CAD, and its counts are the closed trades', a covered call inside its shares' position", async ({ request }) => {
   const m = await figures(request)
   const k = m.kpi
   const trades = m.trades as any[]
@@ -61,7 +61,12 @@ test("the Dashboard's Realized P&L is the trades' realized P&L in CAD, and its c
   // every sale counts, open trades' partial sales included; a part that waits is left out and counted
   expect(k.realizedLeftOut).toBe(trades.filter((t) => waits(t.pnlCad)).length)
   expect(text(exact(k.realized))).toBe(text(stated.reduce((s, t) => add(s, exact(t.pnlCad)), ZERO)))
-  const closed = trades.filter((t) => t.status === 'closed' && !waits(t.pnlCad)).map((t) => exact(t.pnlCad).units)
+  // SPEC.md trade-77: a covered call written against its shares counts inside their
+  // position, never as a trade of its own; a part uncovered keeps its own sign; the
+  // shares' trade counts the position's P&L
+  const ownTrade = (t: any) => !(t.writtenAgainst && t.coverage?.whole && trades.some((x) => x.id === t.writtenAgainst.id))
+  const counted = (t: any) => (t.callsWritten?.length && t.positionPnlCad ? t.positionPnlCad : t.pnlCad)
+  const closed = trades.filter((t) => t.status === 'closed' && ownTrade(t) && !waits(counted(t))).map((t) => exact(counted(t)).units)
   expect([k.count, k.wins, k.losses, k.breakeven]).toEqual([closed.length, closed.filter((u) => u > 0n).length, closed.filter((u) => u < 0n).length, closed.filter((u) => u === 0n).length])
   expect(k.winRate).toBeCloseTo(k.wins / k.count, 12)
 })

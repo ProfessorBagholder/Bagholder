@@ -25,9 +25,11 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
     'portfolio.netWorth.unstated': 'from',
     'portfolio.allocation': 'label',
     'positions': 'id',
+    'positions.*.callsWritten': 'id',
   },
   'trades': {
     'trades': 'id',
+    'trades.*.callsWritten': 'id',
   },
   'cashflow': {
     'cashflow.tiles': 'label',
@@ -39,6 +41,8 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
     'cashflow.asked.*.candidates': 'id',
   },
   'trade': {
+    'trade.callsWritten': 'id',
+    'position.callsWritten': 'id',
   },
   'exposure': {
     'sectors': 'label',

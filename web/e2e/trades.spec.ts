@@ -538,3 +538,41 @@ test.describe('Side', () => {
     await expect(page.getByTestId('trade-side')).toHaveText('Uncovered call · 1 of 2 contracts covered')
   })
 })
+
+test.describe('A covered call and its shares', () => {
+  // SPEC.md trade-76, trade-77: a covered call is a leg of its shares' position
+  test('each covered call names its shares, whose row shows the position under its own P&L', async ({ page, request }) => {
+    const model = await getModel(request)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const calls = model.trades.filter((t: any) => t.sideLabel === 'Covered call')
+    expect(calls.length).toBeGreaterThan(0)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const shares = model.trades.find((t: any) => t.id === calls[0].writtenAgainst?.id)
+    expect(shares, 'the made-up book\'s covered calls are written against its AAPL shares').toBeTruthy()
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    expect(shares.callsWritten.map((c: any) => c.id).sort()).toEqual(calls.filter((c: any) => c.writtenAgainst?.id === shares.id).map((c: any) => c.id).sort())
+    // held still: its holding's row carries the same position
+    if (shares.position) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const holding = model.positions.find((p: any) => p.id === shares.position)
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      expect(holding.callsWritten.map((c: any) => c.id).sort()).toEqual(shares.callsWritten.map((c: any) => c.id).sort())
+      expect(holding.positionPnl).toEqual(shares.positionPnl)
+    }
+    await page.goto('/#trades')
+    await ready(page)
+    const order = tradesInListOrder(model.trades as { id: string; lastDate: string }[])
+    const at = order.findIndex((t) => t.id === shares.id)
+    await expect(rows(page).nth(at).locator('.position-pnl')).toHaveText('with calls ' + money(shares.positionPnl))
+  })
+
+  test('a covered call\'s page links to its shares, and the shares\' page names its calls', async ({ page, request }) => {
+    const model = await getModel(request)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const call = model.trades.find((t: any) => t.writtenAgainst && t.status === 'closed')
+    await page.goto('/#trades/' + encodeURIComponent(call.id))
+    await expect(page.getByTestId('written-against')).toContainText(call.writtenAgainst.symbol + ' shares')
+    await page.getByTestId('written-against').getByRole('link').click()
+    await expect(page.getByTestId('calls-written')).toContainText('With the calls written against it')
+  })
+})
