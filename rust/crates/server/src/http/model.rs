@@ -57,7 +57,7 @@ pub(crate) async fn figures_detail(State(state): State<AppState>, Params(q): Par
 }
 
 /// `GET /api/figures/details`: every trade's and holding's fills.
-async fn figures_details(State(state): State<AppState>) -> Api<crate::wire::figures::Details> {
+pub(crate) async fn figures_details(State(state): State<AppState>) -> Api<crate::wire::figures::Details> {
     let app = state.app;
     let found = blocking(move || app.figures.get().and_then(|f| f.read(|e| crate::wire::build::details(e)))).await?;
     Ok(Json(crate::wire::figures::Details { details: found.ok_or_else(|| ApiError::Conflict("the figures are not open".into()))? }))

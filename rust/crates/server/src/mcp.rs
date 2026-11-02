@@ -71,7 +71,34 @@ pub struct ReadOnly {
 /// The routes `ReadOnly` reads, by path: what the tests hold to the route table.
 #[cfg(test)]
 pub fn routes() -> Vec<&'static str> {
-    vec![status().path, view().path, detail().path, transactions().path]
+    let mut all = vec![status().path, view().path, detail().path, transactions().path];
+    all.extend(page_reads().into_iter().map(|(path, _)| path));
+    all
+}
+
+/// The page's other reads an agent is given (`docs/plans/agents-read-what-the-page-shows.md`),
+/// each by its path, as the page asks it: what `ReadOnly::page` reads.
+fn page_reads() -> Vec<(&'static str, &'static str)> {
+    use crate::http::{markets as m, model, notifications, orders};
+    vec![
+        (GetRoute::of(m::news_symbol, "/api/news/symbol").path, "news_symbol"),
+        (GetRoute::of(m::filings, "/api/filings").path, "filings"),
+        (GetRoute::of(m::filings_feed, "/api/filings/feed").path, "filings_feed"),
+        (GetRoute::of(m::filings_enrich, "/api/filings/enrich").path, "filings_enrich"),
+        (GetRoute::of(m::filings_text, "/api/filings/text").path, "filings_text"),
+        (GetRoute::of(m::shorts, "/api/shorts").path, "shorts"),
+        (GetRoute::of(m::shorts_feed, "/api/shorts/feed").path, "shorts_feed"),
+        (GetRoute::of(m::fear, "/api/fear").path, "fear"),
+        (GetRoute::of(m::history, "/api/history").path, "history"),
+        (GetRoute::of(m::symbol_quote, "/api/symbols/quote").path, "symbol_quote"),
+        (GetRoute::of(m::listing, "/api/listing").path, "listing"),
+        (GetRoute::of(m::listings, "/api/listings").path, "listings"),
+        (GetRoute::of(m::symbol_search, "/api/symbols/search").path, "symbol_search"),
+        (GetRoute::of(orders::list, "/api/orders").path, "orders"),
+        (GetRoute::of(orders::quote, "/api/order/quote").path, "order_quote"),
+        (GetRoute::of(notifications::list, "/api/notifications").path, "notifications"),
+        (GetRoute::of(model::figures_details, "/api/figures/details").path, "figures_details"),
+    ]
 }
 
 fn status() -> GetRoute<NoQuery, crate::status::StatusAnswer> {
@@ -108,8 +135,13 @@ impl ReadOnly {
     /// The one request: a `GET` of `route` with `query`, its answer as the server
     /// sent it.
     fn read<Q: Serialize, A>(&self, route: &GetRoute<Q, A>, query: &Q) -> Result<Value, String> {
+        self.get(route.path, query)
+    }
+
+    /// A `GET` of `path`, one of the routes above, with `query`.
+    fn get(&self, path: &str, query: &impl Serialize) -> Result<Value, String> {
         let q = serde_urlencoded::to_string(query).map_err(|e| format!("the query could not be written: {e}"))?;
-        let url = if q.is_empty() { format!("{}{}", self.base, route.path) } else { format!("{}{}?{q}", self.base, route.path) };
+        let url = if q.is_empty() { format!("{}{}", self.base, path) } else { format!("{}{}?{q}", self.base, path) };
         let r = bagholder_net::client::request("GET", &url, &[("Accept", "application/json")], None, std::time::Duration::from_secs(120)).map_err(|e| format!("Bagholder did not answer: {e}"))?;
         let body: Value = serde_json::from_slice(&r.body).map_err(|e| format!("Bagholder's answer could not be read: {e}"))?;
         if r.status != 200 {
@@ -117,6 +149,19 @@ impl ReadOnly {
             return Err(said);
         }
         Ok(body)
+    }
+
+    /// One of the page's other reads (`page_reads`), by its path, with the query
+    /// the page sends it: a `GET`, of a route the tests hold to the route table.
+    pub fn page(&self, path: &str, query: &[(&str, String)]) -> Result<Value, String> {
+        let Some((path, _)) = page_reads().into_iter().find(|(p, _)| *p == path) else { return Err(format!("{path} is not a read an agent is given")) };
+        let q: Vec<(&str, &str)> = query.iter().filter(|(_, v)| !v.is_empty()).map(|(k, v)| (*k, v.as_str())).collect();
+        self.get(path, &q)
+    }
+
+    /// The status the page's header shows.
+    pub fn status(&self) -> Result<Value, String> {
+        self.read(&status(), &NoQuery {})
     }
 
     /// One screen's document, as a page subscribing to it is first sent it.

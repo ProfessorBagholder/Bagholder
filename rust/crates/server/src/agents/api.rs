@@ -13,7 +13,7 @@ use rmcp::schemars;
 use serde_json::{json, Value};
 
 use super::listener::said;
-use super::tools::{self, Caller, ExposureArgs, IncomeArgs, ListsArgs, MarketsArgs, NetWorthArgs, PositionsArgs, StatsArgs, TradeArgs, TradesArgs, TransactionsArgs};
+use super::tools::{self, Caller, ExposureArgs, FearArgs, FilingArgs, FilingTextArgs, FilingsFeedArgs, HeatmapArgs, HistoryArgs, IncomeArgs, ListingArgs, ListsArgs, MarketsArgs, NetWorthArgs, NewsArgs, NoArgs, OrderQuoteArgs, PositionsArgs, SearchArgs, ShortsArgs, StatsArgs, SymbolArgs, TradeArgs, TradesArgs, TransactionsArgs};
 use super::Ctx;
 
 /// Each route: its path, the tool it answers as, what it says, and its arguments' schema.
@@ -30,6 +30,26 @@ pub fn routes() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("/api/agents/net-worth", "net_worth", "The person's net worth: its assets and liabilities, the totals, and its history by month.", schema(schemars::schema_for!(NetWorthArgs))),
         ("/api/agents/transactions", "transactions", "Money in and out of the person's chequing and credit card accounts, a page at a time, with the company each names (never a person's name).", schema(schemars::schema_for!(TransactionsArgs))),
         ("/api/agents/markets", "markets", "The market's tiles and the person's watchlist.", schema(schemars::schema_for!(MarketsArgs))),
+        ("/api/agents/news", "news", "The News card's headlines: stories or press releases, for all, the holdings' or the watchlist's listings, or one listing.", schema(schemars::schema_for!(NewsArgs))),
+        ("/api/agents/listing-news", "listing_news", "One listing's own news, as its page shows it.", schema(schemars::schema_for!(ListingArgs))),
+        ("/api/agents/filings", "filings", "One listing's regulatory filings from SEDAR+ and SEC EDGAR, merged as its page shows them.", schema(schemars::schema_for!(ListingArgs))),
+        ("/api/agents/filings-feed", "filings_feed", "The Disclosures card: the newest filings of all, the holdings' or the watchlist's listings.", schema(schemars::schema_for!(FilingsFeedArgs))),
+        ("/api/agents/filing-summary", "filing_summary", "One filing's subject and one-sentence summary.", schema(schemars::schema_for!(FilingArgs))),
+        ("/api/agents/filing-text", "filing_text", "One filing's document itself, as text, with the regulator's own address where it has one; at most 200,000 characters an answer, `next` the offset to ask from where it goes on.", schema(schemars::schema_for!(FilingTextArgs))),
+        ("/api/agents/short-interest", "short_interest", "One listing's short interest, from FINRA or CIRO, and its series with trend.", schema(schemars::schema_for!(ShortsArgs))),
+        ("/api/agents/short-interest-feed", "short_interest_feed", "The Short interest card: the holdings' and watchlist's listings, most shorted first.", schema(schemars::schema_for!(NoArgs))),
+        ("/api/agents/heatmap", "heatmap", "The Markets tab's heatmap.", schema(schemars::schema_for!(HeatmapArgs))),
+        ("/api/agents/fear-greed", "fear_greed", "The Fear & Greed gauge, for stocks or crypto, and its history.", schema(schemars::schema_for!(FearArgs))),
+        ("/api/agents/price-history", "price_history", "A listing's price history, as its chart draws it.", schema(schemars::schema_for!(HistoryArgs))),
+        ("/api/agents/quote", "quote", "A listing's quote now.", schema(schemars::schema_for!(ListingArgs))),
+        ("/api/agents/listing", "listing", "A listing's own page: its quote, profile and figures.", schema(schemars::schema_for!(ListingArgs))),
+        ("/api/agents/listings", "listings", "Every listing a symbol given with no venue may be.", schema(schemars::schema_for!(SymbolArgs))),
+        ("/api/agents/symbol-search", "symbol_search", "The page's symbol search.", schema(schemars::schema_for!(SearchArgs))),
+        ("/api/agents/orders", "orders", "The person's orders, working and past. Reading them places nothing.", schema(schemars::schema_for!(NoArgs))),
+        ("/api/agents/order-quote", "order_quote", "What an order ticket shows for a listing before an order. Reading it places nothing.", schema(schemars::schema_for!(OrderQuoteArgs))),
+        ("/api/agents/notifications", "notifications", "The person's notifications. Reading them marks nothing read.", schema(schemars::schema_for!(NoArgs))),
+        ("/api/agents/trade-details", "trade_details", "Every trade's and holding's executions at once.", schema(schemars::schema_for!(NoArgs))),
+        ("/api/agents/status", "status", "What the page's header says: the connection, the last sync, and what waits.", schema(schemars::schema_for!(NoArgs))),
     ]
 }
 
@@ -187,4 +207,50 @@ pub async fn markets(State(ctx): State<Arc<Ctx>>, Extension(caller): Extension<C
 pub async fn transactions(State(ctx): State<Arc<Ctx>>, Extension(caller): Extension<Caller>, Query(a): Query<TransactionsArgs>) -> Response {
     let args = json!(a);
     answer(ctx, caller, "transactions", args, move |r| tools::transactions(r, a)).await
+}
+
+/// The page's other reads (`docs/plans/agents-read-what-the-page-shows.md`), each
+/// the tool of its name.
+macro_rules! read_with {
+    ($name:ident, $args:ty, $tool:path) => {
+        pub async fn $name(State(ctx): State<Arc<Ctx>>, Extension(caller): Extension<Caller>, Query(a): Query<$args>) -> Response {
+            let args = json!(a);
+            answer(ctx, caller, stringify!($name), args, move |r| $tool(r, a)).await
+        }
+    };
+}
+macro_rules! read_alone {
+    ($name:ident, $tool:path) => {
+        pub async fn $name(State(ctx): State<Arc<Ctx>>, Extension(caller): Extension<Caller>) -> Response {
+            answer(ctx, caller, stringify!($name), json!({}), $tool).await
+        }
+    };
+}
+read_with!(news, NewsArgs, tools::news);
+read_with!(listing_news, ListingArgs, tools::listing_news);
+read_with!(filings, ListingArgs, tools::filings);
+read_with!(filings_feed, FilingsFeedArgs, tools::filings_feed);
+read_with!(filing_summary, FilingArgs, tools::filing_summary);
+read_with!(filing_text, FilingTextArgs, tools::filing_text);
+read_with!(short_interest, ShortsArgs, tools::short_interest);
+read_alone!(short_interest_feed, tools::short_interest_feed);
+read_with!(fear_greed, FearArgs, tools::fear_greed);
+read_with!(price_history, HistoryArgs, tools::price_history);
+read_with!(quote, ListingArgs, tools::quote);
+read_with!(listing, ListingArgs, tools::listing);
+read_with!(listings, SymbolArgs, tools::listings);
+read_with!(symbol_search, SearchArgs, tools::symbol_search);
+read_alone!(orders, tools::orders);
+read_with!(order_quote, OrderQuoteArgs, tools::order_quote);
+read_alone!(notifications, tools::notifications);
+read_alone!(trade_details, tools::trade_details);
+read_alone!(status, tools::status);
+
+pub async fn heatmap(State(ctx): State<Arc<Ctx>>, Extension(caller): Extension<Caller>, Query(mut a): Query<HeatmapArgs>) -> Response {
+    a.filters = match object(a.filters) {
+        Ok(f) => f,
+        Err(r) => return r,
+    };
+    let args = json!(a);
+    answer(ctx, caller, "heatmap", args, move |r| tools::heatmap(r, a)).await
 }

@@ -1548,6 +1548,113 @@ fn the_openapi_description_matches_its_routes() {
 /// Each described route, called with its described arguments on a real book,
 /// answers what the page answers, and reads every parameter the served
 /// description lists.
+/// Each of the page's other reads (`docs/plans/agents-read-what-the-page-shows.md`),
+/// asked over the agents' address, answers what the page's own route answers for
+/// the same arguments, as the tool of its name reads it.
+#[test]
+fn each_page_read_answers_as_the_page() {
+    let d = tempfile::tempdir().unwrap();
+    crate::capacity::build(d.path(), bagholder_wealthsimple::generated::Size { accounts: 6, instruments: 10, trades: 30, months: 4, seed: 3, deep: 0 }, 2).unwrap();
+    let served = crate::tests_mcp::served_for(d.path());
+    let base = format!("http://127.0.0.1:{}", served.port);
+    let page = crate::mcp::ReadOnly::own(&base);
+    let b = base.clone();
+    let h = harness_with(Outside::network(), Arc::new(move || Ok(crate::mcp::ReadOnly::own(&b))));
+    // a listing the book holds, its id at the broker and an account, as an agent reads them
+    let trades = page.view("trades", json!({ "limit": 5 })).unwrap();
+    let t = &trades["trades"][0];
+    let (symbol, exchange, security) = (t["symbol"].as_str().unwrap().to_string(), t["exchange"].as_str().unwrap().to_string(), t["security"].as_str().unwrap().to_string());
+    let account = t["accountId"].as_str().unwrap().to_string();
+    let enc = |v: &str| serde_urlencoded::to_string([("v", v)]).unwrap()[2..].to_string();
+    let listing = format!("symbol={}&exchange={}", enc(&symbol), enc(&exchange));
+    fn at(q: &[(&'static str, &str)]) -> Vec<(&'static str, String)> {
+        q.iter().map(|(k, v)| (*k, v.to_string())).collect()
+    }
+    let reads: Vec<(&str, String, Box<dyn Fn() -> Result<Value, String>>)> = vec![
+        ("news", "scope=all&kind=releases".into(), Box::new(|| page.view("headlines", json!({ "scope": "all", "kind": "releases" })))),
+        ("listing-news", listing.clone(), Box::new(|| page.page("/api/news/symbol", &at(&[("symbol", &symbol), ("exchange", &exchange)])))),
+        ("filings", listing.clone(), Box::new(|| page.page("/api/filings", &at(&[("symbol", &symbol), ("exchange", &exchange)])))),
+        ("filings-feed", "scope=holdings".into(), Box::new(|| page.page("/api/filings/feed", &at(&[("scope", "holdings")])))),
+        ("filing-summary", "source=SEDAR%2B&id=sedar:1".into(), Box::new(|| page.page("/api/filings/enrich", &at(&[("source", "SEDAR+"), ("id", "sedar:1")])))),
+        ("filing-text", "source=SEDAR%2B&id=sedar:1".into(), Box::new(|| page.page("/api/filings/text", &at(&[("source", "SEDAR+"), ("id", "sedar:1")])))),
+        ("short-interest", format!("{listing}&trend=true"), Box::new(|| page.page("/api/shorts", &at(&[("symbol", &symbol), ("exchange", &exchange), ("trend", "1")])))),
+        ("short-interest-feed", String::new(), Box::new(|| page.page("/api/shorts/feed", &[]))),
+        ("heatmap", "universe=holdings&size=equal".into(), Box::new(|| page.view("heatmap", json!({ "universe": "holdings", "size": "equal" })))),
+        ("fear-greed", "index=stocks".into(), Box::new(|| page.page("/api/fear", &at(&[("index", "stocks")])))),
+        ("price-history", format!("{listing}&from=2026-01-01&to=2026-02-01&tf=1D"), Box::new(|| page.page("/api/history", &at(&[("symbol", &symbol), ("exchange", &exchange), ("from", "2026-01-01"), ("to", "2026-02-01"), ("tf", "1D")])))),
+        ("quote", listing.clone(), Box::new(|| page.page("/api/symbols/quote", &at(&[("symbol", &symbol), ("exchange", &exchange)])))),
+        ("listing", listing.clone(), Box::new(|| page.page("/api/listing", &at(&[("symbol", &symbol), ("exchange", &exchange)])))),
+        ("listings", format!("symbol={}", enc(&symbol)), Box::new(|| page.page("/api/listings", &at(&[("symbol", &symbol)])))),
+        ("symbol-search", format!("q={}", enc(&symbol)), Box::new(|| page.page("/api/symbols/search", &at(&[("q", &symbol)])))),
+        ("orders", String::new(), Box::new(|| page.page("/api/orders", &[]))),
+        ("order-quote", format!("security={}&account={}", enc(&security), enc(&account)), Box::new(|| page.page("/api/order/quote", &at(&[("security", &security), ("account", &account)])))),
+        ("notifications", String::new(), Box::new(|| page.page("/api/notifications", &[]))),
+        ("trade-details", String::new(), Box::new(|| page.page("/api/figures/details", &[]))),
+        ("status", String::new(), Box::new(|| page.status())),
+    ];
+    assert_eq!(reads.len() + 10, api::routes().len(), "every page read is asked here");
+    for (route, query, as_page) in &reads {
+        // each with a key of its own, so no read meets another's read limit
+        let auth = format!("Bearer {}", h.key("api"));
+        let asked = h.ask("GET", &format!("/api/agents/{route}?{query}"), &[("authorization", &auth)], vec![]);
+        assert_eq!(asked.status, StatusCode::OK, "{route}: {}", asked.text());
+        let mut agent = asked.json();
+        agent.as_object_mut().unwrap().remove("note");
+        let mut want = as_page().unwrap_or_else(|e| panic!("{route}: the page's read: {e}"));
+        mask_instants(&mut agent);
+        mask_instants(&mut want);
+        assert_eq!(agent, want, "{route} answers as the page");
+    }
+    drop(served);
+    let _ = &h.home;
+}
+
+/// The notifications read over the agents' address, twice, leave the list, the
+/// unread count and the read marks as they were: an agent's read marks nothing.
+#[test]
+fn reading_the_notifications_marks_nothing() {
+    let d = tempfile::tempdir().unwrap();
+    crate::capacity::build(d.path(), bagholder_wealthsimple::generated::Size { accounts: 4, instruments: 4, trades: 6, months: 2, seed: 5, deep: 0 }, 2).unwrap();
+    let served = crate::tests_mcp::served_for(d.path());
+    let book = crate::notify::book(&served.app).unwrap();
+    crate::notify::set_settings(&book, &serde_json::from_value(json!({"fills": true})).unwrap()).unwrap();
+    crate::notify::record(&book, "fills", "order:1:filled", "Order filled", "Bought 5", None).unwrap().expect("recorded");
+    drop(book);
+    let base = format!("http://127.0.0.1:{}", served.port);
+    let page = crate::mcp::ReadOnly::own(&base);
+    let before = page.page("/api/notifications", &[]).unwrap();
+    assert_eq!(before["unread"], 1, "{before}");
+    let b = base.clone();
+    let h = harness_with(Outside::network(), Arc::new(move || Ok(crate::mcp::ReadOnly::own(&b))));
+    for _ in 0..2 {
+        let auth = format!("Bearer {}", h.key("api"));
+        let asked = h.ask("GET", "/api/agents/notifications", &[("authorization", &auth)], vec![]);
+        assert_eq!(asked.status, StatusCode::OK, "{}", asked.text());
+    }
+    let after = page.page("/api/notifications", &[]).unwrap();
+    assert_eq!(after, before, "the list, its unread count and its read marks as they were");
+    drop(served);
+    let _ = &h.home;
+}
+
+/// The instants an answer stamps as it is made (a status's `now`), left out of a
+/// comparison of two answers made one after the other.
+fn mask_instants(v: &mut Value) {
+    match v {
+        Value::Object(o) => {
+            for (k, x) in o.iter_mut() {
+                if matches!(k.as_str(), "now" | "serverTime" | "at" | "asOf" | "checkedAt") && x.is_string() {
+                    *x = json!("<instant>");
+                } else {
+                    mask_instants(x);
+                }
+            }
+        }
+        Value::Array(a) => a.iter_mut().for_each(mask_instants),
+        _ => {}
+    }
+}
+
 #[test]
 fn each_described_route_answers_with_its_described_arguments() {
     let d = tempfile::tempdir().unwrap();
@@ -1606,8 +1713,11 @@ fn each_described_route_answers_with_its_described_arguments() {
     assert_eq!(served_doc.status, StatusCode::OK, "{}", served_doc.text());
     let described = served_doc.json();
     let paths = described["paths"].as_object().unwrap().clone();
-    assert_eq!(paths.len(), 10, "every route is described");
-    for (path, item) in &paths {
+    assert_eq!(paths.len(), api::routes().len(), "every route is described");
+    // the trade history's routes, each parameter shown read here; the page's other
+    // reads are each held to the page's own answer (`each_page_read_answers_as_the_page`)
+    const HISTORY: [&str; 10] = ["/api/agents/trades", "/api/agents/trade", "/api/agents/positions", "/api/agents/lists", "/api/agents/stats", "/api/agents/income", "/api/agents/exposure", "/api/agents/net-worth", "/api/agents/markets", "/api/agents/transactions"];
+    for (path, item) in paths.iter().filter(|(p, _)| HISTORY.contains(&p.as_str())) {
         let params = item["get"]["parameters"].as_array().unwrap().clone();
         // what a call must carry: its required parameters, each a value that answers
         let required: Vec<String> = params.iter().filter(|p| p["required"] == true).map(|p| match p["name"].as_str().unwrap() {
@@ -1972,7 +2082,7 @@ fn a_tunnel_refused_for_a_clash_in_tailscale_s_settings_is_started_again() {
 #[test]
 fn the_sign_in_page_says_everything_an_agent_reads() {
     // what each tool reads, in the words the sign-in page uses
-    const READS: [(&str, &str); 10] = [
+    const READS: [(&str, &str); 30] = [
         ("trades", "trades"),
         ("trade", "trades"),
         ("positions", "holdings"),
@@ -1983,6 +2093,26 @@ fn the_sign_in_page_says_everything_an_agent_reads() {
         ("net_worth", "net worth"),
         ("transactions", "chequing and credit card transactions"),
         ("markets", "watchlist"),
+        ("news", "news"),
+        ("listing_news", "news"),
+        ("filings", "disclosures"),
+        ("filings_feed", "disclosures"),
+        ("filing_summary", "disclosures"),
+        ("filing_text", "disclosures"),
+        ("short_interest", "short interest"),
+        ("short_interest_feed", "short interest"),
+        ("heatmap", "charts"),
+        ("fear_greed", "market gauges"),
+        ("price_history", "charts"),
+        ("quote", "quotes"),
+        ("listing", "quotes"),
+        ("listings", "quotes"),
+        ("symbol_search", "quotes"),
+        ("orders", "orders"),
+        ("order_quote", "orders"),
+        ("notifications", "notifications"),
+        ("trade_details", "trades"),
+        ("status", "accounts"),
     ];
     for (_, tool, _, _) in api::routes() {
         let words = READS.iter().find(|(t, _)| *t == tool).map(|(_, w)| *w).unwrap_or_else(|| panic!("{tool} reads nothing the sign-in page says"));

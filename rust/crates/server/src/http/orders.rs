@@ -23,7 +23,7 @@ pub fn routes() -> Routed {
     }
 }
 
-async fn list(State(state): State<AppState>) -> Api<orders::OrdersDoc> {
+pub(crate) async fn list(State(state): State<AppState>) -> Api<orders::OrdersDoc> {
     answer(move || {
         orders::kick_orders_refresh(&state.app);
         orders::orders_doc(&state.app)
@@ -55,7 +55,7 @@ pub struct QuoteOf {
     account: String,
 }
 
-async fn quote(State(state): State<AppState>, Params(q): Params<QuoteOf>) -> Api<orders::TicketQuote> {
+pub(crate) async fn quote(State(state): State<AppState>, Params(q): Params<QuoteOf>) -> Api<orders::TicketQuote> {
     answer(move || orders::ticket_quote(&state.app, &q.security, &q.account)).await
 }
 

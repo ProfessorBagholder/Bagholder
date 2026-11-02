@@ -3,18 +3,11 @@
 //! the MCP server's protocol. No network.
 use bagholder_market::sedar::{self, ReportingIssuer};
 use regex::Regex;
-use serde_json::{json, Value};
 use std::collections::HashMap;
-use std::io::Write;
-use std::process::{Command, Stdio};
 
 fn fixture(name: &str) -> String {
     let p = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../tests/fixtures").join(name);
     std::fs::read_to_string(p).unwrap()
-}
-
-fn s(v: &Value) -> &str {
-    v.as_str().unwrap_or("")
 }
 
 // --- ParseFilingsTest
@@ -149,68 +142,6 @@ fn test_refresh_identity_adopts_a_new_view_instance() {
     assert_ne!(view.inst, "oldid", "the id is taken from the navigated page");
     assert_ne!(view.key, "oldkey");
     assert!(!view.refresh_identity("<div>a fragment with no instance</div>"));
-}
-
-// --- McpServerTest: the server binary spoken to over stdio
-
-fn mcp(lines: &[Value]) -> Vec<Value> {
-    let mut child = Command::new(env!("CARGO_BIN_EXE_disclosures-mcp"))
-        .env("BAGHOLDER_BROWSER", "/nonexistent/bagholder-browser")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .spawn()
-        .unwrap();
-    {
-        let mut stdin = child.stdin.take().unwrap();
-        for l in lines {
-            writeln!(stdin, "{}", l).unwrap();
-        }
-    }
-    let out = child.wait_with_output().unwrap();
-    String::from_utf8_lossy(&out.stdout).lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).unwrap()).collect()
-}
-
-const PROTOCOL_VERSION: &str = "2024-11-05";
-
-#[test]
-fn test_initialize_reports_the_protocol_and_tool_capability() {
-    let r = &mcp(&[json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}})])[0];
-    assert_eq!(r["result"]["protocolVersion"], PROTOCOL_VERSION);
-    assert!(r["result"]["capabilities"].get("tools").is_some());
-    assert_eq!(r["result"]["serverInfo"]["name"], "disclosures");
-}
-
-#[test]
-fn test_initialized_notification_gets_no_response() {
-    assert!(mcp(&[json!({"jsonrpc": "2.0", "method": "notifications/initialized"})]).is_empty());
-}
-
-#[test]
-fn test_tools_list_offers_the_disclosure_tools() {
-    let r = &mcp(&[json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list"})])[0];
-    let tools = r["result"]["tools"].as_array().unwrap();
-    let mut names: Vec<&str> = tools.iter().map(|t| s(&t["name"])).collect();
-    names.sort();
-    assert_eq!(names, ["disclosures_document", "disclosures_list", "sedar_resolve_profile"]);
-    for tool in tools {
-        assert!(tool.get("inputSchema").is_some());
-        assert!(!s(&tool["description"]).is_empty());
-    }
-}
-
-#[test]
-fn test_resolve_without_the_sedar_dependency_is_a_clean_tool_error() {
-    // the Rust app's SEDAR+ dependency is the browser helper
-    let r = &mcp(&[json!({"jsonrpc": "2.0", "id": 3, "method": "tools/call",
-                          "params": {"name": "sedar_resolve_profile", "arguments": {"query": "Shopify"}}})])[0];
-    let payload: Value = serde_json::from_str(s(&r["result"]["content"][0]["text"])).unwrap();
-    assert!(s(&payload["error"]).contains("bagholder-browser"));
-}
-
-#[test]
-fn test_an_unknown_method_returns_a_json_rpc_error() {
-    let r = &mcp(&[json!({"jsonrpc": "2.0", "id": 4, "method": "no/such"})])[0];
-    assert_eq!(r["error"]["code"], -32601);
 }
 
 // --- ScopeCacheTest

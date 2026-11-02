@@ -49,23 +49,13 @@ The payload carries the merged `filings`, a per-source `sources` status
 (available / matched), the `categories` vocabulary, the SEDAR+ `profileNo`, and
 `fetchedAt`. A filing never changes once filed.
 
-### 2. The MCP server (for Claude Desktop, Claude Code, any MCP client)
+### 2. For an agent
 
-The `disclosures-mcp` binary, beside `bagholder` in a release archive (or built with
-`cargo build --release --bin disclosures-mcp` in `rust/`), exposes `disclosures_list`,
-`disclosures_document`, and `sedar_resolve_profile` over stdio.
-
-Claude Code:
-
-    claude mcp add disclosures -- /full/path/to/disclosures-mcp
-
-Claude Desktop (Settings > Developer > Edit Config), under `mcpServers`:
-
-    "disclosures": { "command": "/full/path/to/disclosures-mcp", "args": [] }
-
-To install it as a one-click Claude Desktop extension, pack `rust/mcp/manifest.json`
-(beside the `disclosures-mcp` binary) with the `mcpb` CLI (`npx @anthropic-ai/mcpb
-pack`) and open the resulting `.mcpb` file.
+An agent reads a listing's filings, the Disclosures feed, a filing's summary and a
+filing's document itself through Bagholder's own agents' server, as it reads
+everything the page shows: the `filings`, `filings_feed`, `filing_summary` and
+`filing_text` tools (Agents in Bagholder's menu). The earlier stand-alone
+`disclosures-mcp` program is gone.
 
 ### 3. The SEDAR+ command line
 

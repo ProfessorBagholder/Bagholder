@@ -130,6 +130,26 @@ pub const ROUTES: &[(&str, &[Method])] = &[
     ("/api/agents/net-worth", &[Method::GET]),
     ("/api/agents/markets", &[Method::GET]),
     ("/api/agents/transactions", &[Method::GET]),
+    ("/api/agents/news", &[Method::GET]),
+    ("/api/agents/listing-news", &[Method::GET]),
+    ("/api/agents/filings", &[Method::GET]),
+    ("/api/agents/filings-feed", &[Method::GET]),
+    ("/api/agents/filing-summary", &[Method::GET]),
+    ("/api/agents/filing-text", &[Method::GET]),
+    ("/api/agents/short-interest", &[Method::GET]),
+    ("/api/agents/short-interest-feed", &[Method::GET]),
+    ("/api/agents/heatmap", &[Method::GET]),
+    ("/api/agents/fear-greed", &[Method::GET]),
+    ("/api/agents/price-history", &[Method::GET]),
+    ("/api/agents/quote", &[Method::GET]),
+    ("/api/agents/listing", &[Method::GET]),
+    ("/api/agents/listings", &[Method::GET]),
+    ("/api/agents/symbol-search", &[Method::GET]),
+    ("/api/agents/orders", &[Method::GET]),
+    ("/api/agents/order-quote", &[Method::GET]),
+    ("/api/agents/notifications", &[Method::GET]),
+    ("/api/agents/trade-details", &[Method::GET]),
+    ("/api/agents/status", &[Method::GET]),
     ("/agents/check/{value}", &[Method::GET]),
 ];
 
@@ -181,7 +201,27 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/api/agents/exposure", get(api::exposure).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/net-worth", get(api::net_worth).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/markets", get(api::markets).route_layer(check_with(ctx.clone(), api_key)))
-        .route("/api/agents/transactions", get(api::transactions).route_layer(check_with(ctx.clone(), api_key)));
+        .route("/api/agents/transactions", get(api::transactions).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/news", get(api::news).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/listing-news", get(api::listing_news).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/filings", get(api::filings).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/filings-feed", get(api::filings_feed).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/filing-summary", get(api::filing_summary).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/filing-text", get(api::filing_text).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/short-interest", get(api::short_interest).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/short-interest-feed", get(api::short_interest_feed).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/heatmap", get(api::heatmap).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/fear-greed", get(api::fear_greed).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/price-history", get(api::price_history).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/quote", get(api::quote).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/listing", get(api::listing).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/listings", get(api::listings).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/symbol-search", get(api::symbol_search).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/orders", get(api::orders).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/order-quote", get(api::order_quote).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/notifications", get(api::notifications).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/trade-details", get(api::trade_details).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/status", get(api::status).route_layer(check_with(ctx.clone(), api_key)));
     Router::new()
         .merge(before)
         .merge(signed_in)
