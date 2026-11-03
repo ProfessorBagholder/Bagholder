@@ -28,11 +28,13 @@ test('the Update button is gone while the update installs, and back if it fails'
   await expect(page.getByRole('button', { name: 'Update to v9.9.9' })).toBeVisible()
 })
 
-test('a release this copy cannot install itself is a link to it', async ({ page, request }) => {
+test('a release this copy cannot install itself is a link to it; a container with no updater says the command, and links nowhere', async ({ page, request }) => {
   await openWithStatus(page, request, { updateAvailable: true, canUpdate: false, updateBy: 'app', updateUrl: 'https://example.test/release' })
   await expect(page.getByRole('link', { name: 'Update available' })).toHaveAttribute('href', 'https://example.test/release')
-  await openWithStatus(page, request, { updateAvailable: true, canUpdate: false, updateBy: 'image', latestVersion: 'v9.9.9' })
-  await expect(page.getByRole('link', { name: 'v9.9.9 image available' })).toBeVisible()
+  // SPEC versions-and-the-update-check-14
+  await openWithStatus(page, request, { updateAvailable: true, canUpdate: false, updateBy: 'image', latestVersion: 'v9.9.9', updateUrl: 'https://example.test/release' })
+  await expect(page.getByTestId('update-command')).toHaveText('v9.9.9 available: docker compose pull && docker compose up -d')
+  await expect(page.locator('a[href="https://example.test/release"]')).toHaveCount(0)
 })
 
 test('the status line says what the update is doing, then that it failed', async ({ page, request }) => {

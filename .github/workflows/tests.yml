@@ -266,11 +266,57 @@ jobs:
           done
           BAGHOLDER_PORT=8792 docker compose -f docker-compose.yml -f "$RUNNER_TEMP/rooted.yml" down
           sudo rm -rf "$RUNNER_TEMP/rooted"
+      # the shipped updater beside it (docker-compose.updater.yml): its API alone, no
+      # schedule; Bagholder makes the token it reads and offers the button. An update
+      # from one image to the next is not run here: the updater pulls from a
+      # registry, and this image is on this runner alone
+      - name: The shipped updater runs on the button alone, with the token Bagholder made
+        run: |
+          sudo mkdir -m 700 "$RUNNER_TEMP/updated"
+          cat > "$RUNNER_TEMP/updated.yml" <<EOF
+          services:
+            bagholder:
+              image: bagholder:ci
+              environment:
+                - BAGHOLDER_OFFLINE=1
+                - BAGHOLDER_DRY_ORDERS=1
+              volumes: !override
+                - $RUNNER_TEMP/updated:/data
+            bagholder-updater:
+              volumes: !override
+                - /var/run/docker.sock:/var/run/docker.sock
+                - $RUNNER_TEMP/updated/updater:/bagholder-data:ro
+          EOF
+          files="-f docker-compose.yml -f docker-compose.updater.yml -f $RUNNER_TEMP/updated.yml"
+          BAGHOLDER_PORT=8792 docker compose $files up -d --wait --wait-timeout 300
+          body=$(curl -s -H 'X-Bagholder: 1' http://127.0.0.1:8792/api/status)
+          echo "$body" | jq -e '.updateBy == "container"' || { echo "$body"; exit 1; }
+          [ "$(sudo stat -c '%u %a' "$RUNNER_TEMP/updated/updater/token")" = "1000 600" ]
+          # of the data folder, the updater is given the token's folder alone
+          [ "$(docker inspect -f '{{range .Mounts}}{{.Source}} {{end}}' bagholder-updater | tr ' ' '\n' | sed '/^$/d' | sort | tr '\n' ' ')" = "$RUNNER_TEMP/updated/updater /var/run/docker.sock " ] \
+            || { docker inspect -f '{{json .Mounts}}' bagholder-updater; exit 1; }
+          until docker logs bagholder-updater 2>&1 | grep -q 'HTTP API enabled and periodic updates disabled'; do
+            [ "$(docker inspect -f '{{.State.Running}}' bagholder-updater)" = true ] || { docker logs bagholder-updater; exit 1; }
+            sleep 1
+          done
+          ! docker logs bagholder-updater 2>&1 | grep -i 'next scheduled run'
+          [ -z "$(docker port bagholder-updater)" ]
+          # from Bagholder's container, as Bagholder asks it: the token it made is
+          # taken, another is refused (a name no container has, so nothing updates)
+          ask() {
+            docker exec bagholder bash -c 'exec 3<>/dev/tcp/bagholder-updater/8080 && printf "POST /v1/update?container=%%5Enone-here%%24&async=true HTTP/1.1\r\nHost: bagholder-updater\r\nAuthorization: Bearer %s\r\nContent-Length: 0\r\nConnection: close\r\n\r\n" "$1" >&3 && IFS= read -r l <&3 && echo "$l"' _ "$1"
+          }
+          ask "$(sudo cat "$RUNNER_TEMP/updated/updater/token")" | grep -q '^HTTP/1.1 202'
+          ask made-up-token | grep -q '^HTTP/1.1 401'
+          BAGHOLDER_PORT=8792 docker compose $files down
+          sudo rm -rf "$RUNNER_TEMP/updated"
       - name: Who the image answers, on a local network and from the internet, directly and through Traefik, Caddy and nginx
         run: sh bin/container-network.test.sh bagholder:ci
       - name: The container's log
         if: failure()
-        run: docker logs bagholder
+        run: |
+          docker logs bagholder || true
+          docker logs bagholder-updater || true
 
   # Known vulnerabilities in what the build depends on: an advisory fails the job
   # (cargo audit's own exit status); an unmaintained or yanked crate is printed and

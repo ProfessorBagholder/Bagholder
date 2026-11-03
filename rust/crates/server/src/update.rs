@@ -47,6 +47,109 @@ pub fn updates_off() -> bool {
     crate::app::env_on("BAGHOLDER_NO_UPDATE")
 }
 
+/// A container copy's updater (`docs/plans/docker-update-button.md`): a companion
+/// container that holds Docker's controls, which Bagholder never does, and updates
+/// Bagholder's own container when asked over its token-protected HTTP API.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Updater {
+    /// Its address on the compose network, `http://name:port`.
+    pub url: String,
+    pub token: String,
+    /// This container's name, as Docker knows it: never inferred, since a
+    /// container's default hostname is its id.
+    pub container: String,
+}
+
+static UPDATER: std::sync::OnceLock<Option<Updater>> = std::sync::OnceLock::new();
+
+/// The updater set at start, if any.
+pub fn updater() -> Option<&'static Updater> {
+    UPDATER.get().and_then(Option::as_ref)
+}
+
+/// Keep the updater read at start (`read_updater`), once.
+pub fn set_updater(u: Option<Updater>) -> Result<(), String> {
+    UPDATER.set(u).map_err(|_| "the updater was set twice in one process".to_string())
+}
+
+/// `BAGHOLDER_UPDATER_URL`, `BAGHOLDER_UPDATER_TOKEN_FILE` and
+/// `BAGHOLDER_CONTAINER_NAME` read: none without a URL; with one, a token file and
+/// a container name are required, and anything missing or unreadable refuses the
+/// start, naming the setting: fail closed. A token file not there yet is made here,
+/// private to this user, with a token of its own, so nobody types or copies one:
+/// the updater reads the same file (the shipped `docker-compose.updater.yml`).
+pub fn read_updater(url: Option<&str>, token_file: Option<&str>, container: Option<&str>) -> Result<Option<Updater>, String> {
+    let url = url.map(str::trim).unwrap_or_default().trim_end_matches('/');
+    if url.is_empty() {
+        return Ok(None);
+    }
+    let rest = url.strip_prefix("http://").or_else(|| url.strip_prefix("https://")).ok_or_else(|| format!("BAGHOLDER_UPDATER_URL is {url:?}: give the updater's address as http://name:port"))?;
+    if rest.is_empty() || rest.contains(['/', ' ', '?', '#']) {
+        return Err(format!("BAGHOLDER_UPDATER_URL is {url:?}: give the updater's address as http://name:port, with no path"));
+    }
+    let container = container.map(str::trim).unwrap_or_default();
+    if container.is_empty() {
+        return Err("BAGHOLDER_UPDATER_URL is set, so BAGHOLDER_CONTAINER_NAME is needed: this container's name as Docker knows it (container_name in the compose file)".into());
+    }
+    if !container.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')) {
+        return Err(format!("BAGHOLDER_CONTAINER_NAME is {container:?}: a container's name is letters, digits, '_', '.' and '-'"));
+    }
+    let file = token_file.map(str::trim).unwrap_or_default();
+    if file.is_empty() {
+        return Err("BAGHOLDER_UPDATER_URL is set, so BAGHOLDER_UPDATER_TOKEN_FILE is needed: the file holding the updater's API token".into());
+    }
+    if !std::path::Path::new(file).exists() {
+        make_token_file(file).map_err(|e| format!("BAGHOLDER_UPDATER_TOKEN_FILE {file} could not be made: {e}"))?;
+    }
+    let token = std::fs::read_to_string(file).map_err(|e| format!("BAGHOLDER_UPDATER_TOKEN_FILE {file} could not be read: {e}"))?.trim().to_string();
+    if token.is_empty() {
+        return Err(format!("BAGHOLDER_UPDATER_TOKEN_FILE {file} holds no token"));
+    }
+    Ok(Some(Updater { url: url.trim_end_matches('/').to_string(), token, container: container.to_string() }))
+}
+
+/// A new token file at `path`: 32 random bytes, readable by this user alone, in a
+/// folder of its own made private where it is not there yet, since that folder is
+/// all the updater is given of the data folder.
+fn make_token_file(path: &str) -> std::io::Result<()> {
+    use std::io::Write;
+    if let Some(dir) = std::path::Path::new(path).parent().filter(|d| !d.as_os_str().is_empty() && !d.exists()) {
+        let mut b = std::fs::DirBuilder::new();
+        b.recursive(true);
+        #[cfg(unix)]
+        std::os::unix::fs::DirBuilderExt::mode(&mut b, 0o700);
+        b.create(dir)?;
+    }
+    let mut o = std::fs::OpenOptions::new();
+    o.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut o, 0o600);
+    let mut f = o.open(path)?;
+    writeln!(f, "{}", crate::agents::secret::secret(""))
+}
+
+/// Ask the updater to update this container: one `POST /v1/update`, filtered to
+/// this container by name (a whole-name match), answered at once (`async`), since
+/// the update stops the container that asked. What it refused, or why it could not
+/// be reached, in words.
+pub fn ask_updater(u: &Updater) -> Result<(), String> {
+    let name: String = u.container.chars().flat_map(|c| if c == '.' { vec!['\\', '.'] } else { vec![c] }).collect();
+    let query = serde_urlencoded::to_string([("container", format!("^{name}$").as_str()), ("async", "true")]).map_err(|e| e.to_string())?;
+    let auth = format!("Bearer {}", u.token);
+    // sent once, never again on a failed read, as an order is: an update asked twice
+    // is two updates
+    let said = bagholder_net::client::request_once("POST", &format!("{}/v1/update?{query}", u.url), &[("Authorization", auth.as_str()), ("Accept", "application/json")], None, Duration::from_secs(30)).map_err(|e| format!("Bagholder could not reach its updater at {}: {e}", u.url))?;
+    if (200..300).contains(&said.status) {
+        return Ok(());
+    }
+    let why = serde_json::from_slice::<serde_json::Value>(&said.body).ok().and_then(|v| v.get("error").and_then(|e| e.as_str()).map(str::to_string));
+    Err(match (said.status, why) {
+        (401, _) => "The updater refused Bagholder's token: check that BAGHOLDER_UPDATER_TOKEN_FILE and the updater's --http-api-token hold the same token.".into(),
+        (_, Some(w)) => format!("The updater refused the update ({}): {w}.", said.status),
+        (s, None) => format!("The updater refused the update ({s})."),
+    })
+}
+
 /// The header's entry for the update check's own record.
 const UPDATE_CHECK: &str = "update-check";
 
@@ -393,8 +496,12 @@ pub fn git_update_ready(app: &Arc<App>) -> (bool, String) {
 }
 
 pub fn can_update(app: &Arc<App>, rec: &UpdateRecord) -> bool {
-    if !rec.update_available || updates_off() {
+    if !rec.update_available {
         return false;
+    }
+    // a container copy updates through its updater, where it has one
+    if updates_off() {
+        return updater().is_some();
     }
     if update_mode(app) == "git" {
         return git_update_ready(app).0;
@@ -853,7 +960,7 @@ pub fn perform_update(app: &Arc<App>, tag: &str, rec: &UpdateRecord) {
 /// background.
 pub fn start_update(app: &Arc<App>) -> crate::http::OkOr {
     use crate::http::OkOr;
-    if updates_off() {
+    if updates_off() && updater().is_none() {
         return OkOr::err(UPDATES_OFF_MESSAGE);
     }
     let rec = match update_status(app) {
@@ -872,7 +979,7 @@ pub fn start_update(app: &Arc<App>) -> crate::http::OkOr {
             return OkOr::err("No update to install.");
         }
         drop(st);
-        if !can_update(app, &rec) {
+        if !can_update(app, &rec) && !updates_off() {
             let why = if update_mode(app) == "git" { git_update_ready(app).1 } else { "This release has no downloadable archive.".to_string() };
             return OkOr::err(why);
         }
@@ -885,6 +992,20 @@ pub fn start_update(app: &Arc<App>) -> crate::http::OkOr {
     }
     let tag = rec.latest.clone();
     let a = app.clone();
+    // a container copy asks its updater, which stops this container and starts the
+    // new image: the page reconnects to the new version
+    if let Some(u) = updater().filter(|_| updates_off()) {
+        spawn("bagholder-update", move || {
+            if let Err(why) = ask_updater(u) {
+                let mut st = a.state.lock().unwrap();
+                st.updating.clear();
+                st.update_error = why;
+                drop(st);
+                a.events.signal();
+            }
+        });
+        return OkOr::ok();
+    }
     spawn("bagholder-update", move || perform_update(&a, &tag, &rec));
     OkOr::ok()
 }
@@ -1014,5 +1135,90 @@ mod host_tests {
         for no in ["github.com.evil.io", "evilgithub.com", "githubusercontent.co"] {
             assert!(!super::github_host(no), "{no}");
         }
+    }
+
+    /// A stand-in updater on loopback: it keeps each request it gets (its first
+    /// line and its Authorization header) and answers `status` with `body`.
+    fn stand_in(status: u16, body: &'static str) -> (String, std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>) {
+        use std::io::{Read, Write};
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+        let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let kept = seen.clone();
+        std::thread::spawn(move || {
+            for c in l.incoming() {
+                let Ok(mut c) = c else { return };
+                let mut head = Vec::new();
+                let mut b = [0u8; 1];
+                while !head.ends_with(b"\r\n\r\n") && c.read(&mut b).unwrap_or(0) == 1 {
+                    head.push(b[0]);
+                }
+                let text = String::from_utf8_lossy(&head).to_string();
+                let line = text.lines().next().unwrap_or_default().to_string();
+                let auth = text.lines().find_map(|l| l.strip_prefix("Authorization: ")).unwrap_or_default().to_string();
+                kept.lock().unwrap().push((line, auth));
+                let _ = c.write_all(format!("HTTP/1.1 {status} X\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).as_bytes());
+            }
+        });
+        (url, seen)
+    }
+
+    fn updater(url: &str) -> super::Updater {
+        super::Updater { url: url.into(), token: "made-up-token".into(), container: "bag.holder".into() }
+    }
+
+    /// The button asks the updater once, for this container alone by its whole
+    /// name, answered at once, with the token.
+    #[test]
+    fn the_updater_is_asked_once_for_this_container_with_its_token() {
+        let (url, seen) = stand_in(202, r#"{"status":"accepted"}"#);
+        super::ask_updater(&updater(&url)).unwrap();
+        let seen = seen.lock().unwrap().clone();
+        assert_eq!(seen.len(), 1, "{seen:?}");
+        assert_eq!(seen[0].0, "POST /v1/update?container=%5Ebag%5C.holder%24&async=true HTTP/1.1");
+        assert_eq!(seen[0].1, "Bearer made-up-token");
+    }
+
+    /// A refusal, a wrong token or an updater nowhere to be found is said in words.
+    #[test]
+    fn an_updater_that_refuses_or_is_not_there_is_said_in_words() {
+        let (url, _) = stand_in(409, r#"{"error":"another update is already running"}"#);
+        assert_eq!(super::ask_updater(&updater(&url)).unwrap_err(), "The updater refused the update (409): another update is already running.");
+        let (url, _) = stand_in(401, "");
+        assert!(super::ask_updater(&updater(&url)).unwrap_err().contains("refused Bagholder's token"));
+        // a port nothing answers on
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let gone = format!("http://127.0.0.1:{}", l.local_addr().unwrap().port());
+        drop(l);
+        assert!(super::ask_updater(&updater(&gone)).unwrap_err().starts_with(&format!("Bagholder could not reach its updater at {gone}")));
+    }
+
+    /// The updater's settings: none without a URL; with one, a container name and a
+    /// readable token are required, and anything wrong refuses the start by name.
+    #[test]
+    fn the_updater_settings_refuse_the_start_naming_what_is_missing() {
+        let dir = tempfile::tempdir().unwrap();
+        let token = dir.path().join("token");
+        std::fs::write(&token, "made-up-token\n").unwrap();
+        let t = token.to_str().unwrap();
+        assert_eq!(super::read_updater(None, Some(t), None), Ok(None));
+        assert_eq!(super::read_updater(Some("http://bagholder-updater:8080/"), Some(t), Some("bagholder")), Ok(Some(super::Updater { url: "http://bagholder-updater:8080".into(), token: "made-up-token".into(), container: "bagholder".into() })));
+        assert!(super::read_updater(Some("http://bagholder-updater:8080"), Some(t), None).unwrap_err().contains("BAGHOLDER_CONTAINER_NAME is needed"));
+        assert!(super::read_updater(Some("http://bagholder-updater:8080"), None, Some("bagholder")).unwrap_err().contains("BAGHOLDER_UPDATER_TOKEN_FILE is needed"));
+        // a token file not there yet is made, private, and read the same way after
+        let made = dir.path().join("updater").join("token");
+        let first = super::read_updater(Some("http://u:8080"), Some(made.to_str().unwrap()), Some("bagholder")).unwrap().unwrap().token;
+        assert!(first.len() >= 32, "{first}");
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(&made).unwrap().permissions()) & 0o777, 0o600);
+        #[cfg(unix)]
+        assert_eq!(std::os::unix::fs::PermissionsExt::mode(&std::fs::metadata(made.parent().unwrap()).unwrap().permissions()) & 0o777, 0o700, "its folder is private");
+        assert_eq!(super::read_updater(Some("http://u:8080"), Some(made.to_str().unwrap()), Some("bagholder")).unwrap().unwrap().token, first, "kept, not made again");
+        assert!(super::read_updater(Some("bagholder-updater:8080"), Some(t), Some("bagholder")).unwrap_err().starts_with("BAGHOLDER_UPDATER_URL is"));
+        assert!(super::read_updater(Some("http://bagholder-updater:8080/v1"), Some(t), Some("bagholder")).unwrap_err().contains("no path"));
+        assert!(super::read_updater(Some("http://u:8080"), Some(t), Some("bag holder")).unwrap_err().starts_with("BAGHOLDER_CONTAINER_NAME is"));
+        let empty = dir.path().join("empty");
+        std::fs::write(&empty, "  \n").unwrap();
+        assert!(super::read_updater(Some("http://u:8080"), Some(empty.to_str().unwrap()), Some("bagholder")).unwrap_err().contains("holds no token"));
     }
 }

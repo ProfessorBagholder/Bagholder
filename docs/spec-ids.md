@@ -233,6 +233,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `versions-and-the-update-check-11`
 - `versions-and-the-update-check-12`
 - `versions-and-the-update-check-13`
+- `versions-and-the-update-check-14`
 - `notifications-1`
 - `notifications-2`
 - `notifications-3`

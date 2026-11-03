@@ -259,6 +259,7 @@
 <a id="versions-and-the-update-check-11"></a>The request carries nothing but the app's version in its user agent; a failed check, or no release yet, is silent.
 <a id="versions-and-the-update-check-12"></a>While the built-in language model's file downloads (on the first start, about 2 GB), the header reads `Downloading the language model… 34%`, unless the line has something it says first (an update, a sign-in, a sync or an error).
 <a id="versions-and-the-update-check-13"></a>A newer release is offered (the header's `Update to vX.Y.Z` button, and the update notification) only once this copy can take it: a copy that installs release archives waits until this platform's archive and its checksum are attached, since GitHub publishes a release before its archives are built, and the next check offers it.
+<a id="versions-and-the-update-check-14"></a>A copy in a container never replaces itself: Docker's controls are root on the host, and a container cannot recreate the container it runs in (`docs/plans/docker-update-button.md`). With an updater set up beside it (`BAGHOLDER_UPDATER_URL`, `BAGHOLDER_UPDATER_TOKEN_FILE` and `BAGHOLDER_CONTAINER_NAME`), the header's `Update to vX.Y.Z` asks that updater, once, to update this container alone; the page says `Updating to vX.Y.Z…` and comes back on the new version, and a refusal or an updater out of reach is said in words. With none, the header says `vX.Y.Z available:` and the one command that updates it, `docker compose pull && docker compose up -d`, with a Copy button, and links nowhere.
 
 ### Notifications
 

@@ -172,7 +172,8 @@ pub fn status(app: &Arc<App>) -> Status {
         update_available: upd.update_available,
         update_url: if off { update::image_page() } else if upd.url.is_empty() { update::repo_url() } else { upd.url.clone() },
         can_update,
-        update_by: if off { "image" } else { "app" }.to_string(),
+        // `container`: its updater installs it; `image`: the person pulls it
+        update_by: if off { if update::updater().is_some() { "container" } else { "image" } } else { "app" }.to_string(),
         login_view: login::login_view(),
         orders_live: orders::orders_live(app),
         open_orders,
