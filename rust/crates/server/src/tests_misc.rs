@@ -466,7 +466,7 @@ const TIMED_WAITS: [(&str, usize, &str); 24] = [
     ("server/src/docs.rs", 1, "a ticket's quote, every five seconds while a page shows that ticket and not a moment longer: Wealthsimple offers no quote push"),
     ("server/src/due.rs", 1, "the figure path's reads: until the next known deadline (the day turning in the person's zone, the Bank's 16:30, a close settling, a payer's window, a source's rest ending, a minute for quotes only while a page shows them)"),
     ("server/src/events.rs", 7, "`park_until_or` itself, the 40 ms gather; four in its tests (the day turning is the scheduler's, `due.rs`; signals that never stop, bounded so the old gathering fails rather than hangs)"),
-    ("server/src/feeds.rs", 10, "outside sources that offer no push, each only while wanted; known deadlines"),
+    ("server/src/feeds.rs", 11, "outside sources that offer no push, each only while wanted; known deadlines; the market universes kept fresh every half hour while the app runs (the owner, 2026-11-02)"),
     ("server/src/filings.rs", 3, "the regulators offer no push: the daily sweep of the filers held, the gap between two reads at one regulator, and a person's pace at SEDAR+"),
     ("server/src/http/mod.rs", 1, "the five seconds requests in hand are given to finish when the app stops"),
     ("server/src/http/remote.rs", 1, "the page's address asked from outside while it comes up, every few seconds for at most ten minutes, until it asks for the sign-in: Cloudflare offers no push for a name beginning to answer"),
@@ -902,3 +902,33 @@ fn every_copy_the_repository_starts_on_another_folder_ends_with_its_starter() {
     assert!(starts >= 4, "the scratch command, the browser tests' server, the capacity probes and the tunnel's guard: {starts}");
 }
 
+
+/// Every background loop the server has (`pub fn …_loop`, in any module) is started
+/// by `serve()`, in a `spawn_with` of its own: a loop written and never started
+/// would leave its work undone with every test passing.
+#[test]
+fn test_every_loop_is_started_by_serve() {
+    let src = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src");
+    let main = std::fs::read_to_string(src.join("main.rs")).unwrap();
+    let from = main.find("fn serve() -> i32 {").expect("serve() in main.rs");
+    let serve = &main[from..];
+    let serve = &serve[..serve.find("\n}\n").expect("serve()'s end")];
+    let spawned: Vec<&str> = serve.lines().filter(|l| l.contains("spawn_with(")).collect();
+    let loop_fn = regex::Regex::new(r"(?m)^pub fn ([a-z_]+_loop)\(").unwrap();
+    let mut dirs = vec![src.clone()];
+    let mut loops = Vec::new();
+    while let Some(d) = dirs.pop() {
+        for e in std::fs::read_dir(&d).unwrap().flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                dirs.push(p);
+            } else if p.extension().is_some_and(|x| x == "rs") {
+                let text = std::fs::read_to_string(&p).unwrap();
+                loops.extend(loop_fn.captures_iter(&text).map(|c| c[1].to_string()));
+            }
+        }
+    }
+    assert!(loops.len() >= 10, "the loops were found: {loops:?}");
+    let not_started: Vec<&String> = loops.iter().filter(|name| !spawned.iter().any(|l| l.contains(&format!("::{name}")) || l.contains(&format!(" {name}")) || l.contains(&format!("({name}")))).collect();
+    assert!(not_started.is_empty(), "loops serve() never starts: {not_started:?}");
+}

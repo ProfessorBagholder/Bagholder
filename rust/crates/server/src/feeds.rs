@@ -1330,6 +1330,8 @@ type UniverseSource = bagholder_market::universes::Source;
 pub struct UniverseReads {
     asked: HashMap<UniverseSource, f64>,
     failed: HashMap<UniverseSource, String>,
+    /// The sources being read this moment.
+    reading: HashSet<UniverseSource>,
 }
 
 /// `universe:<key>`: what the last read of the universe's source came to. Its rows
@@ -1338,6 +1340,8 @@ pub struct UniverseReads {
 pub struct UniverseDoc {
     /// The source's failure, from its last read until it next answers.
     pub failed: Option<String>,
+    /// The source is being read this moment: what a heatmap with no rows yet says.
+    pub reading: bool,
 }
 
 /// The universe `key`'s document as it stands; `None` for a key that is not a market
@@ -1345,7 +1349,7 @@ pub struct UniverseDoc {
 pub fn universe_stored(app: &Arc<App>, key: &str) -> Option<UniverseDoc> {
     let source = UniverseSource::of(key)?;
     let reads = app.feeds.universes.lock().unwrap_or_else(|e| e.into_inner());
-    Some(UniverseDoc { failed: reads.failed.get(&source).cloned() })
+    Some(UniverseDoc { failed: reads.failed.get(&source).cloned(), reading: reads.reading.contains(&source) })
 }
 
 /// Seconds from `now` until a source is due a read: none while any universe it
@@ -1369,8 +1373,13 @@ fn source_due_in(app: &Arc<App>, source: UniverseSource) -> f64 {
 }
 
 #[cfg(not(test))]
-fn fetch_universes(_app: &Arc<App>, source: UniverseSource) -> Result<Vec<(&'static str, Vec<bagholder_model::input::UniverseRow>)>, String> {
-    bagholder_market::universes::read(source)
+fn fetch_universes(app: &Arc<App>, source: UniverseSource) -> Result<Vec<(&'static str, Vec<bagholder_model::input::UniverseRow>)>, String> {
+    // each Canadian constituent's sector as last read: asked again only once a month old
+    let c = conn(app)?;
+    let known = sf::universe_sectors(&c).map_err(|e| format!("The kept sectors could not be read: {e}"))?.into_iter().filter_map(|(s, (sector, at))| parse_instant(&at).map(|t| (s, (sector, t)))).collect();
+    let read = bagholder_market::universes::read(source, &known, now_unix())?;
+    sf::keep_universe_sectors(&c, &read.sectors, &now_iso()).map_err(|e| format!("The sectors read could not be kept: {e}"))?;
+    Ok(read.universes)
 }
 
 /// A test stands in for the sources: it counts the reads, and answers as it was told.
@@ -1398,7 +1407,9 @@ fn read_universes(app: &Arc<App>, source: UniverseSource) {
             return;
         }
         reads.asked.insert(source, now);
+        reads.reading.insert(source);
     }
+    app.events.signal(); // a heatmap with no rows yet says it is being read
     let outcome = fetch_universes(app, source).and_then(|answered| {
         let c = conn(app)?;
         let now = now_iso();
@@ -1409,6 +1420,7 @@ fn read_universes(app: &Arc<App>, source: UniverseSource) {
     });
     {
         let mut reads = app.feeds.universes.lock().unwrap_or_else(|e| e.into_inner());
+        reads.reading.remove(&source);
         match outcome {
             Ok(()) => reads.failed.remove(&source),
             Err(why) => {
@@ -1418,6 +1430,27 @@ fn read_universes(app: &Arc<App>, source: UniverseSource) {
         };
     }
     app.events.signal(); // the documents say what the read came to
+}
+
+/// The market universes the heatmap shows, read as the app starts, book open or
+/// not (they read nothing from the book), and again as each source comes due, for
+/// as long as the app runs (the owner, 2026-11-02: a heatmap is never empty for
+/// lack of a read). A page showing one reads it the same way, and the half hour a
+/// source was asked within keeps the two from asking twice.
+pub fn markets_universes_loop(app: Arc<App>) {
+    loop {
+        for source in [UniverseSource::Tmx, UniverseSource::Screener] {
+            if source_due_in(&app, source) <= 0.0 {
+                read_universes(&app, source);
+            }
+        }
+        let next = [UniverseSource::Tmx, UniverseSource::Screener].into_iter().map(|s| source_due_in(&app, s)).fold(UNIVERSE_STALE_SEC, f64::min);
+        // a source whose read just failed is due at once by its rows, but asked
+        // again only once the half hour is up: never sooner than a minute
+        if app.wait(Duration::from_secs_f64(next.max(60.0))) {
+            return;
+        }
+    }
 }
 
 /// A page has started showing the universe `key` (`universe:<key>`): read it when it

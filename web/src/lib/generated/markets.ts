@@ -26,7 +26,11 @@ export type UniverseDoc = {
 /**
  * The source's failure, from its last read until it next answers.
  */
-failed: string | null, };
+failed: string | null, 
+/**
+ * The source is being read this moment: what a heatmap with no rows yet says.
+ */
+reading: boolean, };
 
 export type NewsDoc = { reading: Array<string>, };
 

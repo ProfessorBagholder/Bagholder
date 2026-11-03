@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { heatFromHash, tabFromHash, subFromHash } from '../router.svelte'
-import { marketsOnShow, nextScope } from './heat.svelte'
+import { marketsOnShow, nextScope, emptyWord } from './heat.svelte'
 
 describe("the heatmap's own address", () => {
   it('is Markets, with no row open', () => {
@@ -46,5 +46,20 @@ describe('the market universes on show', () => {
       expect(shown.slice().sort()).toEqual(markets.slice().sort())
     }
     expect(marketsOnShow('holdings', { list: ['holdings', 'watchlist'] })).toEqual([])
+  })
+})
+
+describe('a heatmap with no tiles', () => {
+  it('says a market is being read, by its source, while its first read is under way', () => {
+    expect(emptyWord('ca', { failed: null, reading: true })).toBe('Reading the S&P/TSX 60…')
+    expect(emptyWord('us', { failed: null, reading: true })).toBe("Reading Nasdaq's screener…")
+    expect(emptyWord('intl', { failed: null, reading: true })).toBe("Reading Nasdaq's screener…")
+  })
+  it('says why a read failed, or that none has been made, and what a book scope lacks', () => {
+    expect(emptyWord('ca', { failed: 'TMX Money could not be reached.', reading: false })).toBe('TMX Money could not be reached.')
+    expect(emptyWord('ca', { failed: null, reading: false })).toBe('Not read yet.')
+    expect(emptyWord('ca', null)).toBe('Not read yet.')
+    expect(emptyWord('watchlist', null)).toBe('Nothing watched.')
+    expect(emptyWord('holdings', null)).toBe('No open positions.')
   })
 })
