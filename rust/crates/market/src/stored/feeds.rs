@@ -1482,6 +1482,23 @@ pub fn universe_read_at(conn: &Connection, key: &str) -> Result<Option<String>> 
     Ok(conn.query_row("SELECT MAX(fetched_at) FROM universes WHERE key = ?", [key], |r| r.get::<_, Option<String>>(0))?)
 }
 
+/// Each Canadian constituent's sector as last read, with when (ISO).
+pub fn universe_sectors(conn: &Connection) -> Result<std::collections::BTreeMap<String, (String, String)>> {
+    let mut stmt = conn.prepare_cached("SELECT symbol, sector, read_at FROM universe_sectors")?;
+    let rows = stmt.query_map([], |r| Ok((r.get::<_, String>(0)?, (r.get::<_, String>(1)?, r.get::<_, String>(2)?))))?.collect::<rusqlite::Result<_>>()?;
+    Ok(rows)
+}
+
+/// The sectors a read asked for and was told, kept as read `now`.
+pub fn keep_universe_sectors(conn: &Connection, sectors: &[(String, String)], now: &str) -> Result<()> {
+    bagholder_sqlite::atomically(conn, || {
+        for (symbol, sector) in sectors {
+            conn.execute("INSERT OR REPLACE INTO universe_sectors (symbol, sector, read_at) VALUES (?, ?, ?)", rusqlite::params![symbol, sector, now])?;
+        }
+        Ok(())
+    })
+}
+
 // --------------------------------------------------------------------------
 // the remaining readers
 // --------------------------------------------------------------------------

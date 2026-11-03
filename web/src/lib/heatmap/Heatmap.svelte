@@ -12,7 +12,7 @@
   import type { UniverseDoc } from '../generated/markets'
   import { watchDoc } from '../live.svelte'
   import { go, goHash, rewrite, route } from '../router.svelte'
-  import { heat, show, remember, heatHash, applyAddress, nextScope, marketsOnShow, MARKET_U, EVERY_SCOPE } from './heat.svelte'
+  import { heat, show, remember, heatHash, applyAddress, nextScope, marketsOnShow, MARKET_U, EVERY_SCOPE, emptyWord } from './heat.svelte'
 
   let { alone = false }: { alone?: boolean } = $props()
 
@@ -39,7 +39,7 @@
     })
     return () => stops.forEach((stop) => stop())
   })
-  const emptyWord = $derived(heat.universe === 'watchlist' ? 'Nothing watched.' : MARKET_U[heat.universe] ? udocs[heat.universe]?.data?.failed || 'Not read yet.' : 'No open positions.')
+  const emptyText = $derived(emptyWord(heat.universe, udocs[heat.universe]?.data))
 
   function pick(patch: Partial<typeof heat>) {
     if ('universe' in patch) show.on = null // a scope picked by hand ends the cycling
@@ -99,7 +99,7 @@
     {#if blocks.length}
       <HeatBox {blocks} universe={heat.universe} boxStyle="position:relative;flex:1;min-height:0" />
     {:else}
-      <div class="muted empty" style="font-size:12px">{emptyWord}</div>
+      <div class="muted empty" style="font-size:12px">{emptyText}</div>
     {/if}
   </div>
 {:else}
@@ -108,7 +108,7 @@
     {#if blocks.length}
       <HeatBox {blocks} universe={heat.universe} boxStyle="position:relative;width:100%;height:430px" />
     {:else}
-      <div class="muted empty" style="font-size:12px">{emptyWord}</div>
+      <div class="muted empty" style="font-size:12px">{emptyText}</div>
     {/if}
   </div>
 {/if}
