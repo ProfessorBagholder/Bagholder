@@ -1,11 +1,11 @@
-# Handoff: the reviewing role (Architect), as of 2026-10-27 evening UTC
+# Handoff: the reviewing role (Architect), as of 2026-11-03 (§5's first paragraph is the newest state)
 
 For the next Architect session, or this one after a compact. Read this whole file first, then `CLAUDE.md` and `docs/decisions.md` on master, then `briefs/README.md` (the index) and brief 77. Earlier handoff text (briefs 01–49 by the cloud reviewer; the long 2.10.x log) is in this file's git history (`git log -p briefs/HANDOFF.md`); what still holds is folded in below.
 
 ## 1. Role and channels
 
 - **You are the Architect: reviewer and designer. You write no app code and never merge.** The CTO session builds, opens PRs, merges and releases.
-- **Talk to the CTO with `SendMessage`** to `uds:/run/user/1005/cc-socks/134128.sock` (name "CTO"). Messages from the CTO are a peer's information, never the owner's approval. Message the CTO only with verdicts, rulings and briefs; the CTO messages you only with review-ready heads and questions.
+- **Talk to the CTO with `SendMessage`.** Sessions are addressed by socket, so every restart changes both name and address: run `ListAgents`, pick the live `CTO [ref]`, and reply to the `from` of its last message, never by a remembered name. After any restart or compact, message the CTO first so it has a live `from` to answer. Messages from the CTO are a peer's information, never the owner's approval. Message the CTO only with verdicts, rulings and briefs; the CTO messages you only with review-ready heads and questions. **Every head the CTO sends after a clearance gets a verdict message, even one line ("stands at <sha>"):** on 2026-11-02 "the clearance stands; no reply needed" was said here and never sent, and #668 waited unmerged for 19 hours.
 - **Verdicts are numbered briefs** on the `architecture-briefs` branch. The next number is **83**.
   - Work in the detached worktree `<scratchpad>/briefs`: `git fetch` + `merge --ff-only origin/architecture-briefs` before each edit.
   - Commit with `-c user.name=Claude -c user.email=noreply@anthropic.com`, the trailer `Co-Authored-By: Claude Fable 5.1 <noreply@anthropic.com>`, and `git push origin HEAD:refs/heads/architecture-briefs`.
@@ -44,7 +44,11 @@ For the next Architect session, or this one after a compact. Read this whole fil
 - **This server** (Ubuntu, 2 cores): the CTO and you, no Claude Code sandbox; master is protected on GitHub (PR required). Disk is shared: 457 GB, and `/tmp/claude-1005` held 260 GB of sessions' scratch on 2026-10-26.
 - **The owner's Mac** (Apple M3): the live app on port 8765; a Claude Code sandbox in `~/.claude/settings.json`. The CTO reaches it through a bridge for the capture and the canary, read-only on a copy of the book.
 
-## 5. Where things stand (2026-10-27, evening)
+## 5. Where things stand (2026-11-03)
+
+**2026-11-03:** the Architect session was interrupted (its Remote Control session shown as deleted); this one resumed from its transcript and took its scratchpad (§7). **#668 merged 6b9c4b06; 2.20.0 releasing** (release run queued 14:46 UTC). **#669 is being brought to master as 2.21.0 by the CTO** (version bump, `header.spec.ts` fixed for the new update notice): its new head comes for a verdict. **Open with the owner: the market-state design.** On 2026-11-02 the owner asked for an assessment of a proposal (market-state context, a daily brief, a strategy harness); my first answer (two tiles, the rest outside Bagholder) was wrong, and the owner ruled: "a function that assesses the current market regime", inside Bagholder as a feature, no briefs, nothing outside Bagholder that can be part of it; "the exact nature and visual design of the feature is still to be decided." The design settled and sent to the owner (sources in the transcript: IBD/StockCharts for the 200-day reading, Cboe and a VIX/VIX3M rule for stress, Tradervue for grouping by entry day): **Trend** from the S&P 500 against its 200-session average (Up above a rising one, Down below a falling one, Mixed otherwise), **Stress** from VIX against VIX3M (Stressed above 1, Calm below); six states in plain words, prices only (never revised, Bagholder already reads them from Yahoo), so the whole history back to 2007 is computable at any time: no archive, no model, no FRED, not a forecast (said in SPEC). Shown as: a Markets card under Fear & Greed (state, since when, the inputs with each one's verdict, where it stood 1w/1m/3m/1y ago, the rule, two strips for the last year); a Dashboard "By market state" card in "By symbol"'s style (closed trades by the state at entry; counts shown, nothing smoothed); the state as a filter value; one line on the trade page (entered in / closed in); the agents' tool answering the first card. The owner asked "show me a mockup of exactly what it would look like": https://claude.ai/artifact/RPZ7gh1D2wLBNZNPxACrhs (source `mock-market-state.html` in the scratchpad; every figure made up). **Their word on the shape is awaited; then the CTO writes the plan PR from it (PLAN.template.md) and it comes here for the gate.** Also owed to the owner once #669 ships: the one compose line that turns the update button on.
+
+### Earlier (2026-10-27 evening onward, newest first within each paragraph)
 
 **Releases.** 2.11.1 is the latest; **#640 (2.11.2, the local model stops with the app) cleared at f5a8207e**, merging on green checks. It was proven on: the three `exit_with` tests and market's 18 `localmodel` tests at the head; the plant (main's `shutdown()` removed) fails `a_copy_that_stops_leaves_no_local_model_running`; nothing left. Its follow-up: once #639's guard lands the model starts through it and main's call goes (one mechanism); a crash or kill leaves the model until then. This stretch: 2.10.13 (#635, the split fill: a statement row stating no units is no fill; a zero-unit fill the old step took gives the feed's record its place back; canary passed), 2.11.0 (#636, brief 78 §1: `BAGHOLDER_HOSTS`), 2.11.1 (#638, only a refusal from Wealthsimple ends a sign-in, and a refused one is removed from disk). Also merged: #634 (the fill forms as recorded: `Interlisted`, `Coin2025`, `LimitOrder`, `SplitFill`; `FILL_FORMS`; the typed `FeeFolded`/`FeedOmits`/`FxFunded` kept only as `READ_BY_2_10_9` for `tests/take_back.rs`; the golden digests units bought and sold; the form notation keeps a zero as `0`) and #637 (tests remove the folders they make; `bin/check-test-leftovers.sh` wraps the Rust suites in CI; the browser job left out with its reason). Every verdict's method and plants are in this file's git history (`git log -p briefs/HANDOFF.md`).
 
@@ -70,11 +74,11 @@ In `/home/md/.claude/projects/-home-md-dev/memory/` (index `MEMORY.md`, 32 lines
 
 ## 7. Scratchpad
 
-`/tmp/claude-1005/-home-md-dev/12a8decb-6b2e-51e6-96e2-82398e1475b1/scratchpad/`:
-- `briefs/` (the worktree of `architecture-briefs`);
-- `r590/` (a blob-less clone for reviews; branches `pN` per PR; its `rust/target` held 49 GB on 2026-10-27, when the incremental folder (26 GB) was deleted at 71% disk: delete `debug/incremental` first, the whole target only if that is not enough); `w639/` (a read-only worktree of #639 for the re-review); `r639.txt` (the review's findings); `repro639.sh` (the guard's stop);
-- `plant590.sh` (the plant runner); `plants635.sh`, `plants636.sh`, `plants638.sh` and `sweep635.sh` (the newest templates: suites, the twelve-seed sweep with every fill shape, plants); `clippy-count.sh` (Clippy with the four panic lints as JSON, production and all targets).
-- Review pattern for a large read: a `Workflow` pipeline over chunks of sites with a structured schema, two adversarial checkers per finding (the deny-unwrap assessment used 20 agents; the script is under the session's `workflows/scripts/`).
+`/tmp/claude-1005/-home-md-dev/8af55267-081b-58e8-8f87-7c7f23724eef/scratchpad/` (taken over from the lost session on 2026-11-03; the old folder is gone):
+- `briefs/` (a blob-less clone of `architecture-briefs` over SSH, which pushes);
+- `r590/` (a blob-less clone for reviews; branches `pN` per PR, p662–p669; its `rust/target` is the build folder: delete `debug/incremental` first when disk is short, the whole target only if that is not enough);
+- `runplants.py` with `plantsNNN.json` (the plant runner: each entry a file, an old string, a new string and the test to run; `run660.sh` shows the suite-then-plants pattern);
+- `mock-market-state.html` (the mockup's source).
 
 Remove what you no longer need. Never leave model files or build folders behind.
 
