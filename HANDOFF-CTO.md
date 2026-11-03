@@ -22,37 +22,38 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-10-31 ~03:00 UTC, written by the home-server CTO session)
+## 2. Where things stand (2026-11-03 ~15:45 UTC, written by the CTO session that took over after the previous one's environment was deleted)
 
-Private details (the owner's server, domain, deployment paths) are in the session's local memory (`bagholder-server-deployment.md`), never in this public file.
+Private details (the owner's server, domain, deployment paths) are in the session's local memory (`bagholder-server-deployment.md`), never in this public file. The previous session's transcript is the record of 2026-10-31 to 2026-11-02.
 
-### Released
-- **v2.16.1 is Latest** (2026-10-31 02:37 UTC, #653 merged as f8243c34, tag v2.16.1 there). A fresh book reads what it needs:
-  - today's holdings asked with `FetchHoldingsExportPositions`, as Wealthsimple's web app asks today's (2.13.0 asked the past-date document for today: `BAD_REQUEST` every time);
-  - past days read whole: a quantity whatever its direction says, an amount stated `null` is none, `HALTED`/`SUSPENDED` read as trading under the same id;
-  - the Bank of Canada's daily series asked per currency with no list read first (the list's object was renamed `groupDetail`);
-  - every build's TLS hello without `SSL_OP_TLSEXT_PADDING` (OpenSSL 3.0 padded it and Evolve's site refused it; 3.5 never pads);
-  - a Pay Day only that distribution's own (SPEC cashflow-26);
-  - Open from anywhere: no computer named in a container; an address a lost set-up's `bagholder-…` tunnel (connected nowhere) still holds is offered to take over in step 5, never taken unasked;
-  - a notification with no browser subscribed makes no VAPID key (that key work on the detached notify thread raced test exit: SIGSEGV).
-- The release run's suite-macos failed only on the known `get_at` race (below); every build, the Docker images and suite-windows passed, so the draft was published by hand, as 2.16.0 was.
-- **Release process, learned the hard way tonight:** before merging a version bump, write the draft release `vX.Y.Z` (notes) first, or the push-triggered run stops; a manual `workflow_dispatch` run needs the tag to exist (create it at the merge commit with `gh api -X POST repos/…/git/refs`).
-- #654 (merged 15dd6356, no release): the capacity book runs wholly on its made-up date (`made_up_now()`); `the_capacity_tool_reads_no_clock` holds it. It had broken capacity-cases on master on 2026-10-30 (a contract in the made-up book expired by the real clock).
+### Released since 2.16.1
+- **2.16.3** the image runs as its own user; the shipped compose runs it locked down.
+- **2.17.0** every trade says Long or Short, and a written option Covered/Uncovered call or Secured/Uncovered put, from Wealthsimple's positions read as of the day it was written (SPEC trade-72; the secured-put hold question stays open until the owner checks it in their own page).
+- **2.17.1** the agents' Cloudflare set-up offers to take over an address a stale `bagholder-` tunnel holds, never unasked.
+- **2.18.0** a covered call counts inside its shares' position in every statistic; its own row keeps its own P&L.
+- **2.19.0** an agent reads everything the page shows, through the one MCP server (`page_reads`, the `.route(` scan); `disclosures-mcp` is removed.
+- **2.20.0 (Latest)** the market heatmaps are read at start and kept fresh every half hour, page or none (the owner, 2026-11-02); Canada in one TMX request; sectors re-asked after 30 days; `test_every_loop_is_started_by_serve`. Every release job passed, suite-macos included (the `get_at` fix holds).
+- **2.21.0 (merged, f8806821; releasing)** in Docker the update notice is a button through an optional updater (`docker-compose.updater.yml`, Watchtower fork pinned by digest, the button its only trigger, mounting only `./data/updater`); without one, the command with a Copy button. The first release run's suite-macos was never given a runner by GitHub (capacity), so its failed jobs were re-run.
 
 ### The owner's production: the server copy
-- Bagholder runs on the owner's home server in Docker behind Traefik, from the published image (`ghcr.io/professorbagholder/bagholder:latest`, 2.16.1), local network only, Wealthsimple connected, Open from anywhere on. Details in local memory.
-- Update it: in its compose folder, `docker compose pull && docker compose up -d`. Never leave it on a local test image after a release.
-- The old preview is gone (its files went with a reboot); its Cloudflare leftovers were taken over by the server copy's Open from anywhere.
-- EASY's Evolve read through the server copy is unconfirmed on real data: the position was closed. Bagholder's client on Debian's OpenSSL 3.0 answers 200 with the fix (403 without). Check its Cashflow row when the owner holds EASY again.
+- On 2.19.0. **Updating it is a production deploy the auto-mode classifier refuses without the owner's OK in the conversation**: ask once per release, batched.
+- The owner's copy runs from a compose file of its own, not the shipped one, so the updater's lines for it are drafted separately (local memory) for the owner to approve; never applied unasked.
 
-### Next, in order
-1. **Done: #655** (merged 55b6dc74, test-only, no release).
-   - The app keeps the threads it starts for one-off work (`App::spawn_work`); `App::finish` (tests only) stops it and joins them. `tests_common::OwnHome` finishes a test's app before its folder goes, and `app::work_tests` holds it.
-   - The `get_at` stand-in peer reads the request first.
-   - The watchlist spec names the venue (TD is held on two).
-   - Other per-test apps (`due`, `broker_reads`, `tests_orders`, …) don't use `OwnHome` yet; give one `OwnHome` if it flakes.
-   - **Architect's rule from #655:** a failed release suite is fixed, never published around. The next release's suite-macos proves the `get_at` fix.
-2. Next: long/short on the Trades page (covered call, cash-secured put, uncovered labels: decided); line-tables-only debug builds; Bagholder updating the ngrok/cloudflared it installed.
+### Open with the owner
+- **The Markets tiles open on old prices and take a while to update (asked 2026-11-03).** Causes, from the code: held and followed listings are quoted only while a page is open (`due::quotes_owed`, since 2.11.3); a pass quotes every listing one at a time (Yahoo two seconds apart) and the page gets none until the pass ends (`due::pass` calls `price_changed` after `read_quotes`); and Yahoo refused every request with 429 for at least half an hour that day. Proposed: batch requests where the source allows, apply each quote as it lands, quote with no page open as the heatmaps are. Waiting on the owner's go. Yahoo's refusals' cause is unverified; probing it with a real browser was refused as bot-check circumvention, rightly: tiles that depend on getting past Yahoo's checks are the design question.
+- Cloudflare's Browser Integrity Check blocks agents built on Python's standard library (error 1010) at the agents' address; the owner was given the dashboard steps on 2026-11-02. A product fix (Bagholder's own set-up making a Bagholder-named rule) is not planned.
+
+### Next
+- The tiles fix once the owner says go; then line-tables-only debug builds; Bagholder updating the ngrok/cloudflared it installed.
+
+### Lessons from 2026-11-01 to 2026-11-03
+- **The Architect is addressed by replying to its latest message's `from`**, never by name; after a restart, whoever restarted messages first; never tell the owner it isn't running ("waiting on the Architect's review").
+- **No session reads the owner's book** (the Architect, 2026-11-01), not even counts through a copy. A question only their data answers goes to the owner.
+- **Nothing describing the owner's machine or network goes in any pushed file**, a plan's first commit included.
+- **A new SPEC rule id goes in `docs/spec-ids.md`** in the same commit (missed twice, caught by CI each time).
+- **A PR that replaces something on screen** updates the browser tests that held the old thing (#669's header test).
+- **`gh pr edit` fails on this repo** (classic projects deprecation): edit a PR through `gh api -X PATCH repos/…/pulls/N`.
+- **The server crate has no library target:** its unit tests run with `--bin bagholder`.
 
 ### Lessons from 2026-10-30 (the owner was angry at each)
 - **"It worked before" → git history first.** Find the commit that changed the path (`git log -L`, `git log -- <file>`) before any theory; never probe the owner's accounts to diagnose.
