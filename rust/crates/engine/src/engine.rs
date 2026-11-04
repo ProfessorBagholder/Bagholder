@@ -14,7 +14,7 @@ use crate::equity::{build_equity, AccountEquity};
 use crate::identity::{identify, Identity};
 use crate::input::{BenchmarkSeries, BrokerAccount, Clock, DeclaredRead, Inputs, Ledger, LedgerDelta, Quote, Rates, Sourced};
 use crate::families::{node_of, Families, Node};
-use crate::gap::Fig;
+use crate::gap::{Fig, Gap};
 use crate::ledger::{match_family, Direction, MatchState, Matched, TripKey};
 use crate::positions::{build_positions, PositionFig};
 use crate::scope::{scope, Filters, Scoped};
@@ -648,6 +648,17 @@ impl Engine {
         }
         // each day a written contract's coverage waits on (`crate::coverage`)
         n.holdings_on.extend(crate::coverage::days_waited(&self.trades));
+        // each day held into an ex-date waits on: a distribution owed, and a
+        // distribution's form (`crate::cashflow::held_into`)
+        n.holdings_on.extend(crate::cashflow::owed(&self.inputs, &self.matched, &self.cash).1);
+        for p in self.payers.values() {
+            if let Err(g) = &p.per {
+                n.holdings_on.extend(g.iter().filter_map(|x| match x {
+                    Gap::HoldingsUnread(d) => Some(*d),
+                    _ => None,
+                }));
+            }
+        }
         // each day the net worth history needs an account's cash of: a margin
         // account's, from its first stated value to its last (a day after it is its
         // last's, as the value is), and one whose value is never stated
@@ -697,7 +708,16 @@ impl Engine {
     }
 
     pub fn scope(&self, filters: &Filters) -> Scoped {
-        scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, &self.equity, &self.benchmarks, &|a| self.net_worth_past(a))
+        let mut s = scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, &self.equity, &self.benchmarks, &|a| self.net_worth_past(a));
+        s.cashflow.owed = self.owed_in_scope(filters);
+        s
+    }
+
+    /// The distributions owed and not paid yet that `filters` shows (`SPEC.md`
+    /// `cashflow-40`): worked out from the record, the day's positions read and the
+    /// payments, each time they are asked for, as their inputs move them.
+    fn owed_in_scope(&self, filters: &Filters) -> Vec<crate::cashflow::Owed> {
+        crate::scope::owed_in_scope(filters, &self.inputs, &self.trades, crate::cashflow::owed(&self.inputs, &self.matched, &self.cash).0)
     }
 
     /// Net worth by day before today over `accounts` (`scope::net_worth_past`),
@@ -728,7 +748,9 @@ impl Engine {
 
     /// The cashflow's part of `filters`' scope, over the holdings' part.
     pub fn cashflow(&self, filters: &Filters, portfolio: &crate::scope::Portfolio) -> crate::scope::Cashflow {
-        crate::scope::cashflow_in_scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, portfolio)
+        let mut c = crate::scope::cashflow_in_scope(filters, &self.inputs, &self.trades, &self.positions, &self.cash, &self.payers, portfolio);
+        c.owed = self.owed_in_scope(filters);
+        c
     }
 
     /// Apply one change, recomputing only what it touches, and say what moved:
@@ -1147,6 +1169,13 @@ impl Engine {
                 diff(&mut moved, before_equity.iter().map(|e| (Entity::Equity(a), e)), self.equity.get(&a).map(|e| (Entity::Equity(a), e)));
                 let now_stated = self.inputs.market.brokers.get(&a);
                 diff(&mut moved, before_stated.as_ref().map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)), now_stated.map(|b| (Entity::Broker(a), Stated(b))).iter().map(|(e, s)| (e.clone(), s)));
+                // a payer whose form waits on a day of this account's positions read
+                // or read again: its rate judged again (`cashflow::held_into`)
+                let changed = |d: &Date| before_stated.as_ref().and_then(|b| b.days_held.get(d)) != self.inputs.market.brokers.get(&a).and_then(|b| b.days_held.get(d));
+                let waiting: Vec<InstrumentId> = self.payers.iter().filter(|(_, p)| p.per.as_ref().err().is_some_and(|g| g.iter().any(|x| matches!(x, Gap::HoldingsUnread(d) if changed(d))))).map(|(i, _)| *i).collect();
+                for i in waiting {
+                    self.payer_again(i, &mut moved);
+                }
             }
         }
         moved

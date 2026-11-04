@@ -807,14 +807,24 @@ impl CashflowView {
     fn build(&self, cx: &Cx) -> CashflowDoc {
         let pf = cx.engine.portfolio(&self.filters);
         let mut c = build::cashflow_doc(cx.engine, &self.filters, &pf);
-        // a day's payments by symbol, then account, whichever column is sorted
-        let keyed: Vec<(String, Vec<SortValue>)> = c.rows.iter().map(|r| (r.id.clone(), vec![cash_sort_value(r, &self.sort.key), cash_sort_value(r, "symbol"), cash_sort_value(r, "account")])).collect();
-        let order = sorted_then(&keyed, self.sort.dir);
-        let total = c.rows.len();
-        let mut by_id: HashMap<String, CashflowRow> = c.rows.drain(..).map(|r| (r.id.clone(), r)).collect();
-        c.rows = order.iter().take(self.limit).filter_map(|id| by_id.remove(id)).collect();
+        let (rows, total) = arranged(c.rows.drain(..).collect(), &self.sort, self.limit);
+        c.rows = rows;
         CashflowDoc { cashflow: c, rows_total: total }
     }
+}
+
+/// Distribution history's rows as the page shows them, and how many payments the
+/// filters show: what is owed and not paid yet above the payments, latest first,
+/// whichever column they are sorted by (`SPEC.md` `cashflow-40`); then the first
+/// `limit` payments in the sorted order, a day's by symbol, then account.
+fn arranged(rows: Vec<CashflowRow>, sort: &Sort, limit: usize) -> (Vec<CashflowRow>, usize) {
+    let (mut owed, paid): (Vec<CashflowRow>, Vec<CashflowRow>) = rows.into_iter().partition(|r| r.owed);
+    owed.sort_by(|a, b| b.date.cmp(&a.date).then_with(|| a.symbol.cmp(&b.symbol)).then_with(|| a.account.cmp(&b.account)));
+    let keyed: Vec<(String, Vec<SortValue>)> = paid.iter().map(|r| (r.id.clone(), vec![cash_sort_value(r, &sort.key), cash_sort_value(r, "symbol"), cash_sort_value(r, "account")])).collect();
+    let order = sorted_then(&keyed, sort.dir);
+    let total = paid.len();
+    let mut by_id: HashMap<String, CashflowRow> = paid.into_iter().map(|r| (r.id.clone(), r)).collect();
+    (owed.into_iter().chain(order.iter().take(limit).filter_map(|id| by_id.remove(id))).collect(), total)
 }
 
 impl View for CashflowView {
@@ -867,6 +877,21 @@ pub fn every_view(cx: &Cx, filters: &crate::wire::filters::Filters) -> Result<se
 mod tests {
     use super::*;
     use crate::events::{Feed, Want};
+
+    /// What is owed stands above the payments, latest first, whatever column the
+    /// payments are sorted by and however few are shown (`SPEC.md` `cashflow-40`).
+    #[test]
+    fn what_is_owed_stands_above_the_payments_whichever_column_is_sorted() {
+        let row = |id: &str, date: &str, amount: &str, owed: bool| CashflowRow { id: id.into(), date: date.into(), symbol: "ZZQT".into(), account: "A".into(), qty: None, per: None, amount: crate::wire::Dec(bagholder_core::Dec::parse(amount).unwrap()), currency: "CAD".into(), owed };
+        let rows = || vec![row("p1", "2026-03-20", "5", false), row("o1", "2026-04-22", "50", true), row("p2", "2026-04-20", "1", false), row("o2", "2026-05-01", "9", true)];
+        for (key, dir) in [("date", Dir::Desc), ("date", Dir::Asc), ("amount", Dir::Asc), ("amount", Dir::Desc), ("symbol", Dir::Asc)] {
+            let (got, total) = arranged(rows(), &Sort { key: key.into(), dir }, 1);
+            let ids: Vec<&str> = got.iter().map(|r| r.id.as_str()).collect();
+            assert_eq!(&ids[..2], ["o2", "o1"], "{key} {dir:?}: the owed first, latest first");
+            assert_eq!(ids.len(), 3, "{key} {dir:?}: the limit counts the payments alone");
+            assert_eq!(total, 2, "the payments the filters show");
+        }
+    }
     use std::sync::Arc;
 
     /// A change as the page writes it into what it holds (`live.svelte.ts`, `applyOps`).

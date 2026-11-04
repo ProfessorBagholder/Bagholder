@@ -680,6 +680,12 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `cashflow-37`
 - `cashflow-38`
 - `cashflow-39`
+- `cashflow-40`
+- `cashflow-41`
+- `cashflow-42`
+- `cashflow-43`
+- `cashflow-44`
+- `cashflow-45`
 - `net-worth-1`
 - `net-worth-2`
 - `net-worth-3`

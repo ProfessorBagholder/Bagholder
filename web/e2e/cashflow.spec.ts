@@ -1,5 +1,5 @@
 import { expect, test } from '@playwright/test'
-import { ready, openWithStatus, figures, money, money0, signedMoney, pctPlain, qty, px, perUnit, cmp, type Waits } from './helpers'
+import { ready, openWithStatus, figures, modelDoc, standIn, streamBody, money, money0, signedMoney, pctPlain, qty, px, perUnit, cmp, type Waits } from './helpers'
 
 // SPEC §6, Cashflow: the six tiles, the monthly bar chart with its hover tip,
 // the Cashflow Positions table, the Allocation donut and Distribution history.
@@ -189,7 +189,8 @@ test('the Allocation donut totals projected monthly income, largest first, and a
 
 test('Distribution history lists newest first, in native currency, with no Type column', async ({ page, request }) => {
   const m = await figures(request)
-  const rows = m.cashflow.rows as { date: string; symbol: string; amount: string; currency: string }[]
+  const rows = (m.cashflow.rows as { date: string; symbol: string; amount: string; currency: string; owed: boolean }[]).filter((r) => !r.owed)
+  expect((m.cashflow.rows as { owed: boolean }[]).some((r) => r.owed), 'the made-up book owes nothing: the first row is the newest payment').toBe(false)
   const newest = [...rows].sort((a, b) => (a.date < b.date ? 1 : a.date > b.date ? -1 : 0))[0]
   await page.goto('/#cashflow')
   await ready(page)
@@ -201,6 +202,46 @@ test('Distribution history lists newest first, in native currency, with no Type 
   await expect(first.locator('td').nth(0)).toHaveText(newest.date)
   await expect(first.locator('td').nth(1)).toContainText(newest.symbol)
   await expect(first.locator('td').nth(5)).toHaveText(money(newest.amount, 2))
+})
+
+// SPEC.md cashflow-40: a distribution owed and not paid yet stands above the
+// payments, due and muted; its payment's arrival takes its place, and the payments'
+// rows stand as the same elements
+test('a distribution owed stands above the payments, due and muted, until its payment takes its place', async ({ page, request }) => {
+  const model = await modelDoc(request)
+  const rows = (model.cashflow.rows as Record<string, unknown>[]).filter((r) => !r.owed)
+  expect(rows.length).toBeGreaterThan(1)
+  const owed = { ...rows[0], id: 'owed:test', date: '2099-01-15', qty: '40', per: '0.25', amount: '10.00', owed: true }
+  let arrived = false
+  await standIn(page, () => {
+    const m = structuredClone(model)
+    m.cashflow.rows = arrived ? [{ ...owed, id: 'paid:test', owed: false }, ...rows] : [owed, ...rows]
+    return streamBody(m)
+  })
+  await page.goto('/#cashflow')
+  await ready(page)
+  const card = page.locator('.card', { has: page.getByRole('heading', { name: 'Distribution history' }) })
+  const first = card.locator('tbody tr').first()
+  await expect(first.locator('td').nth(0)).toHaveText('Due 2099-01-15')
+  await expect(first.locator('td').nth(3)).toHaveText(qty('40'))
+  await expect(first.locator('td').nth(5)).toHaveText(money('10.00', 2))
+  const muted = await page.evaluate(() => {
+    const probe = document.createElement('span')
+    probe.style.color = 'var(--ink55)'
+    document.body.appendChild(probe)
+    const c = getComputedStyle(probe).color
+    probe.remove()
+    return c
+  })
+  for (const n of [0, 5]) expect(await first.locator('td').nth(n).evaluate((el) => getComputedStyle(el).color)).toBe(muted)
+  // the payments' rows marked, then the payment arrives with the stream's next documents
+  const shown = await card.locator('tbody tr').count()
+  await card.locator('tbody tr').evaluateAll((trs) => trs.forEach((tr, n) => tr.setAttribute('data-mark', String(n))))
+  arrived = true
+  await expect(first.locator('td').nth(0)).toHaveText('2099-01-15', { timeout: 10_000 })
+  expect(await first.getAttribute('data-mark'), 'the payment is a row of its own').toBeNull()
+  const marks = await card.locator('tbody tr').evaluateAll((trs) => trs.map((tr) => tr.getAttribute('data-mark')))
+  expect(marks.slice(1, shown), 'every payment row the same element').toEqual(Array.from({ length: shown - 1 }, (_, n) => String(n + 1)))
 })
 
 test('a header click re-sorts Distribution history', async ({ page, request }) => {
