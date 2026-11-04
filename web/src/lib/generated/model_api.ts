@@ -140,6 +140,8 @@ amount: string | null, currency: string | null,
  */
 problem: string | null, };
 
+export type OtherSide = { kind: string, accountId: string | null, account: string | null, institution: string | null, };
+
 export type EntryRequest = { "entry": "trade", account: string, instrument: string | null, symbol: string, exchange: string, currency: string, day: string, side: string, quantity: string, price: string, fee: string, } | { "entry": "cost-of-arrival", arrival: string, cost: string, acquired: string, } | { "entry": "spin-off", event: string, parent: string, children: Array<ChildShare>, } | { "entry": "return-of-capital", distribution: string, perUnit: string, };
 
 export type ChildShare = { instrument: string, costShare: string, };

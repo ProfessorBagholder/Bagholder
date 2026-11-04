@@ -323,7 +323,7 @@ fn model_api_declarations() -> String {
         crate::http::model::TradeQuery, crate::http::model::Clear, crate::http::model::ClearAnswer, crate::clear::Kind,
         crate::http::model::JournalEntryRequest, crate::http::model::JournalAnswer, crate::http::model::DebtAnswerRequest, crate::http::model::DebtAnswer,
         crate::http::stream::Resync, crate::http::model::TradesQuery, crate::http::model::ViewQuery, crate::http::model::ViewAnswer,
-        crate::http::model::TransactionsQuery, crate::http::model::TransactionsAnswer, crate::http::model::TransactionRow,
+        crate::http::model::TransactionsQuery, crate::http::model::TransactionsAnswer, crate::http::model::TransactionRow, crate::http::model::OtherSide,
         crate::entries::EntryRequest, crate::entries::ChildShare, crate::http::model::EntryAnswer,
         crate::http::model::ImportQuery, crate::csv_import::RowNote, crate::csv_import::ImportReport, crate::csv_import::ImportAccepted, crate::http::model::ImportTold,
         crate::csv_import::WatchRequest, crate::csv_import::WatchStatus, crate::csv_import::WatchedFile, crate::csv_import::FileOutcome,
