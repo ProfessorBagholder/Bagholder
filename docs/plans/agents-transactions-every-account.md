@@ -48,8 +48,9 @@ None. Whether to store the other account on each transaction (a new column, fill
    - a row whose type moves money to or from outside Wealthsimple (a bank transfer, a pre-authorized debit, a bill payment, an e-Transfer, a card funding, a transfer from another institution): `{ "kind": "outside", "institution": <institutionName where stated> }`. An e-Transfer's or a P2P payment's names and messages are never read, as for the company.
    - otherwise: `{ "kind": "unstated" }`.
    The types that are outside are a table beside `COMPANY` with its source (the recorded reply), never inferred from an amount.
-4. **SPEC:** `agents-2`'s `transactions` line says every account and the other side; `agents-6` adds that a transaction names the account on its other side by the book's own id, an institution by its name, never a person's name or an account number. `docs/spec-ids.md` only if an id is added.
-5. **Cost:** the read pages as now (up to 1,000 rows); for each row on the page it already reads one kept record for the company, and the other side comes from the same record, so no further read and no request to Wealthsimple.
+4. **What the person approved.** `tools::READ` (`agents/tools.rs:20`), the sign-in page's statement of what an agent reads (`oauth.rs:388`; `the_sign_in_page_says_everything_an_agent_reads` holds every tool's words to it), widens with the tool in the same plain words: every account's money in and out, with the account on its other side. Agents already approved read the wider set from the release on, since the approval is of Bagholder's own text; the PR says so.
+5. **SPEC:** `agents-2`'s `transactions` line says every account and the other side; `agents-6` adds that a transaction names the account on its other side by the book's own id, an institution by its name, never a person's name or an account number. `docs/spec-ids.md` only if an id is added.
+6. **Cost:** the read pages as now (up to 1,000 rows); for each row on the page it already reads one kept record for the company, and the other side comes from the same record, so no further read and no request to Wealthsimple.
 
 ## Acceptance criteria
 
@@ -59,13 +60,14 @@ None. Whether to store the other account on each transaction (a new column, fill
 - [ ] No answer carries a person's name, an e-Transfer's or P2P payment's message, a payee's nickname, an account number or the broker's account id. A test over every row of every recorded activity reply in `wealthsimple/tests/replies/wealthsimple`.
 - [ ] A transfer whose amount the feed leaves null is listed with no amount and its reason. Plant: `t.cash.is_some()` put back fails it.
 - [ ] The read makes no request to Wealthsimple: a test with the stand-in counting its calls.
+- [ ] The sign-in page's `READ` says every account's money in and out with its other side; `the_sign_in_page_says_everything_an_agent_reads` and the transactions tool's words test hold it.
 - [ ] `cargo test` for the touched crates green, clippy clean; SPEC and `docs/decisions.md` as above.
 - [ ] In the PR: the read's time for a page of 1,000 rows on the reference-size book, before and after.
 
 ## Surfaces to check beyond the diff
 
 - `web/src/lib/generated/` (the route's types: `TransactionRow` gains `other` and `problem`, `amount` becomes optional); `rust/crates/server/tests/golden/routes.json`.
-- The agents' tool description (`agents/tools.rs:653`) says every account and the other side.
+- The agents' tool description (`agents/tools.rs:653`) says every account and the other side, and `tools::READ` (`agents/tools.rs:20`) the same, in the same plain words.
 - `mcp.rs:117`, the route's agent entry.
 
 ## Right to refuse
