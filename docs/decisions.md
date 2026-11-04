@@ -2,6 +2,10 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each carries the owner's own words and where they were said; a decision proposed by a brief or a session and not yet confirmed by the owner is marked "unconfirmed" and binds nothing until the owner confirms it. Each names the test that fails if it is broken, quoting what it asserts, or says "review only" where no test can hold it.
 
+## 2026-11-04
+
+- **An agent reads every account's money in and out, and a transfer names the account on its other side where Wealthsimple states it.** The owner, of an agent asked for the transfers into one of their investment accounts month by month: "it cannot tell what a receiving account is in the transaction history which makes no sense ... it was unable to tell me the amount of each transfer reliably for each month even though those transactions are all there for sure." Held by: the tests named in `docs/plans/agents-transactions-every-account.md`.
+
 ## 2026-11-02
 
 - **In Docker, the update notice updates Bagholder when the person presses it.** The owner, of the notice that linked to GitHub: "that is useless, clicking it opens github instead of updating the app", and of the companion that makes it a button: "update button". Held by: the tests named in `docs/plans/docker-update-button.md`.
