@@ -596,7 +596,11 @@ function watchConnection(): void {
  */
 const RENEWED = 'bh2.signInRenewed'
 const RENEW_ONCE_IN_MS = 60_000
+// a renewal waiting for a field or dialog to be done with: asked again by the next
+// check, it is the same renewal, never a second load
+let renewing = false
 function renew(): void {
+  if (renewing) return
   let last = 0
   try {
     last = Number(sessionStorage.getItem(RENEWED)) || 0
@@ -608,6 +612,7 @@ function renew(): void {
     conn.error = 'The sign-in in front of Bagholder did not renew: reload the page to sign in.'
     return
   }
+  renewing = true
   conn.renewing = true
   whenFree(() => {
     try {
@@ -626,13 +631,19 @@ function busy(): boolean {
   return typing || !!document.querySelector('[role="dialog"], [aria-modal="true"], dialog[open], #modalDlg, #confirmDlg')
 }
 
-/** `go` now, or once the person leaves the field or closes the dialog: looked at after the page has drawn. */
-function whenFree(go: () => void): void {
+/**
+ * `go` now, or once the person leaves the field or closes the dialog: looked at after
+ * the page has drawn, and gone once, however many of the ends one action fires (a key
+ * that closes a dialog also moves the focus).
+ */
+export function whenFree(go: () => void): void {
   if (!busy()) return go()
   const ends = ['focusout', 'keyup', 'pointerup', 'visibilitychange'] as const
+  let gone = false
   const look = () =>
     requestAnimationFrame(() => {
-      if (busy()) return
+      if (gone || busy()) return
+      gone = true
       for (const e of ends) document.removeEventListener(e, look, true)
       go()
     })
