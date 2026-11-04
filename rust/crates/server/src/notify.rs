@@ -1023,6 +1023,7 @@ mod tests {
             let f = crate::figures::Figures::open(&home, at).unwrap();
             f.state_zone("America/Toronto", at).unwrap();
             app.set_figures(f);
+            crate::tests_common::on_run_folder(&app);
             app
         });
         let conn = book(app).unwrap();
