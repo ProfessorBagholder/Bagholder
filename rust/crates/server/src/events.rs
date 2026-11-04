@@ -341,7 +341,8 @@ impl Feed {
         let (registered, wanted) = Registered::new(&bus);
         let feed = Feed { app, _watching: Watching::new(&bus), registered, wanted, at: 0, base: 0, views: Default::default(), sent_docs: Default::default(), status: None, refused: Default::default() };
         // the page counted first (`Watching::new`), then the figure path woken: a pass
-        // the wake starts sees the page, and so owes its quotes at once
+        // the wake starts sees the page, and so asks every quote at once, a quiet
+        // market's too (`due::quiet`)
         if let Some(f) = feed.app.figures.get() {
             f.wake();
         }
@@ -681,37 +682,18 @@ mod tests {
     }
 
     /// A page opening wakes the figure path with the page already counted: the pass
-    /// the wake starts owes the quotes at once, never one that sees no page and parks.
+    /// the wake starts sees a page open, and so asks every quote at once, never one
+    /// that sees no page and leaves a quiet market's quote waiting.
     #[test]
-    fn test_a_page_opening_wakes_the_figure_path_with_quotes_owed() {
+    fn test_a_page_opening_wakes_the_figure_path_with_the_page_counted() {
         let _g = crate::tests_common::guard();
         let app = crate::tests_common::app();
         let f = app.figures.get().unwrap();
         f.woken(); // whatever was pending before
-        let feed = Feed::open(app.clone());
-        assert!(f.woken(), "the figure path is woken as the page opens");
-        assert!(crate::due::quotes_owed(&app), "and the page is counted by then");
-        drop(feed);
-    }
-
-    /// What is held and followed is quoted while a page is open, whatever tab it
-    /// shows: a page on the Dashboard or the trades is owed quotes as one showing the
-    /// holdings is, so a tab opened later never waits on a quote pass; with no page
-    /// open, none are owed.
-    #[test]
-    fn test_quotes_are_owed_while_a_page_is_open_whatever_it_shows() {
-        let _g = crate::tests_common::guard();
-        let app = crate::tests_common::app();
         let before = app.events.watchers();
         let feed = Feed::open(app.clone());
-        for keys in [&["status", "book", "dashboard", "notifications"][..], &["status", "book", "trades"], &["status", "book", "positions"], &[]] {
-            assert!(app.events.watch(&app, feed.id(), keys.iter().map(|k| (k.to_string(), Want { params: serde_json::json!({}), have: None })).collect()));
-            assert!(crate::due::quotes_owed(&app), "{keys:?}");
-        }
+        assert!(f.woken(), "the figure path is woken as the page opens");
+        assert_eq!(app.events.watchers(), before + 1, "and the page is counted by then");
         drop(feed);
-        assert_eq!(app.events.watchers(), before, "the page gone, it owes nothing more");
-        if before == 0 {
-            assert!(!crate::due::quotes_owed(&app));
-        }
     }
 }

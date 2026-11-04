@@ -1311,13 +1311,12 @@ pub fn shorts_sweep_loop(app: Arc<App>) {
 // ---------------------------------------------------------------------------
 
 // The market universes feed the heatmap and nothing else, and their sources push
-// nothing: the screener is one request, the TSX 60 sixty-odd. So a universe is read
-// only while some page shows it (the `universe:<key>` document): at once when it has
-// no rows or its rows are older than `UNIVERSE_STALE_SEC`, and again each time they
-// come to that age for as long as a page still shows it. Nobody looking, nothing read
-// -- not at start, not through a night. A source's attempt, answered or failed, is
-// not made again before the same half hour, so a source that is down costs one
-// request per half hour, not one per page.
+// nothing: the screener is one request, the TSX 60's prices one more. They are read
+// as the app starts and again each time their rows come to `UNIVERSE_STALE_SEC`,
+// page or none (`markets_universes_loop`, the owner, 2026-11-02); a page showing one
+// (the `universe:<key>` document) only wakes that read early. A source's attempt,
+// answered or failed, is not made again before the same half hour, so a source that
+// is down costs one request per half hour, not one per page.
 
 /// How old a universe's rows may be before a page showing it has them read again.
 pub const UNIVERSE_STALE_SEC: f64 = 1800.0;

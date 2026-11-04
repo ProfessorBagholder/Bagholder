@@ -13,8 +13,9 @@
 //! - each payer's next distribution window (`payers::run::next_due`);
 //! - a failed read's source rest ending;
 //! - a minute, for the quotes of what is held and of what the person follows (the
-//!   watchlist, the tiles), while a page is open on any tab (`quotes_owed`), so a
-//!   tab opened later shows prices as fresh as the one on show.
+//!   watchlist, the tiles), while the app runs, page or none (the owner,
+//!   2026-11-04), so a tab opened shows prices already read; with no page open, a
+//!   quiet market's quote waits for its next open, or `QUIET_RECHECK` (`quiet`).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -33,15 +34,49 @@ use bagholder_sources::{market, payers, quotes, rates};
 use crate::app::{log, App};
 use crate::figures::{bank_zone, Figures};
 
-/// How often what is held and followed is quoted while a page is open.
+/// How often what is held and followed is quoted while the app runs.
 pub const QUOTES_EVERY: Duration = Duration::from_secs(60);
 
-/// Whether quotes are owed: while a page is open, whatever tab it shows, what is
-/// held and what is followed are quoted, so no tab opens on prices older than the
-/// one on show (the owner, 2026-10-27: a tab's latest data is "already loaded
-/// automatically so that there is no delay"). With no page open, none are.
-pub fn quotes_owed(app: &App) -> bool {
-    app.events.watchers() > 0
+/// How much older than its read a quote whose source states a trade time may be
+/// before its market is taken as not trading, and how long after that read it is
+/// asked again with no page open: a quarter of an hour, so the first read after such
+/// a market opens is at most that late while nobody looks, and at once when a page
+/// opens. A listing whose venue has a calendar here goes by the calendar instead.
+pub const QUIET_RECHECK: Duration = Duration::from_secs(15 * 60);
+
+/// When a listing whose market is not trading is next owed a quote while no page is
+/// open (`docs/plans/prices-fresh-at-open.md`); none while it is owed now. "Quiet"
+/// is a market not trading, never a source refused (that is its rest, `rest_ends`).
+/// - On a venue whose calendar the app holds (`sessions::venue_of`): while its
+///   session is known closed and the quote kept was received after that session's
+///   close settled (`market::settled_at`), until the next open. A date past the
+///   published calendar is not known, so the listing is owed as any other.
+/// - Otherwise, where the source states the trade's time: while that time was more
+///   than `QUIET_RECHECK` before the read that kept it, until `QUIET_RECHECK` after
+///   that read. A source that states only when it served the quote (TMX's) never
+///   shows a quiet market this way.
+pub fn quiet(l: &bagholder_sources::contract::Listing, kept: Option<&bagholder_sources::cache::StoredQuote>, now: Timestamp, bank: &TimeZone) -> Option<Timestamp> {
+    use bagholder_core::sessions;
+    // a listing never quoted is owed at once
+    let q = kept?;
+    match l.venue_mic.as_deref().and_then(|mic| sessions::venue_of(mic, false)) {
+        Some(v) => {
+            if sessions::in_session(v, now)? {
+                return None;
+            }
+            let settled = market::settled_at(l.market()?, sessions::last_closed_day(v, now)?, bank)?;
+            if q.received_at < settled {
+                // the close not read since it settled: owed, for the session's final price
+                return None;
+            }
+            sessions::next_open(v, now)
+        }
+        None => {
+            let recheck = SignedDuration::try_from(QUIET_RECHECK).ok()?;
+            let again = q.received_at + recheck;
+            (q.quoted_at + recheck < q.received_at && again > now).then_some(again)
+        }
+    }
 }
 /// How many times the needs are worked out again after a pass of reads.
 const PASSES: usize = 4;
@@ -127,73 +162,54 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
         read_all(f, &ctx, &needs).map_err(|e| e.to_string())?;
         last = Some(n);
     }
-    let quoting = demand(app, &ctx, &needs.held)?;
-    quotes::read_quotes(&ctx, &quoting).map_err(|e| e.to_string())?;
-    for l in &quoting {
-        f.price_changed(l.id)?;
+    let (quoting, quiet_until) = demand(app, &ctx, &needs.held)?;
+    quote_each(app, f, &quoting, |l| quotes::read_quotes(&ctx, std::slice::from_ref(l)).map_err(|e| e.to_string()))?;
+    // the option contracts held: their chains are asked when Cboe's copy has moved on
+    // (`options::chain_due`), a contract shown for the first time at once
+    bagholder_sources::options::read(&ctx, &needs.contracts).map_err(|e| e.to_string())?;
+    for c in &needs.contracts {
+        f.price_changed(c.id)?;
     }
-    // the option contracts held, while a page is open: their chains are asked when
-    // Cboe's copy has moved on (`options::chain_due`), a contract shown for the
-    // first time at once
-    if quotes_owed(app) {
-        bagholder_sources::options::read(&ctx, &needs.contracts).map_err(|e| e.to_string())?;
-        for c in &needs.contracts {
-            f.price_changed(c.id)?;
-        }
-    }
-    next_due(&ctx, &needs, &zone, !quoting.is_empty(), now).map(Some)
+    next_due(&ctx, &needs, &zone, !quoting.is_empty(), quiet_until, now).map(Some)
 }
 
-/// What is quoted now: what is held and what is followed while a page is open,
-/// and, page or none, each quote
-/// whose newest read failed, once that source's rest ends: the
-/// failure is asked again as `next_due` promises, so the header never goes on
-/// stating a failure the running reader has not met (a reader fixed since, a
-/// source back since).
-fn demand(app: &App, ctx: &Ctx, held: &[bagholder_sources::contract::Listing]) -> Result<Vec<bagholder_sources::contract::Listing>, String> {
-    let mut quoting: Vec<bagholder_sources::contract::Listing> = Vec::new();
-    let add = |l: &bagholder_sources::contract::Listing, quoting: &mut Vec<bagholder_sources::contract::Listing>| {
-        if !quoting.iter().any(|q| q.id == l.id) {
-            quoting.push(l.clone());
-        }
-    };
-    let owed = quotes_owed(app);
-    if owed {
-        held.iter().for_each(|l| add(l, &mut quoting));
-    }
-    let failing = failing_quotes(ctx)?;
-    // the followed listings are read only where one is quoted
-    let followed = if owed || failing.iter().any(|id| !held.iter().any(|l| l.id == *id)) { crate::following::listings(ctx.book)? } else { Vec::new() };
-    if owed {
-        followed.iter().for_each(|l| add(l, &mut quoting));
-    }
-    for id in failing {
-        if let Some(l) = held.iter().chain(&followed).find(|l| l.id == id) {
-            add(l, &mut quoting);
+/// Each listing read in turn, and its price taken into the figures and said to the
+/// pages as soon as it is kept, before the next is asked: a tile or a holding's row
+/// moves as its quote lands, never when the last of the pass does.
+fn quote_each(app: &App, f: &Figures, listings: &[bagholder_sources::contract::Listing], mut read: impl FnMut(&bagholder_sources::contract::Listing) -> Result<(), String>) -> Result<(), String> {
+    for l in listings {
+        read(l)?;
+        if !f.price_changed(l.id)?.is_empty() {
+            app.events.signal();
         }
     }
-    Ok(quoting)
+    Ok(())
 }
 
-/// The instruments whose quote's newest outcome failed (what the header states,
-/// `health::failures`), that source's rest over.
-fn failing_quotes(ctx: &Ctx) -> Result<Vec<InstrumentId>, String> {
-    use bagholder_sources::contract::DataKind;
-    let e = |e: bagholder_sources::cache::CacheError| e.to_string();
-    let mut out = Vec::new();
-    for o in ctx.cache.newest_counted_by_subject().map_err(e)? {
-        let (DataKind::Quote, Some(id)) = (o.kind, o.instrument) else { continue };
-        if bagholder_sources::health::failure(&o).is_none() {
-            continue;
-        }
-        let failed = ctx.cache.failures_in_a_row(&o.source, DataKind::Quote, Some(id)).map_err(e)?;
-        let rest = SignedDuration::try_from(bagholder_sources::market::grown_rest(ctx.net.limiter().pace(&o.host).rest, failed)).map_err(|e| e.to_string())?;
-        // a reader's judgement from before this run is asked again at once
-        if o.at + rest <= ctx.now || !o.outcome.stands(o.at, ctx.net.started()) {
-            out.push(id);
+/// What is quoted now: what is held and what is followed, while the app runs; with no
+/// page open, less each quiet one (`quiet`), and the earliest instant one of those is
+/// owed again. A failing quote is owed like any other: a refused source is left alone
+/// through its rest by the limiter, and `next_due` wakes at the rest's end.
+fn demand(app: &App, ctx: &Ctx, held: &[bagholder_sources::contract::Listing]) -> Result<(Vec<bagholder_sources::contract::Listing>, Option<Timestamp>), String> {
+    let mut all: Vec<bagholder_sources::contract::Listing> = Vec::new();
+    for l in held.iter().cloned().chain(crate::following::listings(ctx.book)?) {
+        if !all.iter().any(|q| q.id == l.id) {
+            all.push(l);
         }
     }
-    Ok(out)
+    // a page open: every quote, every minute, so someone watching sees the open at once
+    if app.events.watchers() > 0 {
+        return Ok((all, None));
+    }
+    let (mut owed, mut quiet_until) = (Vec::new(), None::<Timestamp>);
+    for l in all {
+        let kept = ctx.cache.quotes_of(l.id).map_err(|e| e.to_string())?.into_iter().max_by_key(|q| q.received_at);
+        match quiet(&l, kept.as_ref(), ctx.now, ctx.bank) {
+            Some(at) => quiet_until = Some(quiet_until.map_or(at, |u| u.min(at))),
+            None => owed.push(l),
+        }
+    }
+    Ok((owed, quiet_until))
 }
 
 /// Read the payers held under `symbol` now, each change applied: the ones read.
@@ -281,7 +297,7 @@ fn next_settle(m: Market, now: Timestamp, bank: &TimeZone) -> Option<Timestamp> 
 }
 
 /// The earliest instant after `now` any read can next be due.
-fn next_due(ctx: &Ctx, needs: &Needs, zone: &TimeZone, quoting: bool, now: Timestamp) -> Result<Timestamp, String> {
+fn next_due(ctx: &Ctx, needs: &Needs, zone: &TimeZone, quoting: bool, quiet_until: Option<Timestamp>, now: Timestamp) -> Result<Timestamp, String> {
     let bank = ctx.bank;
     let mut at: Vec<Timestamp> = Vec::new();
     at.extend(next_midnight(now, zone));
@@ -310,6 +326,8 @@ fn next_due(ctx: &Ctx, needs: &Needs, zone: &TimeZone, quoting: bool, now: Times
     if quoting {
         at.push(now + SignedDuration::try_from(QUOTES_EVERY).map_err(|e| e.to_string())?);
     }
+    // a quiet market's quote, owed again at its next open or its recheck
+    at.extend(quiet_until);
     // a read that failed is asked again when its source's rest ends
     at.extend(rest_ends(ctx, now)?);
     Ok(at.into_iter().filter(|t| *t > now).min().unwrap_or(now + SignedDuration::from_hours(24)))
@@ -354,10 +372,11 @@ fn rest_ends(ctx: &Ctx, now: Timestamp) -> Result<Vec<Timestamp>, String> {
 mod tests {
     use super::*;
 
-    /// The holdings, the watched listings and the tiles are quoted while a page is
-    /// open, whatever tab it shows; nothing with no page.
+    /// The holdings, the watched listings and the tiles are quoted while the app runs,
+    /// page or none, so a tab opened shows prices already read (the owner,
+    /// 2026-11-04); with no page, a quiet one waits (`quiet`), and with a page none do.
     #[test]
-    fn what_is_held_and_followed_is_quoted_while_a_page_is_open_whatever_it_shows() {
+    fn what_is_held_and_followed_is_quoted_while_the_app_runs_page_or_none() {
         use crate::events::{Feed, Want};
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
@@ -377,55 +396,153 @@ mod tests {
         let followed = crate::following::listings(&book).unwrap();
         assert_eq!(followed.len(), 7, "the six tiles and the watched listing");
         let ids = |ls: &[bagholder_sources::contract::Listing]| -> BTreeSet<InstrumentId> { ls.iter().map(|l| l.id).collect() };
-        let show = |keys: &[&str]| {
-            let feed = Feed::open(app.clone());
-            let docs = keys.iter().map(|k| (k.to_string(), Want { params: serde_json::json!({}), have: None })).collect();
-            assert!(app.events.watch(&app, feed.id(), docs));
-            feed
-        };
         let cache = f.cache().unwrap();
         let bank = bank_zone().unwrap();
         let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now, bank: &bank };
-        assert!(demand(&app, &ctx, &held).unwrap().is_empty(), "no page: nothing quoted");
-        // whatever tab a page shows, the holdings and what is followed are quoted, so a
-        // tab opened later never waits on a quote pass
         let want: BTreeSet<InstrumentId> = ids(&held).union(&ids(&followed)).copied().collect();
-        for keys in [&["status", "book", "dashboard"][..], &["status", "book", "trades"], &["positions"], &["markets"]] {
-            let _page = show(keys);
-            assert_eq!(ids(&demand(&app, &ctx, &held).unwrap()), want, "{keys:?}: the holdings and what is followed");
-        }
-        assert!(demand(&app, &ctx, &held).unwrap().is_empty(), "the page closed: nothing quoted");
-        // a quote whose source the header states as failing is asked again when the
-        // source's rest ends, page or none: a holding's and a followed listing's
-        use bagholder_sources::cache::OutcomeRow;
-        use bagholder_sources::contract::DataKind;
-        use bagholder_sources::outcome::OutcomeKind;
-        let row = |source: &'static str, id: InstrumentId, outcome: OutcomeKind, at: Timestamp| OutcomeRow {
-            source: bagholder_core::SourceName::named(source),
-            host: "quotes.example".into(),
-            kind: DataKind::Quote,
-            instrument: Some(id),
-            outcome,
-            detail: String::new(),
-            shape_change: None,
-            at,
-        };
-        let watched = followed.iter().find(|l| !held.iter().any(|h| h.id == l.id)).unwrap().id;
-        let long_ago = now - SignedDuration::from_hours(24);
-        cache.record(&row("one", held[0].id, OutcomeKind::Mismatch, long_ago)).unwrap();
-        cache.record(&row("two", watched, OutcomeKind::Unreachable, long_ago)).unwrap();
-        assert_eq!(ids(&demand(&app, &ctx, &held).unwrap()), BTreeSet::from([held[0].id, watched]), "each failing quote, its rest over");
-        // within its rest a failure is not asked again; an answer since ends it
-        cache.record(&row("one", held[0].id, OutcomeKind::Unreachable, now)).unwrap();
-        cache.record(&row("two", watched, OutcomeKind::Answered, now)).unwrap();
-        assert!(demand(&app, &ctx, &held).unwrap().is_empty(), "one resting, one answered: nothing quoted");
+        let (owed, quiet_until) = demand(&app, &ctx, &held).unwrap();
+        assert_eq!(ids(&owed), want, "no page: the holdings and what is followed, none read yet");
+        assert_eq!(quiet_until, None);
+        // a watched listing read after its market closed and settled is quiet with no
+        // page open, and owed at its next open; a page opening owes it at once
+        let watched = followed.iter().find(|l| !held.iter().any(|h| h.id == l.id) && l.venue_mic.is_some()).unwrap().clone();
+        // 22:00 Toronto time, the day's close settled at 16:30
+        let evening = t("2025-11-20T03:00:00Z");
+        let ctx = Ctx { now: evening, ..ctx };
+        let read = |at: Timestamp| cache.store_quote(&bagholder_sources::cache::StoredQuote { instrument: watched.id, source: bagholder_core::SourceName::named("tmx"), price: bagholder_core::Money::new(bagholder_core::Dec::parse("10").unwrap(), bagholder_core::Currency::CAD), change: None, change_pct: None, quoted_at: at, allowance: std::time::Duration::ZERO, received_at: at }).unwrap();
+        read(t("2025-11-19T21:00:00Z"));
+        let (owed, _) = demand(&app, &ctx, &held).unwrap();
+        assert!(owed.iter().any(|l| l.id == watched.id), "read at the close, before it settled: owed, for the final price");
+        read(evening);
+        let (owed, quiet_until) = demand(&app, &ctx, &held).unwrap();
+        assert!(!owed.iter().any(|l| l.id == watched.id), "no page: the quiet listing waits");
+        assert_eq!(quiet_until, Some(t("2025-11-20T14:30:00Z")), "until its next open, 9:30 Toronto time");
+        let feed = Feed::open(app.clone());
+        assert!(app.events.watch(&app, feed.id(), [("markets".to_string(), Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
+        let (owed, quiet_until) = demand(&app, &ctx, &held).unwrap();
+        assert_eq!(ids(&owed), want, "a page open: every one, every minute");
+        assert_eq!(quiet_until, None);
     }
 
-    /// The option contracts held are priced from their chains by the app's own
-    /// pass while a page shows a holding's price, and not asked for with no page.
+    fn listing(kind: bagholder_core::instrument::InstrumentKind, currency: bagholder_core::Currency, mic: Option<&str>) -> bagholder_sources::contract::Listing {
+        bagholder_sources::contract::Listing { id: InstrumentId::parse("00000000-0000-4000-8000-000000000001").unwrap(), kind, currency, symbol: "ZZQT".into(), venue_mic: mic.map(str::to_string), routes: Default::default() }
+    }
+
+    fn kept(quoted_at: Timestamp, received_at: Timestamp) -> bagholder_sources::cache::StoredQuote {
+        bagholder_sources::cache::StoredQuote { instrument: InstrumentId::parse("00000000-0000-4000-8000-000000000001").unwrap(), source: bagholder_core::SourceName::named("stand-in"), price: bagholder_core::Money::new(bagholder_core::Dec::parse("10").unwrap(), bagholder_core::Currency::CAD), change: None, change_pct: None, quoted_at, allowance: std::time::Duration::ZERO, received_at }
+    }
+
+    /// A listing on a venue whose calendar the app holds is quiet while its session is
+    /// known closed and its quote was read after the close settled, until the next
+    /// open: on the TSX, the CSE and Cboe Canada at 02:00 Sunday Toronto time, owed at
+    /// 09:30 Monday; a quote read before the close settled is owed, for the final price.
     #[test]
-    fn held_contracts_are_read_while_a_page_shows_a_holding_s_price() {
-        use crate::events::{Feed, Want};
+    fn a_listing_on_a_venue_with_a_calendar_is_quiet_from_the_settled_close_to_the_next_open() {
+        use bagholder_core::instrument::InstrumentKind;
+        let bank = bank_zone().unwrap();
+        // Friday 2026-11-06, EST: the close settles at 16:30 (21:30Z); Monday's open is 14:30Z
+        let after_settle = t("2026-11-06T22:00:00Z");
+        for mic in ["XTSE", "XTSX", "XCNQ", "NEOE"] {
+            let l = listing(InstrumentKind::Security, bagholder_core::Currency::CAD, Some(mic));
+            // TMX's quote time is when it served it: the calendar decides, never that time
+            let q = kept(after_settle, after_settle);
+            assert_eq!(quiet(&l, Some(&q), t("2026-11-08T07:00:00Z"), &bank), Some(t("2026-11-09T14:30:00Z")), "{mic}: 02:00 Sunday, owed at 09:30 Monday");
+            assert_eq!(quiet(&l, Some(&q), t("2026-11-09T14:30:00Z"), &bank), None, "{mic}: 09:30 Monday, owed");
+            assert_eq!(quiet(&l, Some(&q), t("2026-11-09T15:00:00Z"), &bank), None, "{mic}: in the session, owed");
+            let before = kept(t("2026-11-06T21:05:00Z"), t("2026-11-06T21:05:00Z"));
+            assert_eq!(quiet(&l, Some(&before), t("2026-11-06T21:10:00Z"), &bank), None, "{mic}: read before the close settled, owed");
+            assert_eq!(quiet(&l, None, t("2026-11-08T07:00:00Z"), &bank), None, "{mic}: never read, owed");
+            // a holiday is the venue's own: Boxing Day observed, owed again Tuesday
+            let boxing = kept(t("2026-12-24T22:00:00Z"), t("2026-12-24T22:00:00Z"));
+            assert_eq!(quiet(&l, Some(&boxing), t("2026-12-28T15:00:00Z"), &bank), Some(t("2026-12-29T14:30:00Z")), "{mic}: Boxing Day observed");
+        }
+        // a US listing by the US calendar: closed on US Thanksgiving, open on Canada's
+        let us = listing(InstrumentKind::Security, bagholder_core::Currency::USD, Some("XNAS"));
+        let q = kept(t("2026-11-25T22:00:00Z"), t("2026-11-25T22:00:00Z"));
+        assert_eq!(quiet(&us, Some(&q), t("2026-11-26T15:00:00Z"), &bank), Some(t("2026-11-27T14:30:00Z")));
+        let q = kept(t("2026-10-09T22:00:00Z"), t("2026-10-09T22:00:00Z"));
+        assert_eq!(quiet(&us, Some(&q), t("2026-10-12T15:00:00Z"), &bank), None, "Canadian Thanksgiving: the US trades");
+        // past what an exchange has published nothing is known: owed every minute
+        let tsx = listing(InstrumentKind::Security, bagholder_core::Currency::CAD, Some("XTSE"));
+        let q = kept(t("2028-01-07T22:00:00Z"), t("2028-01-07T22:00:00Z"));
+        assert_eq!(quiet(&tsx, Some(&q), t("2028-01-09T07:00:00Z"), &bank), None, "past the published calendar");
+    }
+
+    /// With no calendar here, a quote whose source states a trade more than
+    /// `QUIET_RECHECK` before the read that kept it is quiet until `QUIET_RECHECK`
+    /// after that read; one stated fresh is owed.
+    #[test]
+    fn a_quote_whose_stated_trade_is_old_when_read_is_quiet_for_the_recheck() {
+        use bagholder_core::instrument::InstrumentKind;
+        let bank = bank_zone().unwrap();
+        let read = t("2026-11-08T07:00:00Z");
+        let recheck = SignedDuration::try_from(QUIET_RECHECK).unwrap();
+        for kind in [InstrumentKind::Index, InstrumentKind::Future, InstrumentKind::CurrencyPair, InstrumentKind::Rate, InstrumentKind::Crypto] {
+            let l = listing(kind, bagholder_core::Currency::USD, None);
+            let old = kept(read - SignedDuration::from_hours(40), read);
+            assert_eq!(quiet(&l, Some(&old), read + SignedDuration::from_mins(1), &bank), Some(read + recheck), "{kind:?}");
+            assert_eq!(quiet(&l, Some(&old), read + recheck, &bank), None, "{kind:?}: its recheck is due");
+            let fresh = kept(read - SignedDuration::from_secs(20), read);
+            assert_eq!(quiet(&l, Some(&fresh), read + SignedDuration::from_mins(1), &bank), None, "{kind:?}: trading");
+        }
+    }
+
+    /// Each quote is taken into the figures before the next listing is read, so a
+    /// tile moves as its quote lands, never when the pass ends.
+    #[test]
+    fn each_quote_reaches_the_figures_before_the_next_listing_is_read() {
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        let now = t("2025-11-19T21:00:00Z");
+        let f = crate::figures::Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        app.set_figures(f);
+        let f = app.figures.get().unwrap();
+        crate::following::ensure(&app).unwrap();
+        let book = f.book().unwrap();
+        let tiles = crate::following::listings(&book).unwrap();
+        assert!(tiles.len() >= 2);
+        let cache = f.cache().unwrap();
+        let price = |id: InstrumentId| f.read(|e| e.inputs().market.quotes.get(&id).map(|q| q.price.amount)).flatten();
+        let mut read = Vec::new();
+        quote_each(&app, f, &tiles[..2], |l| {
+            if let Some(first) = read.first() {
+                assert_eq!(price(*first), Some(bagholder_core::Dec::parse("101").unwrap()), "the first tile's price is in the figures before the second is asked");
+            }
+            let q = bagholder_sources::cache::StoredQuote { instrument: l.id, source: bagholder_core::SourceName::named("stand-in"), price: bagholder_core::Money::new(bagholder_core::Dec::parse("101").unwrap(), l.currency), change: None, change_pct: None, quoted_at: now, allowance: std::time::Duration::ZERO, received_at: now };
+            cache.store_quote(&q).map_err(|e| e.to_string())?;
+            read.push(l.id);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(price(tiles[1].id), Some(bagholder_core::Dec::parse("101").unwrap()));
+    }
+
+    /// With every listing quiet, the next pass is when the first is owed again, not a
+    /// minute later.
+    #[test]
+    fn with_every_listing_quiet_the_next_pass_is_when_one_is_owed_again() {
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        let now = t("2025-11-19T21:00:00Z");
+        let f = crate::figures::Figures::open(home.path(), now).unwrap();
+        let book = f.book().unwrap();
+        let cache = f.cache().unwrap();
+        let bank = bank_zone().unwrap();
+        let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now, bank: &bank };
+        let zone = TimeZone::get("America/Toronto").unwrap();
+        let soon = now + SignedDuration::from_mins(5);
+        assert_eq!(next_due(&ctx, &Needs::default(), &zone, false, Some(soon), now).unwrap(), soon, "the earliest quiet listing's");
+        assert_eq!(next_due(&ctx, &Needs::default(), &zone, true, Some(soon), now).unwrap(), now + SignedDuration::from_mins(1), "a pass that asked anything: a minute");
+    }
+
+    /// The option contracts held are priced from their chains by the app's own pass
+    /// while the app runs, page or none (the owner, 2026-11-04, replacing 2026-09-24's
+    /// "only when a screen shows it"), `chain_due` deciding when Cboe's copy is asked.
+    #[test]
+    fn held_contracts_are_read_while_the_app_runs_page_or_none() {
         crate::tests_common::home(); // offline: the chain is asked for and nothing leaves the machine
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
@@ -447,11 +564,7 @@ mod tests {
             contracts.iter().map(|c| cache.reads(&format!("chain:{}", c.underlying), bagholder_sources::contract::DataKind::Quote).unwrap().len()).sum()
         };
         pass(&app, f, now).unwrap();
-        assert_eq!(asked(), 0, "no page: no chain asked for");
-        let feed = Feed::open(app.clone());
-        assert!(app.events.watch(&app, feed.id(), [("positions".to_string(), Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
-        pass(&app, f, now).unwrap();
-        assert!(asked() > 0, "a page showing the holdings: the chain of each held contract is asked for");
+        assert!(asked() > 0, "no page: the chain of each held contract is asked for");
     }
 
     /// A past day's holdings a screen holds are priced by their closes on or before
