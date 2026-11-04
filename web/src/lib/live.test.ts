@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyOps, isUpdate, numbering, reconcile, type Op } from './live.svelte'
+import { applyOps, isUpdate, numbering, reconcile, whenFree, type Op } from './live.svelte'
 import { ROW_KEYS } from './generated/keys'
 
 // The page holds each entity as one object for as long as the entity lives, and a
@@ -160,3 +160,25 @@ describe('a server answering after a restart', () => {
     expect(isUpdate(at('t2', '2.1.0', 'p2'), at('t3', '2.1.0', 'p2'), 'p2')).toBe(false)
   })
 })
+
+// docs/plans/sign-in-renews-itself.md: the page loads itself again once a dialog is
+// closed, once, however many of the ends one action fires (the key that closes it
+// also moves the focus)
+describe('waiting for a dialog to close', () => {
+  it('goes once when it closes, though the key and the focus leaving both say so', async () => {
+    const dialog = document.createElement('div')
+    dialog.setAttribute('role', 'dialog')
+    document.body.appendChild(dialog)
+    let went = 0
+    whenFree(() => went++)
+    document.dispatchEvent(new Event('keyup'))
+    await new Promise((r) => requestAnimationFrame(r))
+    expect(went, 'not while the dialog is open').toBe(0)
+    dialog.remove()
+    document.dispatchEvent(new Event('keyup'))
+    document.dispatchEvent(new Event('focusout'))
+    for (let i = 0; i < 3; i++) await new Promise((r) => requestAnimationFrame(r))
+    expect(went).toBe(1)
+  })
+})
+

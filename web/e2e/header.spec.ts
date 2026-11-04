@@ -85,6 +85,29 @@ for (const [what, next] of [
   })
 }
 
+// docs/plans/sign-in-renews-itself.md: an update replaces the server, and the stream
+// is refused while it does (a proxy's 502). The page opens it again by itself and
+// loads the new build, with nothing pressed.
+test('after an update the page comes back on the new build with no Retry pressed, its stream refused while the server restarts', async ({ page, request }) => {
+  const model = await modelDoc(request)
+  let server: Record<string, unknown> = { startedAt: 'A' }
+  let refusals = 0
+  let restarting = false
+  await page.route('**/api/events?*', (route) => {
+    if (restarting && ++refusals <= 3) return route.fulfill({ status: 502, contentType: 'text/plain', body: 'Bad gateway' })
+    return route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody({ ...model, status: { ...model.status, ...server } }) })
+  })
+  await page.route('**/api/events/watch', (route) => route.fallback())
+  let loads = 0
+  page.on('request', (r) => { if (r.resourceType() === 'document') loads++ })
+  await page.goto('/')
+  await ready(page)
+  restarting = true
+  server = { startedAt: 'C', version: (model.status as { version: string }).version + '-next' }
+  await expect.poll(() => loads, { timeout: 20_000 }).toBe(2)
+  expect(refusals).toBeGreaterThanOrEqual(3)
+})
+
 // The page keeps what it showed in the browser and draws it first on the next open,
 // the header's status among it. A page loaded after an update therefore draws the old
 // server's status before the new server answers: it must never take that for a server

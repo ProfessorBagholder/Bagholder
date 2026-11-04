@@ -77,6 +77,21 @@ export function request<T = Record<string, unknown>>(method: 'GET' | 'POST', pat
     .catch((e: unknown) => failure(String(e)))
 }
 
+/**
+ * What answers the page's own address, asked when its stream was refused
+ * (docs/plans/sign-in-renews-itself.md): `expired` where a sign-in in front of
+ * Bagholder sends to its login page -- a redirect, which Bagholder never answers an
+ * /api/ request with, or the 401 Cloudflare Access gives a request marked as the
+ * page's own (`X-Requested-With`, Cloudflare's session management) --;
+ * `unreachable` where nothing answers, or a proxy answers for a Bagholder that does
+ * not; `up` where Bagholder answers.
+ */
+export function signInState(): Promise<'expired' | 'unreachable' | 'up'> {
+  return fetch('/api/status', { redirect: 'manual', cache: 'no-store', headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+    .then((r): 'expired' | 'unreachable' | 'up' => (r.type === 'opaqueredirect' || r.status === 401 ? 'expired' : r.status >= 500 ? 'unreachable' : 'up'))
+    .catch(() => 'unreachable' as const)
+}
+
 export function get<T = Record<string, unknown>>(path: string, params?: Record<string, Param>): Promise<Answer<T>> {
   const q = params ? query(params) : ''
   return request<T>('GET', q ? path + '?' + q : path)
