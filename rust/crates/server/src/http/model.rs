@@ -156,7 +156,7 @@ pub struct TransactionsQuery {
     /// The last day, `YYYY-MM-DD`.
     #[serde(default, deserialize_with = "trimmed")]
     pub(crate) to: Option<String>,
-    /// One chequing or credit card account's id, as the book's accounts give it.
+    /// One account's id, as the book's accounts give it: any account, open or closed.
     #[serde(default, deserialize_with = "trimmed")]
     pub(crate) account: Option<String>,
     /// Where the page starts: the `next` the previous page gave, 0 for the first.
@@ -167,7 +167,7 @@ pub struct TransactionsQuery {
     pub(crate) size: Option<String>,
 }
 
-/// A page of the money in and out of the person's chequing and credit card accounts.
+/// A page of the money in and out of the person's accounts.
 #[derive(Serialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TransactionsAnswer {
@@ -191,45 +191,76 @@ pub struct TransactionRow {
     /// The company it names: a card purchase's merchant, a bill payment's company, a pre-authorized
     /// debit's originator. Never a person's name.
     pub company: Option<String>,
-    /// Into the account (positive) or out of it (negative), as the account states it.
-    pub amount: String,
-    pub currency: String,
+    /// What is on its other side, as Wealthsimple states it.
+    pub other: OtherSide,
+    /// Into the account (positive) or out of it (negative), as the account states it; none where
+    /// Wealthsimple states no amount, and `problem` says why.
+    pub amount: Option<String>,
+    pub currency: Option<String>,
+    /// What the book holds against the row, in its own words, where it states no amount.
+    pub problem: Option<String>,
 }
 
-/// `GET /api/transactions`: the money in and out of the person's chequing and
-/// credit card accounts, newest first, a page at a time, each with the company it
-/// names (`bagholder_wealthsimple::spending`) and never a person's name: what an
-/// agent reads of the person's spending. A day or an account the book does not
-/// hold is refused, naming it.
+/// What is on a transaction's other side: `own`, one of the person's accounts (by the book's id and
+/// name, both none where the book holds no account Wealthsimple named); `outside`, outside
+/// Wealthsimple (with the institution where the row names one); `unstated`, where the row says
+/// neither. Never a person's name, an account number, or the broker's id for an account.
+#[derive(Serialize, TS, Debug, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct OtherSide {
+    pub kind: String,
+    pub account_id: Option<String>,
+    pub account: Option<String>,
+    pub institution: Option<String>,
+}
+
+impl OtherSide {
+    fn of(kind: &str) -> OtherSide {
+        OtherSide { kind: kind.into(), account_id: None, account: None, institution: None }
+    }
+}
+
+/// The rows the read lists: every one of the account's that names no instrument, in the days asked,
+/// an amount stated or not (a row with none is listed with its problem, never left out).
+fn listed(t: &bagholder_core::transaction::Transaction, from: Option<bagholder_core::jiff::civil::Date>, to: Option<bagholder_core::jiff::civil::Date>) -> bool {
+    from.is_none_or(|f| t.trade_date >= f) && to.is_none_or(|d| t.trade_date <= d)
+}
+
+/// `GET /api/transactions`: the money in and out of every one of the person's
+/// accounts, open or closed, newest first, a page at a time: every row that names
+/// no instrument (a holding's rows are the trades' and the income's), each with the
+/// company it names and what is on its other side (`bagholder_wealthsimple::spending`),
+/// never a person's name. A day or an account the book does not hold is refused,
+/// naming it.
 pub(crate) async fn transactions(State(state): State<AppState>, Params(q): Params<TransactionsQuery>) -> Api<TransactionsAnswer> {
-    use bagholder_core::account::{AccountKind, AccountType};
     let app = state.app;
-    blocking(move || -> Result<TransactionsAnswer, ApiError> {
+    blocking(move || transactions_page(&app, &q)).await?.map(Json)
+}
+
+/// One page of `GET /api/transactions`, as the route answers it (and the capacity
+/// job measures it, `capacity::Op::AgentTransactions`).
+pub(crate) fn transactions_page(app: &std::sync::Arc<crate::app::App>, q: &TransactionsQuery) -> Result<TransactionsAnswer, ApiError> {
+    {
         let day = |s: &Option<String>, what: &str| s.as_deref().map(|d| d.parse::<bagholder_core::jiff::civil::Date>().map_err(|_| ApiError::BadRequest(format!("{what} is not a day (YYYY-MM-DD): {d}")))).transpose();
         let count = |s: &Option<String>, what: &str| s.as_deref().map(|n| n.parse::<usize>().map_err(|_| ApiError::BadRequest(format!("{what} is not a number: {n}")))).transpose();
         let (from, to) = (day(&q.from, "from")?, day(&q.to, "to")?);
         let (offset, size) = (count(&q.offset, "offset")?.unwrap_or(0), count(&q.size, "size")?.unwrap_or(crate::views::FIRST_ROWS).clamp(1, 1000));
         let f = app.figures.get().ok_or_else(|| ApiError::Conflict("the figures are not open".into()))?;
-        let (total, mut page) = f
+        let (total, page, names) = f
             .read(|e| -> Result<_, ApiError> {
                 let inputs = e.inputs();
-                let mut accounts: Vec<(bagholder_core::AccountId, String)> = inputs
-                    .ledger
-                    .accounts
-                    .iter()
-                    .filter(|(_, i)| matches!(i.account.account_type, AccountType::Known { kind: AccountKind::Spending | AccountKind::CreditCard, .. }))
-                    .map(|(id, _)| (*id, crate::wire::build::account_name(inputs, *id)))
-                    .collect();
+                let names: std::collections::BTreeMap<bagholder_core::AccountId, String> = inputs.ledger.accounts.keys().map(|id| (*id, crate::wire::build::account_name(inputs, *id))).collect();
+                let mut accounts: Vec<(&bagholder_core::AccountId, &String)> = names.iter().collect();
                 if let Some(a) = &q.account {
                     accounts.retain(|(id, _)| id.to_string() == *a);
                     if accounts.is_empty() {
-                        return Err(ApiError::BadRequest(format!("{a} is not a chequing or credit card account in this book")));
+                        return Err(ApiError::BadRequest(format!("{a} is not an account in this book")));
                     }
                 }
                 let mut rows: Vec<(&bagholder_core::transaction::Transaction, &String)> = accounts
                     .iter()
-                    .flat_map(|(id, name)| inputs.ledger.transactions.cash_of(*id).map(move |t| (t, name)))
-                    .filter(|(t, _)| t.cash.is_some() && from.is_none_or(|f| t.trade_date >= f) && to.is_none_or(|d| t.trade_date <= d))
+                    .flat_map(|(id, name)| inputs.ledger.transactions.cash_of(**id).map(move |t| (t, *name)))
+                    .filter(|(t, _)| listed(t, from, to))
                     .collect();
                 rows.sort_by(|a, b| b.0.trade_date.cmp(&a.0.trade_date).then(b.0.occurred_at.cmp(&a.0.occurred_at)).then(a.0.id.cmp(&b.0.id)));
                 let total = rows.len();
@@ -237,25 +268,48 @@ pub(crate) async fn transactions(State(state): State<AppState>, Params(q): Param
                     .into_iter()
                     .skip(offset)
                     .take(size)
-                    .filter_map(|(t, name)| {
-                        let cash = t.cash.as_ref()?;
-                        Some((t.id.clone(), TransactionRow { date: t.trade_date.to_string(), account: name.clone(), account_id: t.account.to_string(), kind: t.kind.as_str().to_string(), company: None, amount: cash.amount.to_string(), currency: cash.currency.to_string() }))
+                    .map(|(t, name)| {
+                        let row = TransactionRow {
+                            date: t.trade_date.to_string(),
+                            account: name.clone(),
+                            account_id: t.account.to_string(),
+                            kind: t.kind.as_str().to_string(),
+                            company: None,
+                            other: OtherSide::of("unstated"),
+                            amount: t.cash.as_ref().map(|c| c.amount.to_string()),
+                            currency: t.cash.as_ref().map(|c| c.currency.to_string()),
+                            problem: None,
+                        };
+                        (t.id.clone(), row)
                     })
                     .collect();
-                Ok((total, page))
+                Ok((total, page, names))
             })
             .ok_or_else(|| ApiError::Conflict("the figures are not open".into()))??;
+        let (total, mut page, names) = (total, page, names);
         let book = f.book().map_err(ApiError::Failed)?;
+        let failed = |e: bagholder_book::BookError| ApiError::Failed(e.to_string());
         let records: Vec<bagholder_core::RecordId> = page.iter().map(|(id, _)| id.record).collect();
-        let payloads = book.newest_payloads(&records).map_err(|e| ApiError::Failed(e.to_string()))?;
+        let payloads = book.newest_payloads(&records).map_err(failed)?;
         for (id, row) in &mut page {
-            row.company = payloads.get(&id.record).and_then(|p| bagholder_wealthsimple::spending::company_of_record(p));
+            let (company, other) = payloads.get(&id.record).map_or((None, bagholder_wealthsimple::spending::OtherSide::Unstated), |p| bagholder_wealthsimple::spending::of_record(p));
+            row.company = company;
+            row.other = match other {
+                // the book's own account and its name; Wealthsimple's id for it never leaves here
+                bagholder_wealthsimple::spending::OtherSide::Own(broker) => match book.account_by_ref_value(&broker).map_err(failed)? {
+                    Some(a) => OtherSide { account_id: Some(a.to_string()), account: names.get(&a).cloned(), ..OtherSide::of("own") },
+                    None => OtherSide::of("own"),
+                },
+                bagholder_wealthsimple::spending::OtherSide::Outside(institution) => OtherSide { institution, ..OtherSide::of("outside") },
+                bagholder_wealthsimple::spending::OtherSide::Unstated => OtherSide::of("unstated"),
+            };
+            if row.amount.is_none() {
+                row.problem = book.problems_of(id.record).map_err(failed)?.into_iter().next().map(|p| p.detail);
+            }
         }
         let end = offset + page.len();
         Ok(TransactionsAnswer { total: total as u32, offset: offset as u32, next: (end < total).then_some(end as u32), transactions: page.into_iter().map(|(_, r)| r).collect() })
-    })
-    .await?
-    .map(Json)
+    }
 }
 
 /// `POST /api/data/clear`: the kinds of data ticked.
@@ -669,4 +723,41 @@ async fn watch_clear(State(state): State<AppState>) -> Api<crate::csv_import::Wa
     })
     .await?
     .map(Json)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A row Wealthsimple states no amount for is listed, never left out: the read
+    /// says so with its problem; only the days asked decide what is listed.
+    #[test]
+    fn a_row_with_no_stated_amount_is_listed() {
+        use bagholder_core::transaction::{Kind, Transaction};
+        let u = "0192a000-0000-7000-8000-00000000000";
+        let tx = |cash: Option<bagholder_core::Money>| Transaction {
+            id: bagholder_core::TransactionId::parse(&format!("{u}1/move")).unwrap(),
+            mapping: bagholder_core::MappingVersion { source: bagholder_core::SourceName::named("test"), version: 1 },
+            account: bagholder_core::AccountId::parse(&format!("{u}2")).unwrap(),
+            occurred_at: None,
+            trade_date: "2026-04-20".parse().unwrap(),
+            settle_date: None,
+            kind: Kind::TransferIn,
+            effect: None,
+            instrument: None,
+            quantity: None,
+            price: None,
+            cash,
+            fee: None,
+            fx_rate: None,
+            paid_on: None,
+            value: None,
+        };
+        let day = |d: &str| Some(d.parse().unwrap());
+        assert!(listed(&tx(None), None, None), "a move whose amount is not stated");
+        assert!(listed(&tx(Some(bagholder_core::Money::new(bagholder_core::Dec::parse("200").unwrap(), bagholder_core::Currency::CAD))), None, None));
+        assert!(listed(&tx(None), day("2026-04-20"), day("2026-04-20")));
+        assert!(!listed(&tx(None), day("2026-04-21"), None), "outside the days asked");
+        assert!(!listed(&tx(None), None, day("2026-04-19")));
+    }
 }

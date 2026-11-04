@@ -1697,13 +1697,37 @@ fn each_described_route_answers_with_its_described_arguments() {
     assert!(h.ask("GET", "/api/agents/exposure", &[("authorization", &auth)], vec![]).json()["sectors"].is_array());
     let mk = h.ask("GET", "/api/agents/markets", &[("authorization", &auth)], vec![]).json();
     assert!(mk.get("directory").is_none() && mk["watchlist"].is_array(), "{mk}");
-    // the chequing and credit card accounts' money, each card purchase with its merchant
+    // the accounts' money, each card purchase with its merchant
     let tx = h.ask("GET", "/api/agents/transactions?size=500", &[("authorization", &auth)], vec![]).json();
     let rows = tx["transactions"].as_array().unwrap();
     assert!(!rows.is_empty() && tx["total"].as_u64().unwrap() as usize >= rows.len(), "{tx}");
     let purchases: Vec<&Value> = rows.iter().filter(|r| r["kind"] == "card-purchase").collect();
     assert!(!purchases.is_empty() && purchases.iter().all(|r| r["company"].as_str().is_some_and(|c| c.starts_with("gen-merchant-"))), "{purchases:?}");
     assert!(rows.windows(2).all(|w| w[0]["date"].as_str() >= w[1]["date"].as_str()), "newest first");
+    // every account's money, an investment account's too, each row with its other side
+    let accounts = lists.json()["accounts"].as_array().unwrap().clone();
+    let named = |kind: &str| accounts.iter().filter(|a| a["type"] == kind).map(|a| a["id"].as_str().unwrap().to_string()).collect::<Vec<_>>();
+    let ids: Vec<String> = accounts.iter().map(|a| a["id"].as_str().unwrap().to_string()).collect();
+    let investment: Vec<String> = ["TFSA", "RRSP"].iter().flat_map(|k| named(k)).collect();
+    // the page read above holds every row of the made-up book's few months (the agents' address
+    // bounds a key's requests, so the test asks no more than it must)
+    assert!(tx["next"].is_null(), "{tx}");
+    let (every, every_row) = (&tx, rows);
+    assert!(every_row.iter().any(|r| investment.contains(&r["accountId"].as_str().unwrap().to_string())), "an investment account's rows reach the read: {every}");
+    // a move between the person's own accounts names the other account by the book's id and name, both ways
+    let own: Vec<&Value> = every_row.iter().filter(|r| r["other"]["kind"] == "own").collect();
+    assert!(!own.is_empty(), "the made-up book moves money between its accounts: {every}");
+    for r in &own {
+        let other = r["other"]["accountId"].as_str().expect("the book holds both accounts");
+        // one of the book's accounts: another, or this one where the book holds both of
+        // Wealthsimple's ids for it as one account
+        assert!(ids.contains(&other.to_string()), "{r}");
+        assert_eq!(r["other"]["account"], accounts.iter().find(|a| a["id"] == other).unwrap()["name"], "{r}");
+        assert!(r.get("brokerAccount").is_none() && r["other"].get("brokerAccount").is_none());
+    }
+    assert!(own.iter().any(|r| r["other"]["accountId"] != r["accountId"]), "a move between two of the book's accounts: {own:?}");
+    // a bank deposit is from outside
+    assert!(every_row.iter().any(|r| r["kind"] == "deposit" && r["other"]["kind"] == "outside"), "{every}");
     // every route as the served description lists it, called with each parameter it
     // lists, and each parameter shown to be read: a wrong value refused, or another
     // value changing the answer (brief 80, round 3, 4). Built from what is served,
@@ -2091,7 +2115,7 @@ fn the_sign_in_page_says_everything_an_agent_reads() {
         ("income", "income"),
         ("exposure", "holdings"),
         ("net_worth", "net worth"),
-        ("transactions", "chequing and credit card transactions"),
+        ("transactions", "money in and out of each of your accounts and the account on each transfer's other side"),
         ("markets", "watchlist"),
         ("news", "news"),
         ("listing_news", "news"),
