@@ -149,6 +149,9 @@ pub struct Remote {
     team_asked: Mutex<Option<Timestamp>>,
     /// Why Cloudflare didn't take Bagholder's GitHub app as a login method, until it does.
     github_said: Mutex<String>,
+    /// Why the application Bagholder made could not be given instant authentication
+    /// at start: said in the panel until a start gives it.
+    instant_said: Mutex<String>,
     /// The address a set-up was refused because an earlier Bagholder set-up's
     /// tunnel, connected nowhere, still holds it, and when that tunnel was last
     /// connected: offered to the person to take over.
@@ -383,6 +386,14 @@ impl Remote {
         *self.github_said.lock().unwrap_or_else(|e| e.into_inner()) = said;
     }
 
+    pub fn instant_said(&self) -> String {
+        self.instant_said.lock().unwrap_or_else(|e| e.into_inner()).clone()
+    }
+
+    pub fn set_instant_said(&self, said: String) {
+        *self.instant_said.lock().unwrap_or_else(|e| e.into_inner()) = said;
+    }
+
     /// Whether the team's address may be asked of Cloudflare again: once a minute
     /// at most, however many passes name another team.
     pub fn may_ask_team(&self, now: Timestamp) -> bool {
@@ -577,14 +588,19 @@ pub fn make_login(token: &str, account: &str, name: &str, client_id: &str, clien
 }
 
 /// The Access application for `host`, set as a person sets one up in Cloudflare's
-/// dashboard, every other setting Cloudflare's own: Bagholder's own GitHub login
-/// (`login`) alone, and one rule requiring it and `email`.
+/// dashboard: Bagholder's own GitHub login (`login`) alone, and one rule requiring
+/// it and `email`. With one login method, Cloudflare's instant authentication
+/// (`auto_redirect_to_identity`, "End users will not be shown the Cloudflare Access
+/// login page"): a sign-in that has expired is renewed by redirects alone, so the
+/// page renews it by reloading itself (`docs/plans/sign-in-renews-itself.md`).
+/// Every other setting is Cloudflare's own.
 pub fn application(host: &str, email: &str, login: &str) -> serde_json::Value {
     serde_json::json!({
         "name": format!("Bagholder at {host}"),
         "domain": host,
         "type": "self_hosted",
         "session_duration": SESSION,
+        "auto_redirect_to_identity": true,
         "allowed_idps": [login],
         "policies": [{
             "name": format!("{email} alone"),
@@ -608,6 +624,30 @@ pub fn make_application(token: &str, account: &str, host: &str, email: &str, log
     let made = api(token, "POST", &format!("/accounts/{account}/access/apps"), Some(&application(host, email, login)))?;
     let text = |f: &str| made.get(f).and_then(serde_json::Value::as_str).map(str::to_string).filter(|s| !s.is_empty());
     Ok((text("id").ok_or("Cloudflare named no application.")?, text("aud").ok_or("Cloudflare gave the application no audience tag.")?))
+}
+
+/// The application Bagholder made, given instant authentication where an earlier
+/// Bagholder made it without: `read` answers it as Cloudflare holds it, and only when
+/// it is Bagholder's own for `host` (by its name) and the flag is off is the whole
+/// application `application` makes sent to it by `send`. Cloudflare's reference does
+/// not promise a `PUT` merges, so a partial body is never sent; an application the
+/// person made is never touched. True when it was sent.
+pub fn give_instant_auth(read: &dyn Fn() -> Result<serde_json::Value, String>, send: &dyn Fn(&serde_json::Value) -> Result<(), String>, host: &str, email: &str, login: &str) -> Result<bool, String> {
+    let held = read()?;
+    if held.get("name").and_then(serde_json::Value::as_str) != Some(format!("Bagholder at {host}").as_str()) {
+        return Ok(false);
+    }
+    if held.get("auto_redirect_to_identity").and_then(serde_json::Value::as_bool) == Some(true) {
+        return Ok(false);
+    }
+    send(&application(host, email, login))?;
+    Ok(true)
+}
+
+/// `give_instant_auth` on Cloudflare: the application by its id, read and replaced.
+pub fn instant_auth(token: &str, account: &str, id: &str, host: &str, email: &str, login: &str) -> Result<bool, String> {
+    let path = format!("/accounts/{account}/access/apps/{id}");
+    give_instant_auth(&|| api(token, "GET", &path, None), &|body| api(token, "PUT", &path, Some(body)).map(|_| ()), host, email, login)
 }
 
 /// The Access application deleted; one already gone is fine.
@@ -757,18 +797,49 @@ pub mod tests {
     }
 
     /// The Access application lets in the email alone, through Bagholder's own
-    /// GitHub login alone, as a person sets one up in the dashboard: nothing of
-    /// Cloudflare's own defaults changed (instant authentication, the App Launcher).
+    /// GitHub login alone, as a person sets one up in the dashboard, straight to it
+    /// (instant authentication: one login method, no Access page to press through);
+    /// the App Launcher left as Cloudflare's own.
     #[test]
     fn the_access_application_lets_in_the_email_alone_through_bagholder_s_own_login() {
         let app = application("app.example.com", EMAIL, "login-bh");
         assert_eq!(app["domain"], "app.example.com");
         assert_eq!(app["type"], "self_hosted");
         assert_eq!(app["allowed_idps"], serde_json::json!(["login-bh"]));
+        assert_eq!(app["auto_redirect_to_identity"], true, "the one login method, with no Access page before it");
         assert_eq!(app["policies"], serde_json::json!([{ "name": "me@example.com alone", "decision": "allow", "include": [{ "login_method": { "id": "login-bh" } }], "require": [{ "email": { "email": EMAIL } }] }]));
-        for default in ["auto_redirect_to_identity", "app_launcher_visible"] {
-            assert!(app.get(default).is_none(), "{default} is Cloudflare's own");
-        }
+        assert!(app.get("app_launcher_visible").is_none(), "the App Launcher is Cloudflare's own");
+    }
+
+    /// An application Bagholder made before instant authentication is given it once,
+    /// with the whole application as the body; one that has it, and one the person
+    /// made, are left as they are.
+    #[test]
+    fn an_application_bagholder_made_without_instant_auth_is_given_it_whole_once() {
+        use std::cell::RefCell;
+        let sent: RefCell<Vec<serde_json::Value>> = RefCell::new(Vec::new());
+        let send = |b: &serde_json::Value| -> Result<(), String> {
+            sent.borrow_mut().push(b.clone());
+            Ok(())
+        };
+        // made by an earlier Bagholder: its name, no flag
+        let mut held = application("app.example.com", EMAIL, "login-bh");
+        held.as_object_mut().unwrap().remove("auto_redirect_to_identity");
+        held["id"] = serde_json::json!("app-1");
+        held["aud"] = serde_json::json!("aud-1");
+        let earlier = held.clone();
+        assert!(give_instant_auth(&|| Ok(earlier.clone()), &send, "app.example.com", EMAIL, "login-bh").unwrap());
+        assert_eq!(sent.borrow().as_slice(), [application("app.example.com", EMAIL, "login-bh")], "the whole application, never a partial body");
+        // once it has it: nothing sent
+        let now_has = application("app.example.com", EMAIL, "login-bh");
+        assert!(!give_instant_auth(&|| Ok(now_has.clone()), &send, "app.example.com", EMAIL, "login-bh").unwrap());
+        // one the person made: never touched
+        let theirs = serde_json::json!({ "id": "app-2", "name": "My page", "domain": "app.example.com", "allowed_idps": ["login-bh"] });
+        assert!(!give_instant_auth(&|| Ok(theirs.clone()), &send, "app.example.com", EMAIL, "login-bh").unwrap());
+        assert_eq!(sent.borrow().len(), 1);
+        // a refusal is said, not swallowed
+        let refused = give_instant_auth(&|| Ok(earlier.clone()), &|_| Err("Cloudflare refused it (HTTP 403).".into()), "app.example.com", EMAIL, "login-bh");
+        assert_eq!(refused, Err("Cloudflare refused it (HTTP 403).".into()));
     }
 
     /// Bagholder's GitHub app: named for the domain where the name fits, private,

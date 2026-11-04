@@ -48,6 +48,7 @@ describe('the one way to the server', () => {
       '/src/lib/markets/Watchlist.svelte': 2, // a lookup waits for the typing to pause; the added row's tint decays
       '/src/lib/trade/Disclosures.svelte': 1, // "Opening…" on a row whose document opens in another tab, which tells the page nothing
       '/src/lib/heatmap/Heatmap.svelte': 1, // the slideshow's dwell: the reader's own figure
+      '/src/lib/live.svelte.ts': 1, // a stream the browser closed for good is opened again, 1 s doubling to 30 s: a connection, never data
     }
     const found: Record<string, number> = {}
     for (const [path, text] of Object.entries(sources)) {

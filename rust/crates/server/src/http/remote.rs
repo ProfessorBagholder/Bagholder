@@ -115,7 +115,7 @@ pub fn status(app: &Arc<App>) -> RemoteStatus {
         said: match (&ready, running) {
             (Some(Err(e)), true) => e.clone(),
             (_, false) if kept.on => st.exited.unwrap_or_default(),
-            _ => String::new(),
+            _ => app.remote.instant_said(),
         },
         held: app.remote.held().map(|(host, last_connected)| RemoteHeld { host, last_connected }),
     }
@@ -673,5 +673,28 @@ pub fn open(app: &Arc<App>) {
         if let Err(e) = up(app) {
             crate::app::log(&format!("bagholder: the page’s address could not open again: {e}"));
         }
+        give_instant_auth(app);
     }
+}
+
+/// The application Bagholder made given instant authentication, where an earlier
+/// Bagholder made it without (`remote::give_instant_auth`): once at start, on a
+/// thread of its own, with the token Bagholder keeps. What Cloudflare refused is
+/// said in the panel; the page's sign-in still renews through Access's own page.
+fn give_instant_auth(app: &Arc<App>) {
+    let kept = app.remote.kept(&app.home);
+    let Some(login) = kept.github.as_ref().map(|g| g.login.clone()).filter(|l| !l.is_empty()) else { return };
+    if kept.app_id.is_empty() || kept.host.is_empty() {
+        return;
+    }
+    let (Some(token), Some(account)) = (remote::token(&app.home), account(app)) else { return };
+    let a = app.clone();
+    app.spawn_work("remote-instant-auth", move || {
+        let said = match remote::instant_auth(&token, &account, &kept.app_id, &kept.host, &kept.email, &login) {
+            Ok(_) => String::new(),
+            Err(e) => format!("Cloudflare would not let the page’s sign-in go straight to GitHub: {e}"),
+        };
+        a.remote.set_instant_said(said);
+        a.events.signal();
+    });
 }

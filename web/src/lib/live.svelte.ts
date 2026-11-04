@@ -12,7 +12,7 @@
 //
 // Nothing here polls. There is no timer in this file.
 
-import { post } from './api'
+import { post, signInState } from './api'
 import { PROTOCOL } from './protocol'
 import { ROW_KEYS } from './generated/keys'
 import { bookIs, kept, keptLatest, keptRead, lastBook, readKept, save } from './kept'
@@ -151,7 +151,16 @@ export interface Holder<T> {
 }
 
 /** The connection itself: whether it is reaching the server. */
-export const conn = $state<{ error: string; open: boolean }>({ error: '', open: false })
+/**
+ * The stream as the header says it: `open` once the server has said hello. `lost`
+ * once it is down for more than a moment: the browser closed it for good, or its own
+ * reconnecting failed again (a stream that simply ended and came straight back is
+ * not lost). Then `retrying` while it is being opened again, `renewing` while the
+ * sign-in in front of Bagholder renews, and `error` what the last try found.
+ */
+export const conn = $state<{ error: string; open: boolean; lost: boolean; retrying: boolean; renewing: boolean }>({ error: '', open: false, lost: false, retrying: false, renewing: false })
+/** The browser's own reconnecting that failed since the last hello. */
+let missed = 0
 
 /**
  * The order a stream's messages are numbered in, from 1: `seen` takes each
@@ -411,6 +420,11 @@ export async function connect(): Promise<void> {
     streamId = hello.id
     conn.open = true
     conn.error = ''
+    conn.lost = false
+    conn.retrying = false
+    conn.renewing = false
+    missed = 0
+    retryIn = RETRY_FIRST_MS
     // the stream was opened naming what the page showed then: only a difference is said
     saidFor = streamId
     said = connectedWith
@@ -482,10 +496,147 @@ export async function connect(): Promise<void> {
     }
   })
   es.onerror = () => {
+    if (source !== es) return
     streamId = 0
     conn.open = false
     conn.error = 'Could not reach Bagholder.'
+    // the browser opens an interrupted stream again by itself; one it was refused
+    // (any answer but a stream) it closes for good, and it is opened again here
+    if (es.readyState === EventSource.CLOSED) {
+      conn.lost = true
+      reopenLater()
+    } else if (++missed > 1) {
+      // its own reconnecting failed again: a sign-in in front that expired sends it to
+      // a login page of another origin, which the browser keeps retrying for ever, so
+      // it is asked at the second miss, the fourth, the eighth…
+      conn.lost = true
+      conn.retrying = true
+      if ((missed & (missed - 1)) === 0) void expiredRenews()
+    }
   }
+  watchConnection()
+}
+
+/**
+ * A stream the browser has closed for good is opened again (docs/plans/sign-in-renews-itself.md).
+ * An EventSource closes on any answer but a stream: a proxy's 502 while the
+ * container is replaced (the Update button's own restart), a tunnel's 530 while it
+ * is down, the sign-in in front of Bagholder sending to its login page. At once when
+ * the network comes back or the page is shown again, and while it is visible and
+ * online, `RETRY_FIRST_MS` after it closed, doubling to `RETRY_MOST_MS`, until it
+ * opens. Each try asks first whether the sign-in in front has expired, and renews it
+ * instead of trying the stream.
+ */
+const RETRY_FIRST_MS = 1000
+const RETRY_MOST_MS = 30_000
+let retryIn = RETRY_FIRST_MS
+let retry: ReturnType<typeof setTimeout> | null = null
+let watching = false
+
+const closed = (): boolean => !source || source.readyState === EventSource.CLOSED
+const mayTry = (): boolean => document.visibilityState === 'visible' && navigator.onLine !== false
+
+function reopenLater(): void {
+  if (retry) return
+  if (!mayTry()) {
+    conn.retrying = false
+    return
+  }
+  conn.retrying = true
+  retry = setTimeout(() => {
+    retry = null
+    void reopen()
+  }, retryIn)
+  retryIn = Math.min(retryIn * 2, RETRY_MOST_MS)
+}
+
+async function reopen(): Promise<void> {
+  if (!closed() || connecting) return
+  const at = await signInState()
+  if (!closed() || connecting) return
+  if (at === 'expired') return renew()
+  if (at === 'unreachable') {
+    conn.error = 'Could not reach Bagholder.'
+    return reopenLater()
+  }
+  // a stream refused again closes, and comes back here through `onerror`
+  await connect()
+}
+
+/** The sign-in in front of Bagholder renewed, where it is what keeps the stream out. */
+async function expiredRenews(): Promise<void> {
+  if ((await signInState()) === 'expired' && !conn.open) renew()
+}
+
+/** Opened again at once when the network comes back, or the page is shown again. */
+function watchConnection(): void {
+  if (watching) return
+  watching = true
+  const now = () => {
+    if (!closed() || connecting) return
+    if (retry) clearTimeout(retry)
+    retry = null
+    retryIn = RETRY_FIRST_MS
+    void reopen()
+  }
+  window.addEventListener('online', now)
+  window.addEventListener('pageshow', now)
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible') now()
+  })
+}
+
+/**
+ * The sign-in in front of Bagholder has expired: the page loads itself again, which
+ * that sign-in answers with redirects alone while the person's login method still
+ * knows them (Cloudflare Access's instant authentication, then GitHub), and the page
+ * opens again on what it kept. Not while the person is typing into a field or has a
+ * dialog open: then once that ends. At most once a minute, so a sign-in that needs
+ * the person shows its own page instead of the page loading itself again.
+ */
+const RENEWED = 'bh2.signInRenewed'
+const RENEW_ONCE_IN_MS = 60_000
+function renew(): void {
+  let last = 0
+  try {
+    last = Number(sessionStorage.getItem(RENEWED)) || 0
+  } catch {
+    /* the browser keeps nothing: the renewal is tried once in this load */
+  }
+  if (Date.now() - last < RENEW_ONCE_IN_MS) {
+    conn.renewing = false
+    conn.error = 'The sign-in in front of Bagholder did not renew: reload the page to sign in.'
+    return
+  }
+  conn.renewing = true
+  whenFree(() => {
+    try {
+      sessionStorage.setItem(RENEWED, String(Date.now()))
+    } catch {
+      /* the browser keeps nothing: the load goes ahead */
+    }
+    location.reload()
+  })
+}
+
+/** Whether a reload would lose something under way: a field being typed into, a dialog open. */
+function busy(): boolean {
+  const a = document.activeElement as HTMLElement | null
+  const typing = !!a && (a.isContentEditable || a.tagName === 'INPUT' || a.tagName === 'TEXTAREA' || a.tagName === 'SELECT')
+  return typing || !!document.querySelector('[role="dialog"], [aria-modal="true"], dialog[open], #modalDlg, #confirmDlg')
+}
+
+/** `go` now, or once the person leaves the field or closes the dialog: looked at after the page has drawn. */
+function whenFree(go: () => void): void {
+  if (!busy()) return go()
+  const ends = ['focusout', 'keyup', 'pointerup', 'visibilitychange'] as const
+  const look = () =>
+    requestAnimationFrame(() => {
+      if (busy()) return
+      for (const e of ends) document.removeEventListener(e, look, true)
+      go()
+    })
+  for (const e of ends) document.addEventListener(e, look, true)
 }
 
 /** The server's word over what the page holds: every document sent whole again, reconciled into what is shown. */
@@ -522,4 +673,7 @@ export function disconnect(): void {
   source = null
   streamId = 0
   conn.open = false
+  if (retry) clearTimeout(retry)
+  retry = null
+  retryIn = RETRY_FIRST_MS
 }
