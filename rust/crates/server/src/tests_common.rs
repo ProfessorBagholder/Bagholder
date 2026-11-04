@@ -8,15 +8,55 @@ use crate::app::App;
 static LOCK: Mutex<()> = Mutex::new(());
 static APP: OnceLock<Arc<App>> = OnceLock::new();
 
+/// The apps the tests share, made on this run's folder: each one's work ended
+/// (`App::finish`) as the run exits, before the folder goes, so nothing an app
+/// started writes into the folder as it is removed (a book written again after
+/// the removal is a test's leftover, `bin/check-test-leftovers.sh`).
+static ON_RUN_FOLDER: Mutex<Vec<Arc<App>>> = Mutex::new(Vec::new());
+
+/// `app`, made on this run's folder, ended before the folder goes.
+pub fn on_run_folder(app: &Arc<App>) {
+    ON_RUN_FOLDER.lock().unwrap_or_else(|e| e.into_inner()).push(app.clone());
+}
+
+/// Each of `apps` stopped and its work waited for: what the run's exit does before
+/// it removes the folder they live on.
+fn ended(apps: Vec<Arc<App>>) {
+    for app in apps {
+        app.finish();
+    }
+}
+
+/// An app shared on the run's folder is stopped, and the work it started has ended,
+/// before the folder is removed: a book written after the removal is the run's
+/// leftover (macOS's suite saw a notice's book written so, 2026-11-04).
+#[test]
+fn a_shared_app_s_work_ends_before_its_run_folder_goes() {
+    let dir = tempfile::tempdir().unwrap();
+    let app = App::new(dir.path().to_path_buf(), PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+    let (tx, rx) = std::sync::mpsc::channel::<()>();
+    let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let d = done.clone();
+    app.spawn_work("test-work", move || {
+        let _ = rx.recv_timeout(std::time::Duration::from_millis(200));
+        d.store(true, std::sync::atomic::Ordering::SeqCst);
+    });
+    ended(vec![app.clone()]);
+    drop(tx);
+    assert!(app.stopping(), "stopped");
+    assert!(done.load(std::sync::atomic::Ordering::SeqCst), "the work it started has ended");
+}
+
 /// A folder of this run's own, removed as the run exits: for the homes of the
-/// apps the tests share, which no one test's end can take. A run stopped by a
-/// signal leaves it.
+/// apps the tests share, which no one test's end can take, each ended first
+/// (`on_run_folder`). A run stopped by a signal leaves it.
 pub fn run_folder(name: &str) -> PathBuf {
     static RUN: OnceLock<PathBuf> = OnceLock::new();
     extern "C" {
         fn atexit(f: extern "C" fn()) -> std::os::raw::c_int;
     }
     extern "C" fn remove() {
+        ended(ON_RUN_FOLDER.lock().unwrap_or_else(|e| e.into_inner()).drain(..).collect());
         if let Some(d) = RUN.get() {
             let _ = std::fs::remove_dir_all(d);
         }
@@ -59,6 +99,7 @@ fn made() -> &'static Arc<App> {
         let f = crate::figures::Figures::open(&book, now).unwrap();
         f.state_zone("America/Toronto", now).unwrap();
         app.set_figures(f);
+        on_run_folder(&app);
         app
     })
 }
