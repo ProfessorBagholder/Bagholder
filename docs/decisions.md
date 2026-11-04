@@ -2,6 +2,10 @@
 
 Every decision the owner has made about the app and the work, newest first, one line each with its reason and where it was made. A decision is written here and pushed the moment it is made, before any work relies on it: a decision that lives only in a local plan is invisible to the reviewer. Where a brief, a plan or a doc disagrees with this file, this file wins and the other is fixed. A decision here is settled: it is never asked again or reopened by a suggestion. Each carries the owner's own words and where they were said; a decision proposed by a brief or a session and not yet confirmed by the owner is marked "unconfirmed" and binds nothing until the owner confirms it. Each names the test that fails if it is broken, quoting what it asserts, or says "review only" where no test can hold it.
 
+## 2026-11-04
+
+- **The page behind Open from anywhere renews its sign-in by itself, and a lost connection comes back by itself.** The owner, after the page stopped updating overnight with no word and a refresh opened Cloudflare's login page, of being shown a sign-in-expired message with a Reload button: "That all sounds incredibly annoying. I shouldn't have to be dealing with that." The person is shown a sign-in only when their login method itself asks for one. Held by: the tests named in `docs/plans/sign-in-renews-itself.md`.
+
 ## 2026-11-02
 
 - **In Docker, the update notice updates Bagholder when the person presses it.** The owner, of the notice that linked to GitHub: "that is useless, clicking it opens github instead of updating the app", and of the companion that makes it a button: "update button". Held by: the tests named in `docs/plans/docker-update-button.md`.
