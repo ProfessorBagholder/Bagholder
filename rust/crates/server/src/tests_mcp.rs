@@ -139,6 +139,112 @@ fn every_read_the_page_makes_is_an_agent_tool() {
     }
 }
 
+/// Every `POST` the page sends has its place (`docs/decisions.md` 2026-11-02): a
+/// write, listed with what it changes; a step of the set-up of the person's own
+/// access, which an agent is never given; the page's own plumbing; or a read, whose
+/// `GET` of the same path the read client names and a tool reads, so a read the page
+/// makes by `POST` is an agent's too. A `POST` added with no place here fails.
+#[test]
+fn every_post_the_page_sends_is_a_write_or_a_read_an_agent_has() {
+    const ORDER: &str = "an order sent to Wealthsimple: an agent places none (SPEC agents-6)";
+    const SIGN_IN: &str = "the Wealthsimple sign-in";
+    const ENTRY: &str = "what the person enters, written to the book";
+    const IMPORT: &str = "a file import: its rows written to the book";
+    const MARKS: &str = "the notifications' marks and settings, written, or a test one sent";
+    const SET_UP: &str = "the set-up of the person's own access (agents' tunnels, keys and sign-ins; Open from anywhere): steps on their own accounts, never the book or the market";
+    const WRITES: &[(&str, &str)] = &[
+        ("/api/order", ORDER),
+        ("/api/order/cancel", ORDER),
+        ("/api/order/modify", ORDER),
+        ("/api/bracket/adjust", ORDER),
+        ("/api/bracket/cancel", ORDER),
+        ("/api/orders/refresh", "the orders read back from Wealthsimple now and written: the `orders` tool reads them"),
+        ("/api/capture", SIGN_IN),
+        ("/api/login/start", SIGN_IN),
+        ("/api/login/input", SIGN_IN),
+        ("/api/login/cancel", SIGN_IN),
+        ("/api/disconnect", SIGN_IN),
+        ("/api/sync", "Wealthsimple read now and the book written: the tools read what it brings"),
+        ("/api/refresh", "the sources read now: the tools read what they bring"),
+        ("/api/update", "a release installed"),
+        ("/api/data/clear", "what the book holds, deleted"),
+        ("/api/entries", ENTRY),
+        ("/api/journal", ENTRY),
+        ("/api/debts/answer", ENTRY),
+        ("/api/tiles/set", ENTRY),
+        ("/api/watchlist/add", ENTRY),
+        ("/api/watchlist/remove", ENTRY),
+        ("/api/import", IMPORT),
+        ("/api/import/stop", IMPORT),
+        ("/api/import/told", IMPORT),
+        ("/api/watch", IMPORT),
+        ("/api/watch/scan", IMPORT),
+        ("/api/watch/clear", IMPORT),
+        ("/api/notifications/read", MARKS),
+        ("/api/notifications/seen", MARKS),
+        ("/api/notifications/clear", MARKS),
+        ("/api/notifications/settings", MARKS),
+        ("/api/notifications/test", MARKS),
+        ("/api/push/subscribe", MARKS),
+        ("/api/push/unsubscribe", MARKS),
+        ("/api/agents/check", SET_UP),
+        ("/api/agents/cloudflare/sign-in", SET_UP),
+        ("/api/agents/codes/resume", SET_UP),
+        ("/api/agents/cut-off", SET_UP),
+        ("/api/agents/install", SET_UP),
+        ("/api/agents/keys", SET_UP),
+        ("/api/agents/ngrok/token", SET_UP),
+        ("/api/agents/rename", SET_UP),
+        ("/api/agents/requests/deny", SET_UP),
+        ("/api/agents/switch", SET_UP),
+        ("/api/agents/tunnel", SET_UP),
+        ("/api/agents/tunnel/look", SET_UP),
+        ("/api/agents/tunnel/remove", SET_UP),
+        ("/api/agents/tunnel/start", SET_UP),
+        ("/api/agents/tunnel/stop", SET_UP),
+        ("/api/remote/check", SET_UP),
+        ("/api/remote/github", SET_UP),
+        ("/api/remote/github/login", SET_UP),
+        ("/api/remote/remove", SET_UP),
+        ("/api/remote/set-up", SET_UP),
+        ("/api/remote/switch", SET_UP),
+        ("/api/remote/team", SET_UP),
+        ("/api/remote/token", SET_UP),
+    ];
+    const NOT_DATA: &[(&str, &str)] = &[
+        ("/api/events/watch", "the page naming the documents its live feed carries"),
+        ("/api/events/resync", "the page asking its live feed for every document again"),
+        ("/api/order/preview", "the ticket's arithmetic over the draft and the figures the page sends it: every figure it rests on is `order_quote`'s, and an agent drafts no order, placing none (SPEC agents-6)"),
+    ];
+    // a read the page makes by `POST`: the agents' is its `GET` of the same path
+    const READ_BY_GET: &[(&str, &str)] = &[("/api/order/listing", "a listing named by symbol and venue is found by the GET, which writes nothing; the POST also opens the book's own instruments, and may record the id found on one")];
+    let mut posts: Vec<String> = route_table().iter().filter(|e| e.method == "post").map(|e| e.path.to_string()).collect();
+    // and each `POST` a router adds by hand, outside the route table
+    let dir = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("src/http");
+    // (a `POST` on its own, or after the path's `GET`)
+    let by_hand = regex::Regex::new(r#"\.route\("([^"]+)",\s*(?:(?:axum::routing::)?get\([^)]*\)\.)?(?:axum::routing::)?post\("#).unwrap();
+    for f in std::fs::read_dir(&dir).unwrap() {
+        let f = f.unwrap().path();
+        if f.extension().is_some_and(|e| e == "rs") {
+            posts.extend(by_hand.captures_iter(&std::fs::read_to_string(&f).unwrap()).map(|c| c[1].to_string()));
+        }
+    }
+    assert!(posts.len() >= 55, "the POSTs are found: {}", posts.len());
+    let (named, tools) = (routes(), include_str!("agents/tools.rs"));
+    for path in &posts {
+        let placed = WRITES.iter().chain(NOT_DATA).any(|(p, _)| p == path);
+        let read = READ_BY_GET.iter().any(|(p, _)| p == path);
+        assert!(placed != read, "{path} is a POST with no place, or two: a write, the page's own, or a read whose GET an agent tool reads");
+        if read {
+            assert!(named.contains(&path.as_str()), "{path}'s GET is not one the agents' read client names");
+            assert!(tools.contains(&format!("r.page(\"{path}\"")), "{path}'s GET is named and no agent tool reads it");
+        }
+    }
+    for (p, _) in WRITES.iter().chain(NOT_DATA).chain(READ_BY_GET) {
+        assert!(posts.iter().any(|q| q == p), "{p} is listed and is no POST the page sends");
+    }
+}
+
 /// A path the read client does not list is refused by name, before any request
 /// is made: here no server answers at all, so a request made would say so instead.
 #[test]
