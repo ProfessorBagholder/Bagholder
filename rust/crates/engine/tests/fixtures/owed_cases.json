@@ -1,0 +1,600 @@
+[
+  {
+    "name": "Held 100 units into the ex-date and sold them on the ex-date: still owed 100 units' distribution.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; ex Wed 2026-04-15; pay Wed 2026-04-22; today Fri 2026-04-17.",
+      "The record lists one distribution in cash (form stated): ex 2026-04-15, pay 2026-04-22, 0.125 CAD a unit. Ex-date 2026-04-15 is on or before today 2026-04-17.",
+      "Owed: the positions read as of the day before the ex-date (2026-04-14) states XOWA 100, positive, so A held it long into the ex-date. Under T+1 the sale on the ex-date (t2, 2026-04-15) is still owed; the read of 2026-04-15 itself (nothing held) is not the one asked.",
+      "Not paid yet: no dividend of F in A on or after 2026-04-15 (no next ex-date is listed).",
+      "For a time: the pay date 2026-04-22 has not come, so the row stands.",
+      "Row: qty 100 (units held into the ex-date), per 0.125, amount 100 x 0.125 = 12.500 CAD."
+    ],
+    "book": {
+      "today": "2026-04-17",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWA"}],
+      "declared": {
+        "F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"},
+        {"id": "t2", "account": "A", "day": "2026-04-15", "at": "2026-04-15T15:00:00Z", "kind": "sell", "instrument": "F", "qty": "-100", "cash": "1050"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-14": {"held": {"F": "100"}},
+            "2026-04-15": {"held": {}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"instrument": "F", "account": "A", "ex": "2026-04-15", "qty": "100", "per": "0.125", "amount": "12.500"}
+    ]
+  },
+  {
+    "name": "Sold every unit the day before the ex-date: nothing is owed.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; sell Tue 2026-04-14; ex Wed 2026-04-15; pay Wed 2026-04-22; today Fri 2026-04-17.",
+      "The record lists one distribution in cash: ex 2026-04-15, pay 2026-04-22, 0.125 CAD; ex-date on or before today.",
+      "Owed: the positions read as of the day before the ex-date (2026-04-14) states no XOWB (sold that day), so no positive quantity: A held nothing into the ex-date and is owed nothing. The 2026-04-13 read (100 units) is a different day and is not the one asked.",
+      "No row."
+    ],
+    "book": {
+      "today": "2026-04-17",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWB"}],
+      "declared": {
+        "F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"},
+        {"id": "t2", "account": "A", "day": "2026-04-14", "at": "2026-04-14T15:00:00Z", "kind": "sell", "instrument": "F", "qty": "-100", "cash": "1050"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-13": {"held": {"F": "100"}},
+            "2026-04-14": {"held": {}}
+          }
+        }
+      }
+    },
+    "expect": []
+  },
+  {
+    "name": "Bought on the ex-date: the units bought are owed nothing.",
+    "working": [
+      "Weekdays: buy Wed 2026-04-15 (the ex-date); pay Wed 2026-04-22; today Fri 2026-04-17.",
+      "The record lists one distribution in cash: ex 2026-04-15, pay 2026-04-22, 0.125 CAD; ex-date on or before today.",
+      "Owed: the positions read as of the day before the ex-date (2026-04-14) states no XOWC. Under T+1 units bought on or after the ex-date are owed nothing; the 2026-04-15 read (100 units) is the ex-date's own and not the one asked.",
+      "No row."
+    ],
+    "book": {
+      "today": "2026-04-17",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWC"}],
+      "declared": {
+        "F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-04-15", "at": "2026-04-15T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-14": {"held": {}},
+            "2026-04-15": {"held": {"F": "100"}}
+          }
+        }
+      }
+    },
+    "expect": []
+  },
+  {
+    "name": "Held in two accounts: one row for each account, each with its own units.",
+    "working": [
+      "Weekdays: buys Mon 2026-02-02 (A) and Tue 2026-02-03 (B); ex Wed 2026-03-11; pay Wed 2026-03-18; today Fri 2026-03-13.",
+      "The record lists one distribution in cash: ex 2026-03-11, pay 2026-03-18, 0.0875 USD a unit; ex-date on or before today.",
+      "Owed, per account: the positions read as of 2026-03-10 states XOWD 100 in A and 40 in B, both positive.",
+      "Not paid yet: no dividend of U in either account on or after 2026-03-11.",
+      "For a time: pay date 2026-03-18 not yet come, so both rows stand.",
+      "A: 100 x 0.0875 = 8.7500 USD. B: 40 x 0.0875 = 3.5000 USD."
+    ],
+    "book": {
+      "today": "2026-03-13",
+      "accounts": [{"id": "A", "kind": "cash"}, {"id": "B", "kind": "cash"}],
+      "instruments": [{"id": "U", "currency": "USD", "symbol": "XOWD"}],
+      "rates": {"USD": {"2026-01-02": "1.35"}},
+      "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+      "declared": {
+        "U": [{"ex": "2026-03-11", "pay": "2026-03-18", "amount": "0.0875", "currency": "USD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "100", "cash": "-2000"},
+        {"id": "t2", "account": "B", "day": "2026-02-03", "at": "2026-02-03T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "40", "cash": "-800"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-03-10": {"held": {"U": "100"}}
+          }
+        },
+        "B": {
+          "held": {},
+          "days_held": {
+            "2026-03-10": {"held": {"U": "40"}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"instrument": "U", "account": "A", "ex": "2026-03-11", "qty": "100", "per": "0.0875", "amount": "8.7500"},
+      {"instrument": "U", "account": "B", "ex": "2026-03-11", "qty": "40", "per": "0.0875", "amount": "3.5000"}
+    ]
+  },
+  {
+    "name": "The payment posted on the pay date: no row, though the posting allowance has not run out.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; ex Wed 2026-04-15; pay and dividend Wed 2026-04-22; today Thu 2026-04-23.",
+      "The record lists one distribution in cash: ex 2026-04-15, pay 2026-04-22, 0.125 CAD; ex-date on or before today.",
+      "Owed: the read as of 2026-04-14 states XOWE 100.",
+      "Not paid yet fails: dividend d1 of F reached A on 2026-04-22, on or after the ex-date (no next ex-date listed).",
+      "So no row, even though today (one business day after the pay date) is within the allowance."
+    ],
+    "book": {
+      "today": "2026-04-23",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWE"}],
+      "declared": {
+        "F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"},
+        {"id": "d1", "account": "A", "day": "2026-04-22", "at": "2026-04-22T11:00:00Z", "kind": "dividend", "instrument": "F", "cash": "12.50", "cash_currency": "CAD"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-14": {"held": {"F": "100"}}
+          }
+        }
+      }
+    },
+    "expect": []
+  },
+  {
+    "name": "Pay date two weeks before today and nothing posted: the row is gone after two business days.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; ex Wed 2026-04-08; pay Wed 2026-04-15; today Wed 2026-04-29 (14 days after the pay date).",
+      "The record lists one distribution in cash: ex 2026-04-08, pay 2026-04-15, 0.125 CAD; ex-date on or before today.",
+      "Owed: the read as of 2026-04-07 states XOWF 100. Not paid: no dividend of F in A on or after 2026-04-08.",
+      "For a time: two business days after Wed 2026-04-15 are Thu 2026-04-16 and Fri 2026-04-17; both have passed by 2026-04-29, so the row is gone.",
+      "No row."
+    ],
+    "book": {
+      "today": "2026-04-29",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWF"}],
+      "declared": {
+        "F": [{"ex": "2026-04-08", "pay": "2026-04-15", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-07": {"held": {"F": "100"}}
+          }
+        }
+      }
+    },
+    "expect": []
+  },
+  {
+    "name": "Paid on a Friday and today is the Monday after, nothing posted: one business day has passed, so the row stands.",
+    "working": [
+      "Weekdays: buy Mon 2026-02-02; ex Fri 2026-04-17; pay Fri 2026-04-24; today Mon 2026-04-27.",
+      "The record lists one distribution in cash: ex 2026-04-17, pay 2026-04-24, 0.0625 USD; ex-date on or before today.",
+      "Owed: the read as of the day before the ex-date (Thu 2026-04-16) states XOWG 100. Not paid: no dividend of U in A on or after 2026-04-17.",
+      "For a time: the business days after Fri 2026-04-24 are Mon 2026-04-27 (first) and Tue 2026-04-28 (second); the weekend does not count. Today is the first, so the allowance has not passed (three calendar days have, which a calendar count would wrongly treat as past).",
+      "Row: 100 x 0.0625 = 6.2500 USD."
+    ],
+    "book": {
+      "today": "2026-04-27",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "U", "currency": "USD", "symbol": "XOWG"}],
+      "rates": {"USD": {"2026-01-02": "1.35"}},
+      "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+      "declared": {
+        "U": [{"ex": "2026-04-17", "pay": "2026-04-24", "amount": "0.0625", "currency": "USD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "100", "cash": "-1500"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-16": {"held": {"U": "100"}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"instrument": "U", "account": "A", "ex": "2026-04-17", "qty": "100", "per": "0.0625", "amount": "6.2500"}
+    ]
+  },
+  {
+    "name": "Paid on a Thursday and today is the Tuesday after, nothing posted: both business days (Friday, Monday) have passed, so the row is gone.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; ex Thu 2026-04-16; pay Thu 2026-04-23; today Tue 2026-04-28.",
+      "The record lists one distribution in cash: ex 2026-04-16, pay 2026-04-23, 0.125 CAD; ex-date on or before today.",
+      "Owed: the read as of 2026-04-15 states XOWH 100. Not paid: no dividend of F in A on or after 2026-04-16.",
+      "For a time: two business days after Thu 2026-04-23 are Fri 2026-04-24 and Mon 2026-04-27 (the weekend skipped); both have passed by Tue 2026-04-28, so the row is gone.",
+      "No row."
+    ],
+    "book": {
+      "today": "2026-04-28",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWH"}],
+      "declared": {
+        "F": [{"ex": "2026-04-16", "pay": "2026-04-23", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-15": {"held": {"F": "100"}}
+          }
+        }
+      }
+    },
+    "expect": []
+  },
+  {
+    "name": "No pay date stated and the next ex-date is still to come: the row stands.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; ex Wed 2026-04-15 (no pay date); next ex Thu 2026-05-14, pay Thu 2026-05-21; today Wed 2026-04-29.",
+      "The record lists two distributions in cash. The 2026-04-15 one (0.11 CAD, no pay date) has gone ex; the 2026-05-14 one is after today and is not considered.",
+      "Owed: the read as of 2026-04-14 states XOWI 100. Not paid: no dividend of F in A on or after 2026-04-15 and before 2026-05-14.",
+      "For a time: with no pay date stated the row stands until the next ex-date, 2026-05-14, which is after today, so it stands (two weeks after the ex-date does not matter).",
+      "Row: 100 x 0.11 = 11.00 CAD."
+    ],
+    "book": {
+      "today": "2026-04-29",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWI"}],
+      "declared": {
+        "F": [
+          {"ex": "2026-04-15", "amount": "0.11", "currency": "CAD", "form": "stated"},
+          {"ex": "2026-05-14", "pay": "2026-05-21", "amount": "0.11", "currency": "CAD", "form": "stated"}
+        ]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-14": {"held": {"F": "100"}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"instrument": "F", "account": "A", "ex": "2026-04-15", "qty": "100", "per": "0.11", "amount": "11.00"}
+    ]
+  },
+  {
+    "name": "No pay date stated and the next ex-date has already passed: the row is gone.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; ex Fri 2026-03-13 (no pay date); sell Wed 2026-04-01; next ex Wed 2026-04-15, pay Wed 2026-04-22; today Wed 2026-04-29.",
+      "The record lists two distributions in cash, both gone ex by today.",
+      "2026-03-13 (0.12 CAD, no pay date): owed (the read as of 2026-03-12 states XOWJ 100) and never paid (no dividend of F in A on or after 2026-03-13 and before 2026-04-15), but with no pay date it stands only until the next ex-date, 2026-04-15, which has passed: gone.",
+      "2026-04-15 (0.125 CAD): the read as of 2026-04-14 states no XOWJ (sold 2026-04-01), so it is not owed.",
+      "No row."
+    ],
+    "book": {
+      "today": "2026-04-29",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWJ"}],
+      "declared": {
+        "F": [
+          {"ex": "2026-03-13", "amount": "0.12", "currency": "CAD", "form": "stated"},
+          {"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}
+        ]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"},
+        {"id": "t2", "account": "A", "day": "2026-04-01", "at": "2026-04-01T15:00:00Z", "kind": "sell", "instrument": "F", "qty": "-100", "cash": "1100"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-03-12": {"held": {"F": "100"}},
+            "2026-04-14": {"held": {}}
+          }
+        }
+      }
+    },
+    "expect": []
+  },
+  {
+    "name": "The day before the ex-date is not read for an account that held the payer: no row, and that day's positions are asked for.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; ex Wed 2026-04-15; pay Wed 2026-04-22; today Fri 2026-04-17.",
+      "The record lists one distribution in cash: ex 2026-04-15, pay 2026-04-22, 0.125 CAD; ex-date on or before today; within its time (pay date not come) and not paid.",
+      "A is read by Wealthsimple (it has positions reads), and the journal holds 100 XOWK through the ex-date, but A's reads are 2026-04-13 and 2026-04-15, not 2026-04-14, the day before the ex-date. A read of another day is never used, and the journal's units are only for an account no positions are read of.",
+      "Waiting: no row stands, and 2026-04-14's positions are asked for."
+    ],
+    "book": {
+      "today": "2026-04-17",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWK"}],
+      "declared": {
+        "F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-13": {"held": {"F": "100"}},
+            "2026-04-15": {"held": {"F": "100"}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"waits_on": "2026-04-14"}
+    ]
+  },
+  {
+    "name": "The journal holds 50 units but the positions read of the day before the ex-date states 80: the row is for 80.",
+    "working": [
+      "Weekdays: buy Mon 2026-02-02 (50 units, the only journal row); ex Wed 2026-03-11; pay Wed 2026-03-18; today Mon 2026-03-16.",
+      "The record lists one distribution in cash: ex 2026-03-11, pay 2026-03-18, 0.215 USD; ex-date on or before today.",
+      "Owed: the read as of 2026-03-10 states XOWL 80 (30 the journal never saw); the read, not the journal's 50, says what was held into the ex-date.",
+      "Not paid: no dividend of U in A on or after 2026-03-11. For a time: pay date 2026-03-18 not yet come.",
+      "Row: qty 80, 80 x 0.215 = 17.200 USD."
+    ],
+    "book": {
+      "today": "2026-03-16",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "U", "currency": "USD", "symbol": "XOWL"}],
+      "rates": {"USD": {"2026-01-02": "1.35"}},
+      "covered": {"USD": [["2026-01-01", "2026-12-31"]]},
+      "declared": {
+        "U": [{"ex": "2026-03-11", "pay": "2026-03-18", "amount": "0.215", "currency": "USD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-02-02", "at": "2026-02-02T15:00:00Z", "kind": "buy", "instrument": "U", "qty": "50", "cash": "-500"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-03-10": {"held": {"U": "80"}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"instrument": "U", "account": "A", "ex": "2026-03-11", "qty": "80", "per": "0.215", "amount": "17.200"}
+    ]
+  },
+  {
+    "name": "The ex-date is tomorrow: nothing is owed yet and nothing is asked for.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; today Tue 2026-04-14; ex Wed 2026-04-15; pay Wed 2026-04-22.",
+      "The record lists one distribution in cash, but its ex-date 2026-04-15 is after today 2026-04-14, so it is not one the rule covers (ex-date on or before today), even though the read of 2026-04-14 states XOWM 100.",
+      "No row and nothing waited on."
+    ],
+    "book": {
+      "today": "2026-04-14",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWM"}],
+      "declared": {
+        "F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-14": {"held": {"F": "100"}}
+          }
+        }
+      }
+    },
+    "expect": []
+  },
+  {
+    "name": "The ex-date is today and a fractional holding is owed: the row stands from the ex-date itself.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; ex and today Wed 2026-04-15; pay Wed 2026-04-22.",
+      "The record lists one distribution in cash: ex 2026-04-15, pay 2026-04-22, 0.0915 CAD; the ex-date is on or before today (it is today).",
+      "Owed: the read as of 2026-04-14 states XOWN 37.5. Not paid: no dividend of F in A on or after 2026-04-15. For a time: pay date not come.",
+      "Row: 37.5 x 0.0915 = 3.43125 CAD (exact, not rounded)."
+    ],
+    "book": {
+      "today": "2026-04-15",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWN"}],
+      "declared": {
+        "F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.0915", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "37.5", "cash": "-375"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-14": {"held": {"F": "37.5"}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"instrument": "F", "account": "A", "ex": "2026-04-15", "qty": "37.5", "per": "0.0915", "amount": "3.43125"}
+    ]
+  },
+  {
+    "name": "A Monday ex-date is judged by the positions read as of the Sunday before (the calendar day before).",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; ex Mon 2026-04-20; pay Mon 2026-04-27; today Wed 2026-04-22.",
+      "The record lists one distribution in cash: ex 2026-04-20, pay 2026-04-27, 0.0475 CAD; ex-date on or before today.",
+      "Owed: the day before the ex-date is Sun 2026-04-19; the market is closed, so that day's read states Friday's close's units, and the calendar day before is enough: it states XOWO 120.",
+      "Not paid: no dividend of F in A on or after 2026-04-20. For a time: pay date not come.",
+      "Row: 120 x 0.0475 = 5.7000 CAD."
+    ],
+    "book": {
+      "today": "2026-04-22",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWO"}],
+      "declared": {
+        "F": [{"ex": "2026-04-20", "pay": "2026-04-27", "amount": "0.0475", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "120", "cash": "-1200"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-19": {"held": {"F": "120"}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"instrument": "F", "account": "A", "ex": "2026-04-20", "qty": "120", "per": "0.0475", "amount": "5.7000"}
+    ]
+  },
+  {
+    "name": "Two accounts held the payer and only one was paid: the row stands for the other account alone.",
+    "working": [
+      "Weekdays: buys Mon 2026-03-02 (A) and Tue 2026-03-03 (B); ex Wed 2026-04-15; pay Wed 2026-04-22; today Thu 2026-04-23.",
+      "The record lists one distribution in cash: ex 2026-04-15, pay 2026-04-22, 0.125 CAD; ex-date on or before today.",
+      "Owed: the reads as of 2026-04-14 state XOWP 100 in A and 60 in B.",
+      "Not paid yet is per account: A's dividend d1 (2026-04-22) pays A, so A has no row; nothing reached B.",
+      "For a time: today is the first business day after the pay date (Thu 2026-04-23), within the allowance, so B's row stands.",
+      "Row: B, 60 x 0.125 = 7.500 CAD."
+    ],
+    "book": {
+      "today": "2026-04-23",
+      "accounts": [{"id": "A", "kind": "cash"}, {"id": "B", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWP"}],
+      "declared": {
+        "F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"},
+        {"id": "t2", "account": "B", "day": "2026-03-03", "at": "2026-03-03T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "60", "cash": "-600"},
+        {"id": "d1", "account": "A", "day": "2026-04-22", "at": "2026-04-22T11:00:00Z", "kind": "dividend", "instrument": "F", "cash": "12.50", "cash_currency": "CAD"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-14": {"held": {"F": "100"}}
+          }
+        },
+        "B": {
+          "held": {},
+          "days_held": {
+            "2026-04-14": {"held": {"F": "60"}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"instrument": "F", "account": "B", "ex": "2026-04-15", "qty": "60", "per": "0.125", "amount": "7.500"}
+    ]
+  },
+  {
+    "name": "The previous distribution's payment, posted before this ex-date, does not pay this one: the latest distribution is owed.",
+    "working": [
+      "Weekdays: buy Mon 2026-03-02; first ex Fri 2026-03-13, pay and dividend Fri 2026-03-20; second ex Wed 2026-04-15, pay Wed 2026-04-22; today Fri 2026-04-17.",
+      "The record lists two distributions in cash, both gone ex by today.",
+      "2026-03-13 (0.12 CAD): owed (read as of 2026-03-12 states XOWQ 100); d1 (2026-03-20) is on or after 2026-03-13 and before the next ex-date 2026-04-15, so it is paid: no row (its allowance has also passed).",
+      "2026-04-15 (0.125 CAD): owed (read as of 2026-04-14 states 100); d1 is before 2026-04-15, so it does not count, and nothing reached A on or after 2026-04-15: not paid. Pay date 2026-04-22 not come: the row stands.",
+      "Row: 100 x 0.125 = 12.500 CAD."
+    ],
+    "book": {
+      "today": "2026-04-17",
+      "accounts": [{"id": "A", "kind": "cash"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWQ"}],
+      "declared": {
+        "F": [
+          {"ex": "2026-03-13", "pay": "2026-03-20", "amount": "0.12", "currency": "CAD", "form": "stated"},
+          {"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}
+        ]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"},
+        {"id": "d1", "account": "A", "day": "2026-03-20", "at": "2026-03-20T11:00:00Z", "kind": "dividend", "instrument": "F", "cash": "12.00", "cash_currency": "CAD"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-03-12": {"held": {"F": "100"}},
+            "2026-04-14": {"held": {"F": "100"}}
+          }
+        }
+      }
+    },
+    "expect": [
+      {"instrument": "F", "account": "A", "ex": "2026-04-15", "qty": "100", "per": "0.125", "amount": "12.500"}
+    ]
+  },
+  {
+    "name": "Short into the ex-date: a negative quantity is not held long, so nothing is owed.",
+    "working": [
+      "Weekdays: short sale Mon 2026-03-02; ex Wed 2026-04-15; pay Wed 2026-04-22; today Fri 2026-04-17.",
+      "The record lists one distribution in cash: ex 2026-04-15, pay 2026-04-22, 0.125 CAD; ex-date on or before today.",
+      "Owed: the read as of 2026-04-14 states XOWR -100, not a positive quantity, so A did not hold it long into the ex-date.",
+      "No row."
+    ],
+    "book": {
+      "today": "2026-04-17",
+      "accounts": [{"id": "A", "kind": "margin"}],
+      "instruments": [{"id": "F", "currency": "CAD", "symbol": "XOWR"}],
+      "declared": {
+        "F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "currency": "CAD", "form": "stated"}]
+      },
+      "transactions": [
+        {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "sell", "instrument": "F", "qty": "-100", "cash": "1000"}
+      ],
+      "brokers": {
+        "A": {
+          "held": {},
+          "days_held": {
+            "2026-04-14": {"held": {"F": "-100"}}
+          }
+        }
+      }
+    },
+    "expect": []
+  }
+]

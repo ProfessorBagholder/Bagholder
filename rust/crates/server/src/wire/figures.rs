@@ -589,6 +589,9 @@ pub struct CashflowRow {
     pub per: Option<Fig<Dec>>,
     pub amount: Dec,
     pub currency: String,
+    /// Owed and not paid yet (`SPEC.md` `cashflow-40`): `date` is the day it is due,
+    /// `qty` the units held into its ex-date.
+    pub owed: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, TS, bagholder_diff_derive::Diff)]

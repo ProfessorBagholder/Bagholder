@@ -389,7 +389,12 @@ annual: Fig<Dec>,
  */
 perMonth: Fig<Dec>, yoc: Fig<number>, currentYield: Fig<number>, };
 
-export type CashflowRow = { id: string, date: string, symbol: string, account: string, qty: Dec | null, per: Fig<Dec> | null, amount: Dec, currency: string, };
+export type CashflowRow = { id: string, date: string, symbol: string, account: string, qty: Dec | null, per: Fig<Dec> | null, amount: Dec, currency: string, 
+/**
+ * Owed and not paid yet (`SPEC.md` `cashflow-40`): `date` is the day it is due,
+ * `qty` the units held into its ex-date.
+ */
+owed: boolean, };
 
 export type Cashflow = { tiles: Array<CashflowTile>, months: Array<CashflowMonth>, holdings: Array<CashflowHolding>, 
 /**

@@ -10,7 +10,7 @@
 //! ever worked out from the payments received or assumed; until the payer's
 //! record is read, the figure waits on it.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::Timestamp;
@@ -203,15 +203,101 @@ pub fn entitled_ex(inputs: &Inputs, r: &CashRow) -> Option<Date> {
 /// its pay date in an account that held the instrument on its ex-date (a
 /// distribution paid in units that are then consolidated posts no row); not
 /// known yet otherwise.
-fn found_form(d: &crate::input::Declared, next_ex: Option<Date>, paid: &[&CashRow], held_on_ex: bool, today: Date) -> Found {
+fn found_form(d: &crate::input::Declared, next_ex: Option<Date>, paid: &[&CashRow], held_into_ex: Result<bool, Date>, today: Date) -> Result<Found, Date> {
     if paid.iter().any(|r| r.day >= d.ex_date && next_ex.is_none_or(|n| r.day < n)) {
-        return Found::Cash;
+        return Ok(Found::Cash);
     }
     let posted_by = d.pay_date.and_then(posted_by);
     match posted_by {
-        Some(by) if held_on_ex && today > by => Found::Units,
-        _ => Found::NotYet,
+        // whether the account held it into the ex-date waits on that day's read
+        Some(by) if today > by => Ok(if held_into_ex? { Found::Units } else { Found::NotYet }),
+        _ => Ok(Found::NotYet),
     }
+}
+
+/// The units `account` held of `instrument` into `ex_date` (`SPEC.md`
+/// `cashflow-40`): what Wealthsimple's positions read as of the day before states
+/// it held, a short's negative (brief 79 §2.4); a day the market is closed states
+/// the last close's units, so the calendar day before is enough. `Err` with that
+/// day where it is the broker's to read and is not read yet: the broker states
+/// the account's value by that day, or has stated a day's positions of it, as a
+/// past Portfolio's day is judged (`Engine::needs`). Only an account the broker
+/// states neither of is judged by the journal's units at the end of that day. The
+/// one definition of "held into the ex-date": a distribution's form
+/// (`found_form`) and what is owed (`owed`) both read it.
+pub fn held_into(inputs: &Inputs, matched: &Matched, account: AccountId, instrument: InstrumentId, ex_date: Date) -> Result<Dec, Date> {
+    let Ok(before) = ex_date.yesterday() else { return Ok(Dec::ZERO) };
+    match inputs.market.brokers.get(&account).filter(|b| !b.days_held.is_empty() || b.net_value.range(..=before).next().is_some()) {
+        Some(b) => b.days_held.get(&before).map(|d| d.held.get(&instrument).copied().unwrap_or(Dec::ZERO)).ok_or(before),
+        None => Ok(matched.units_on(account, instrument, before).unwrap_or(Dec::ZERO)),
+    }
+}
+
+/// A distribution an account is owed and has not been paid yet (`SPEC.md`
+/// `cashflow-40`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Owed {
+    pub instrument: InstrumentId,
+    pub account: AccountId,
+    pub ex_date: Date,
+    pub pay_date: Option<Date>,
+    /// The units held into the ex-date.
+    pub qty: Dec,
+    /// The declared cash a unit.
+    pub per: Money,
+    /// `qty` × `per`, in the distribution's currency.
+    pub amount: Fig<Money>,
+}
+
+/// Every distribution owed and not paid yet, and the days whose positions that
+/// waits on (`SPEC.md` `cashflow-40`): for each payer's declared record and each
+/// account that held the payer, each distribution listed in cash whose ex-date is
+/// on or before today, within its time (until two business days after its pay
+/// date, `posted_by`, or with none stated until the next ex-date), held long into
+/// the ex-date (`held_into`), and with no payment of the payer in the account on
+/// or after the ex-date and before the next.
+pub fn owed(inputs: &Inputs, matched: &Matched, rows: &[CashRow]) -> (Vec<Owed>, BTreeSet<Date>) {
+    let today = inputs.clock.today;
+    let (mut out, mut waits) = (Vec::new(), BTreeSet::new());
+    for (i, read) in &inputs.facts.declared {
+        let mut listed: Vec<&crate::input::Declared> = read.items.iter().filter(|d| d.amount.amount.is_positive()).collect();
+        listed.sort_by_key(|d| d.ex_date);
+        // the accounts that held it: in the journal, or as a day's positions read states
+        let mut accounts: BTreeSet<AccountId> = matched.held_by.get(i).cloned().unwrap_or_default();
+        accounts.extend(inputs.market.brokers.iter().filter(|(_, b)| b.days_held.values().any(|d| d.held.contains_key(i))).map(|(a, _)| *a));
+        for (n, d) in listed.iter().enumerate() {
+            let next_ex = listed.get(n + 1).map(|x| x.ex_date);
+            let within = match d.pay_date {
+                Some(pay) => posted_by(pay).is_some_and(|by| today <= by),
+                None => next_ex.is_none_or(|x| today < x),
+            };
+            if d.ex_date > today || !within {
+                continue;
+            }
+            for a in &accounts {
+                let paid = rows.iter().any(|r| r.kind == Payment::Dividend && r.instrument == Some(*i) && r.account == *a && r.day >= d.ex_date && next_ex.is_none_or(|x| r.day < x));
+                if paid {
+                    continue;
+                }
+                match held_into(inputs, matched, *a, *i, d.ex_date) {
+                    Ok(q) if q.is_positive() => out.push(Owed {
+                        instrument: *i,
+                        account: *a,
+                        ex_date: d.ex_date,
+                        pay_date: d.pay_date,
+                        qty: q,
+                        per: d.amount,
+                        amount: d.amount.times(q).map_err(|e| Gaps::of(Gap::Arithmetic(e.to_string()))),
+                    }),
+                    Ok(_) => {}
+                    Err(day) => {
+                        waits.insert(day);
+                    }
+                }
+            }
+        }
+    }
+    (out, waits)
 }
 
 /// Every instrument that has paid a dividend or has a declared record: its rate.
@@ -248,18 +334,34 @@ pub fn payer_rate(inputs: &Inputs, i: InstrumentId, payments: Vec<&CashRow>, mat
         let mut gone: Vec<&&crate::input::Declared> = cash.iter().filter(|d| d.ex_date <= today).collect();
         gone.sort_by_key(|d| std::cmp::Reverse(d.ex_date));
         let accounts: Vec<AccountId> = matched.held_by.get(&i).into_iter().flatten().filter(|a| matched.units.contains_key(&(**a, i))).copied().collect();
-        let held_on = |day: Date| accounts.iter().any(|a| day.yesterday().ok().is_some_and(|before| matched.units_on(*a, i, before).is_ok_and(|q| q.is_positive())));
+        // held into the ex-date in some account: yes where one is; else waits on an
+        // account's day not read yet; else no
+        let held_into_ex = |ex: Date| -> Result<bool, Date> {
+            let mut waits = None;
+            for a in &accounts {
+                match held_into(inputs, matched, *a, i, ex) {
+                    Ok(q) if q.is_positive() => return Ok(true),
+                    Ok(_) => {}
+                    Err(day) => waits = Some(day),
+                }
+            }
+            waits.map_or(Ok(false), Err)
+        };
         let mut latest: Result<Option<&crate::input::Declared>, Gap> = Ok(None);
         for (n, d) in gone.iter().enumerate() {
             let use_it = match d.form {
                 bagholder_core::distribution::Form::Stated => true,
                 bagholder_core::distribution::Form::Unstated => {
                     let next_ex = if n == 0 { None } else { Some(gone[n - 1].ex_date) };
-                    match found_form(d, next_ex, &payments, held_on(d.ex_date), today) {
-                        Found::Cash => true,
-                        Found::Units => false,
-                        Found::NotYet => {
+                    match found_form(d, next_ex, &payments, held_into_ex(d.ex_date), today) {
+                        Ok(Found::Cash) => true,
+                        Ok(Found::Units) => false,
+                        Ok(Found::NotYet) => {
                             latest = Err(Gap::FormUnstated(i));
+                            break;
+                        }
+                        Err(day) => {
+                            latest = Err(Gap::HoldingsUnread(day));
                             break;
                         }
                     }

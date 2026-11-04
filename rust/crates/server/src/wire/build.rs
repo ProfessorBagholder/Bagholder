@@ -781,8 +781,26 @@ fn cashflow(inputs: &Inputs, figs: &bagholder_engine::engine::Figures, c: &bagho
             per: r.per.as_ref().map(fig_money),
             amount: dec(&r.amount),
             currency: r.amount.currency.as_str().into(),
+            owed: false,
         })
-        .collect();
+        .collect::<Vec<_>>();
+    // the distributions owed and not paid yet, each by its distribution and account
+    // (`SPEC.md` `cashflow-40`): a figure that cannot be worked out is not a row
+    let owed = c.owed.iter().filter_map(|o| {
+        let amount = o.amount.as_ref().ok()?;
+        Some(CashflowRow {
+            id: format!("owed:{}:{}:{}", o.instrument, o.account, o.ex_date),
+            date: o.pay_date.unwrap_or(o.ex_date).to_string(),
+            symbol: shown(inputs, o.instrument).symbol,
+            account: account_name(inputs, o.account),
+            qty: Some(Dec(o.qty)),
+            per: Some(Fig::Stated(Dec(o.per.amount))),
+            amount: dec(amount),
+            currency: amount.currency.as_str().into(),
+            owed: true,
+        })
+    });
+    let rows = owed.chain(rows).collect();
     let debts = &inputs.facts.debts;
     let asked = debts
         .asked

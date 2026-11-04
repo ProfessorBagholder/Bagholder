@@ -167,7 +167,7 @@
 
 1. <a id="distribution-rate-for-a-holding-4"></a>**Per-unit amount:** the cash per unit of the latest distribution gone ex.
    <a id="distribution-rate-for-a-holding-5"></a>A part reinvested, as the record states it, pays no cash: a distribution paid wholly in units is passed over.
-   <a id="distribution-rate-for-a-holding-6"></a>A market's record states an amount per unit and not whether it is paid in cash or in units, so the account's own record says which: a dividend paid on the payer between that ex-date and the next makes it cash; no dividend posted two business days after its pay date, in an account that held the payer the day before its ex-date, makes it units (a distribution paid in units that are then consolidated posts nothing).
+   <a id="distribution-rate-for-a-holding-6"></a>A market's record states an amount per unit and not whether it is paid in cash or in units, so the account's own record says which: a dividend paid on the payer between that ex-date and the next makes it cash; no dividend posted two business days after its pay date, in an account that held the payer into its ex-date (`cashflow-40`), makes it units (a distribution paid in units that are then consolidated posts nothing); while that day's positions are not read, the form waits on them.
    <a id="distribution-rate-for-a-holding-7"></a>Until one of the two shows, the latest distribution's form is unknown and the rate waits on it (`form-unstated`).
 2. <a id="distribution-rate-for-a-holding-8"></a>**Payments per year:** the schedule the record states, never worked out from the gaps between dates and never assumed.
    <a id="distribution-rate-for-a-holding-9"></a>Where no record states it, annual income waits on it (`schedule-unstated`).
@@ -790,6 +790,13 @@
 <a id="cashflow-37"></a>**Distribution history.** Date · Symbol · Account · Qty · Distribution · Amount, newest first, rows that tie on the sorted column by symbol and then account, amounts in native currency, scrolling inside its card.
 <a id="cashflow-38"></a>Qty is the units the payer's row states the distribution was paid on and Distribution the amount a unit, both `—` where the row states no units.
 <a id="cashflow-39"></a>No Type column: every row is a dividend.
+
+<a id="cashflow-40"></a>**Owed, not paid yet.** Above the payments received stands a row for each account and each distribution the payer's declared record lists in cash, whose ex-date is on or before today, that the account is owed and has not been paid:
+- <a id="cashflow-41"></a>**Owed:** the account held the instrument long into the ex-date: Wealthsimple's positions read as of the day before the ex-date state a positive quantity of it (as a past day's holdings are read, `portfolio-32`; a day the market is closed states the last close's units, so the calendar day before is enough). Under T+1 the ex-date is the record date, so units bought on or after the ex-date are owed nothing, and units sold on or after it are still owed. An account Wealthsimple has stated neither a value of by that day nor a day's positions of is judged by the journal's units at the end of the day before the ex-date; any other waits on that day's positions (`cashflow-44`).
+- <a id="cashflow-42"></a>**Not paid yet:** no payment of the instrument has reached the account on or after the ex-date and before the next ex-date the record lists.
+- <a id="cashflow-43"></a>**For a time:** the row stands until that payment posts, or until two business days after the pay date have passed (the posting allowance of `distribution-rate-for-a-holding-6`); with no pay date stated, until the next ex-date. After that it is gone, and the distribution's form is judged as that rule says.
+- <a id="cashflow-44"></a>**Waiting:** while the positions of the day before the ex-date are not read, no row stands, and that day's positions are asked for.
+- <a id="cashflow-45"></a>**The row:** Date reads `Due` and the pay date (the ex-date where the record states none), muted; Symbol; Account; Qty the units held into the ex-date; Distribution the declared cash a unit; Amount Qty × Distribution in the distribution's currency, muted. The rows stand above the payments received, latest first, whichever column the payments are sorted by; a row goes when its payment arrives, and the payment's own row takes its place.
 
 ### Net worth
 

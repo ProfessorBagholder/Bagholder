@@ -534,6 +534,9 @@ pub struct Cashflow {
     pub total: Partial,
     pub interest: Partial,
     pub withholding: Partial,
+    /// Distributions owed and not paid yet in scope (`SPEC.md` `cashflow-40`), the
+    /// engine's to fill (`Engine::cashflow`).
+    pub owed: Vec<crate::cashflow::Owed>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1712,7 +1715,28 @@ fn cashflow(f: &Filters, inputs: &Inputs, trades: &[TradeFig], positions: &[Posi
         holdings,
         rows: dividends,
         other,
+        owed: Vec::new(),
     }
+}
+
+/// The distributions owed that `f` shows, as it shows a payment: the account, the
+/// symbol, search, kind and exchange filters over its instrument, the dates over
+/// the day it is due, and the grade, tag and side filters over the round trip
+/// entitled to it (open at the close of the session before its ex-date).
+pub fn owed_in_scope(f: &Filters, inputs: &Inputs, trades: &[TradeFig], owed: Vec<crate::cashflow::Owed>) -> Vec<crate::cashflow::Owed> {
+    let today = inputs.clock.today;
+    owed.into_iter()
+        .filter(|o| {
+            let i = o.instrument;
+            (f.accounts.is_empty() || f.accounts.contains(&o.account))
+                && chosen(f, inputs, &[i])
+                && searched(inputs, &[i], &f.search)
+                && (f.kinds.is_empty() || inputs.ledger.instruments.get(&i).is_some_and(|x| f.kinds.contains(&x.instrument.kind)))
+                && (f.venues.is_empty() || venue_of(inputs, i).is_some_and(|v| f.venues.contains(&v)))
+                && f.in_dates(today, o.pay_date.unwrap_or(o.ex_date))
+                && (!reads_journal(f) || trades.iter().any(|t| t.account == o.account && t.instruments.contains(&i) && t.opened_on < o.ex_date && t.closed_on.is_none_or(|c| c >= o.ex_date) && journal_matches(f, &t.journal, t.direction)))
+        })
+        .collect()
 }
 
 /// `amount` in `currency` at the latest rates the Bank has published.

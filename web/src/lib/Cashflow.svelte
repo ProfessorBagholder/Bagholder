@@ -298,13 +298,14 @@
           <tbody>
             {#if rows.length}
               {#each rows as r (r.id)}
-                <tr class="tab">
-                  <td style="color:var(--ink75);white-space:nowrap">{r.date}</td>
+                <tr class="tab" data-owed={r.owed ? '' : undefined}>
+                  <!-- owed and not paid yet (SPEC cashflow-40): the day it is due, muted, and its amount -->
+                  <td style="color:{r.owed ? 'var(--ink55)' : 'var(--ink75)'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{r.owed ? 'Due ' + r.date : r.date}</td>
                   <td style="font-weight:500;font-variant-numeric:normal;white-space:nowrap">{symText(r.symbol)}</td>
                   <td style="font-variant-numeric:normal;color:var(--ink75);white-space:nowrap;overflow:hidden;text-overflow:ellipsis">{r.account}</td>
                   <td style="text-align:right;color:var(--ink75)">{r.qty ? qty(r.qty) : '—'}</td>
                   <td style="text-align:right;color:var(--ink75)">{perUnit(r.per)}</td>
-                  <td style="text-align:right;font-weight:500">{money(r.amount, r.currency)}</td>
+                  <td style="text-align:right;font-weight:500;{r.owed ? 'color:var(--ink55)' : ''}">{money(r.amount, r.currency)}</td>
                 </tr>
               {/each}
             {:else}
