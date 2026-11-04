@@ -87,3 +87,26 @@ fn a_distribution_s_form_waits_on_the_day_s_positions_and_is_judged_when_they_ar
     let fresh = engine(&mut b);
     assert_eq!(e.figures().payers[&i], fresh.figures().payers[&i], "the change as a fresh build");
 }
+
+/// A Wealthsimple account whose past days have never been read, holding the payer
+/// in the journal, is the broker's to read: no row stands on the journal's units,
+/// and the day before the ex-date is asked for (`SPEC.md` `cashflow-41`, `-44`).
+#[test]
+fn an_account_the_broker_states_waits_on_its_day_and_is_never_judged_by_the_journal() {
+    let book: Value = serde_json::json!({
+        "today": "2026-04-17",
+        "accounts": [{"id": "A"}],
+        "instruments": [{"id": "F", "symbol": "ZZFU"}],
+        "frequencies": {"F": 12},
+        "declared": {"F": [{"ex": "2026-04-15", "pay": "2026-04-22", "amount": "0.125", "form": "stated"}]},
+        "transactions": [
+            {"id": "t1", "account": "A", "day": "2026-01-02", "at": "2026-01-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}
+        ],
+        "brokers": {"A": {"held": {"F": "100"}, "net_value": {"2026-01-02": "1000", "2026-04-16": "1010"}, "now": "1010"}}
+    });
+    let mut b = build(&book);
+    let e = engine(&mut b);
+    let f = Filters::default();
+    assert!(e.cashflow(&f, &e.portfolio(&f)).owed.is_empty(), "no row on the journal's units");
+    assert!(e.needs().holdings_on.contains(&day("2026-04-14")), "the day before the ex-date asked for");
+}

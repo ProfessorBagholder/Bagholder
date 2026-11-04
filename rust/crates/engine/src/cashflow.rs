@@ -219,13 +219,15 @@ fn found_form(d: &crate::input::Declared, next_ex: Option<Date>, paid: &[&CashRo
 /// `cashflow-40`): what Wealthsimple's positions read as of the day before states
 /// it held, a short's negative (brief 79 §2.4); a day the market is closed states
 /// the last close's units, so the calendar day before is enough. `Err` with that
-/// day where it is not read; for an account no positions are read of, the
-/// journal's units at the end of that day. The one definition of "held into the
-/// ex-date": a distribution's form (`found_form`) and what is owed (`owed`) both
-/// read it.
+/// day where it is the broker's to read and is not read yet: the broker states
+/// the account's value by that day, or has stated a day's positions of it, as a
+/// past Portfolio's day is judged (`Engine::needs`). Only an account the broker
+/// states neither of is judged by the journal's units at the end of that day. The
+/// one definition of "held into the ex-date": a distribution's form
+/// (`found_form`) and what is owed (`owed`) both read it.
 pub fn held_into(inputs: &Inputs, matched: &Matched, account: AccountId, instrument: InstrumentId, ex_date: Date) -> Result<Dec, Date> {
     let Ok(before) = ex_date.yesterday() else { return Ok(Dec::ZERO) };
-    match inputs.market.brokers.get(&account).filter(|b| !b.days_held.is_empty()) {
+    match inputs.market.brokers.get(&account).filter(|b| !b.days_held.is_empty() || b.net_value.range(..=before).next().is_some()) {
         Some(b) => b.days_held.get(&before).map(|d| d.held.get(&instrument).copied().unwrap_or(Dec::ZERO)).ok_or(before),
         None => Ok(matched.units_on(account, instrument, before).unwrap_or(Dec::ZERO)),
     }
