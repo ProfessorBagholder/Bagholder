@@ -22,29 +22,25 @@ The old session's memory (about 95 notes) lived only on the Mac. Everything in i
 
 ---
 
-## 2. Where things stand (2026-11-03 ~15:45 UTC, written by the CTO session that took over after the previous one's environment was deleted)
+## 2. Where things stand (2026-11-04 ~20:15 UTC)
 
-Private details (the owner's server, domain, deployment paths) are in the session's local memory (`bagholder-server-deployment.md`), never in this public file. The previous session's transcript is the record of 2026-10-31 to 2026-11-02.
+Everything about the owner's own machines and their copy of Bagholder is in the session's local memory, never in this public file.
 
-### Released since 2.16.1
-- **2.16.3** the image runs as its own user; the shipped compose runs it locked down.
-- **2.17.0** every trade says Long or Short, and a written option Covered/Uncovered call or Secured/Uncovered put, from Wealthsimple's positions read as of the day it was written (SPEC trade-72; the secured-put hold question stays open until the owner checks it in their own page).
-- **2.17.1** the agents' Cloudflare set-up offers to take over an address a stale `bagholder-` tunnel holds, never unasked.
-- **2.18.0** a covered call counts inside its shares' position in every statistic; its own row keeps its own P&L.
-- **2.19.0** an agent reads everything the page shows, through the one MCP server (`page_reads`, the `.route(` scan); `disclosures-mcp` is removed.
-- **2.20.0 (Latest)** the market heatmaps are read at start and kept fresh every half hour, page or none (the owner, 2026-11-02); Canada in one TMX request; sectors re-asked after 30 days; `test_every_loop_is_started_by_serve`. Every release job passed, suite-macos included (the `get_at` fix holds).
-- **2.21.0 (merged, f8806821; releasing)** in Docker the update notice is a button through an optional updater (`docker-compose.updater.yml`, Watchtower fork pinned by digest, the button its only trigger, mounting only `./data/updater`); without one, the command with a Copy button. The first release run's suite-macos was never given a runner by GitHub (capacity), so its failed jobs were re-run.
+### Released 2026-11-03 and 2026-11-04
+- **2.20.0** heatmaps read at start and kept fresh; **2.21.0** the Update button in Docker (an optional updater beside the container).
+- **2.22.0** (#673 to #676): prices quoted while the app runs, page or none, a quiet market waiting by its exchange's calendar (TSX and TSX Venture, the CSE, Cboe Canada, the US) or `QUIET_RECHECK`, each quote applied as it lands; the page reconnects by itself and renews an expired Access sign-in by reloading once (instant authentication on Bagholder's own Access application); agents quote any listing by symbol and exchange (its margin requirement included) and read every account's money with each transfer's other side.
+- **2.23.0** (#679, releasing at this writing): Distribution history shows each distribution owed and not paid yet, for units Wealthsimple's positions state were held into the ex-date (`cashflow::held_into`, the one definition, also read by a distribution's form).
+- A release reaches a copy with the updater as an **Update to vX.Y.Z** button within two minutes of publishing.
 
-### The owner's production: the server copy
-- On 2.19.0. **Updating it is a production deploy the auto-mode classifier refuses without the owner's OK in the conversation**: ask once per release, batched.
-- The owner's copy runs from a compose file of its own, not the shipped one, so the updater's lines for it are drafted separately (local memory) for the owner to approve; never applied unasked.
+### Open
+- **Yahoo's refusals:** whether Yahoo refuses the quotes of a copy is unsettled; the owner was asked to read the header after two minutes on the Markets tab. If it does, Yahoo's batched form is the next change (its reply recorded first). TMX's batch for held listings follows (its `Quote` lacks the ex-dividend date; a daily single read keeps it).
+- Cloudflare's Browser Integrity Check at the agents' address: dashboard steps given to the owner 2026-11-02; no product fix planned.
 
-### Open with the owner
-- **The Markets tiles open on old prices and take a while to update (asked 2026-11-03).** Causes, from the code: held and followed listings are quoted only while a page is open (`due::quotes_owed`, since 2.11.3); a pass quotes every listing one at a time (Yahoo two seconds apart) and the page gets none until the pass ends (`due::pass` calls `price_changed` after `read_quotes`); and Yahoo refused every request with 429 for at least half an hour that day. Proposed: batch requests where the source allows, apply each quote as it lands, quote with no page open as the heatmaps are. Waiting on the owner's go. Yahoo's refusals' cause is unverified; probing it with a real browser was refused as bot-check circumvention, rightly: tiles that depend on getting past Yahoo's checks are the design question.
-- Cloudflare's Browser Integrity Check blocks agents built on Python's standard library (error 1010) at the agents' address; the owner was given the dashboard steps on 2026-11-02. A product fix (Bagholder's own set-up making a Bagholder-named rule) is not planned.
-
-### Next
-- The tiles fix once the owner says go; then line-tables-only debug builds; Bagholder updating the ngrok/cloudflared it installed.
+### Lessons from 2026-11-04
+- **One builder on this server: the CTO session.** Two forked builders ran builds and plants side by side for over an hour; the owner, seeing the background-tasks panel: "how many times do we have to revisit this subject". Delegates may write plans or clean-room cases (no builds); a measurement on the reference book is CI's capacity job (an `Op`), never a local run.
+- **Every push is one the rule allows:** master merged in before a PR's first push; the version bump in the last PR of a batch, never a PR of its own.
+- **Run the shape tests a wire change touches** (`the_document_from_a_real_month_names_every_row_by_its_id` and the page's fixture) before pushing; `BAGHOLDER_BLESS=1` regenerates it.
+- **A builder stopped mid-plant leaves the planted file:** check its worktree for its saved originals before taking it over.
 
 ### Lessons from 2026-11-01 to 2026-11-03
 - **The Architect is addressed by replying to its latest message's `from`**, never by name; after a restart, whoever restarted messages first; never tell the owner it isn't running ("waiting on the Architect's review").
