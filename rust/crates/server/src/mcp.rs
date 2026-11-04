@@ -96,6 +96,7 @@ fn page_reads() -> Vec<(&'static str, &'static str)> {
         (GetRoute::of(m::symbol_search, "/api/symbols/search").path, "symbol_search"),
         (GetRoute::of(orders::list, "/api/orders").path, "orders"),
         (GetRoute::of(orders::quote, "/api/order/quote").path, "order_quote"),
+        (GetRoute::of(orders::listing_named, "/api/order/listing").path, "order_quote"),
         (GetRoute::of(notifications::list, "/api/notifications").path, "notifications"),
         (GetRoute::of(model::figures_details, "/api/figures/details").path, "figures_details"),
     ]

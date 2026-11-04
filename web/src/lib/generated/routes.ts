@@ -9,7 +9,7 @@ import type { Document, DocumentPart, EnrichAnswer, FilingTextAnswer, Filings, F
 import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Resolve, ResolveAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
 import type { Clear, ClearAnswer, DebtAnswer, DebtAnswerRequest, EntryAnswer, EntryRequest, ImportAccepted, ImportQuery, ImportTold, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, TransactionsAnswer, TransactionsQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer, PushAnswer, PushEndpoint, PushSubscription } from './notifications'
-import type { Adjust, ListingOf, Modify, Named, OrderActionAnswer, OrderListingAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
+import type { Adjust, ListingNamed, ListingOf, Modify, Named, OrderActionAnswer, OrderListingAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
 import type { CancelLoginAnswer, Capture, LoginInput, RefreshAnswer, StartLoginAnswer, SyncAnswer } from './session'
 import type { StatusAnswer } from './status'
 
@@ -37,6 +37,7 @@ export interface Routes {
   'POST /api/bracket/cancel': { body: Named; answer: OrderActionAnswer }
   'POST /api/orders/refresh': { answer: RefreshAndOrders }
   'GET /api/order/quote': { query: QuoteOf; answer: TicketQuote }
+  'GET /api/order/listing': { query: ListingNamed; answer: OrderListingAnswer }
   'POST /api/order/listing': { body: ListingOf; answer: OrderListingAnswer }
   'POST /api/order/preview': { body: PreviewRequest; answer: Preview }
   'POST /api/order': { body: Ticket; answer: PlaceTicketAnswer }
