@@ -267,7 +267,15 @@ pub struct SearchArgs {
 #[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema, Default, Clone, Debug)]
 pub struct OrderQuoteArgs {
     /// The listing's id at the broker, as a trade or holding names it (`security`).
-    pub security: String,
+    /// Or name the listing by `symbol` and `exchange` instead.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub security: Option<String>,
+    /// The listing's symbol, with `exchange`: any listing, held or not.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
+    /// The listing's exchange, in words or as its code (`TSX`, `NASDAQ`, `XNAS`), with `symbol`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub exchange: Option<String>,
     /// The account's id, as the `lists` tool gives it.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub account: Option<String>,
@@ -459,10 +467,27 @@ pub fn orders(r: &ReadOnly) -> Result<Value, String> {
     r.page("/api/orders", &[])
 }
 
+/// The Order quote tool's description, the same over MCP and the agents' address.
+pub const ORDER_QUOTE: &str = "What an order ticket shows for a listing before an order, any listing, held or not: name it by `security` (a trade's or holding's), or by `symbol` and `exchange`. It answers the quote; Wealthsimple's margin requirement for the security (`marginRate`, the share of an order's value that counts against the account's available margin); the order types it takes; and, for the `account` given, its buying power, cash and available margin. Reading it places nothing.";
+
 /// What an order ticket shows for a listing before an order: its quote and what
-/// the account can buy or sell. Reading it places nothing.
+/// the account can buy or sell. Reading it places nothing. A listing named by its
+/// symbol and exchange is found as the ticket finds one opened from a search
+/// (`GET /api/order/listing`), which writes nothing.
 pub fn order_quote(r: &ReadOnly, a: OrderQuoteArgs) -> Result<Value, String> {
-    r.page("/api/order/quote", &[("security", a.security), ("account", a.account.unwrap_or_default())])
+    let given = |v: Option<String>| v.map(|v| v.trim().to_string()).filter(|v| !v.is_empty());
+    let security = match (given(a.security), given(a.symbol), given(a.exchange)) {
+        (Some(security), None, None) => security,
+        (None, Some(symbol), Some(exchange)) => {
+            let found = r.page("/api/order/listing", &[("symbol", symbol), ("venue", exchange)])?;
+            match found.get("listing").and_then(|l| l.get("securityId")).and_then(Value::as_str) {
+                Some(id) => id.to_string(),
+                None => return Err(found.get("error").and_then(Value::as_str).unwrap_or("Wealthsimple named no listing.").to_string()),
+            }
+        }
+        _ => return Err("Name the listing by `security`, or by `symbol` and `exchange`.".into()),
+    };
+    r.page("/api/order/quote", &[("security", security), ("account", a.account.unwrap_or_default())])
 }
 
 /// The notifications, as the bell's list shows them. Reading them marks nothing read.
@@ -752,7 +777,7 @@ impl Tools {
         self.run(&ctx, "orders", json!({}), orders).await
     }
 
-    #[tool(description = "What an order ticket shows for a listing before an order: its quote and what the account can buy or sell. Reading it places nothing.", annotations(title = "Order quote", read_only_hint = true))]
+    #[tool(description = ORDER_QUOTE, annotations(title = "Order quote", read_only_hint = true))]
     async fn order_quote(&self, Parameters(a): Parameters<OrderQuoteArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
         let args = json!(a);
         self.run(&ctx, "order_quote", args, move |r| order_quote(r, a)).await

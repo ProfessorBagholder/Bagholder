@@ -1609,6 +1609,64 @@ fn each_page_read_answers_as_the_page() {
     let _ = &h.home;
 }
 
+/// A listing the book does not hold is quoted by its symbol and exchange, as an
+/// order ticket opened from a search finds it (SPEC agents-9): the agent's answer is
+/// the page's quote of the listing Wealthsimple's search names on that venue, with
+/// the margin requirement Wealthsimple states for it, and the book records nothing.
+/// A listing named neither way, or on a venue the app does not know, is refused in
+/// words.
+#[test]
+fn a_listing_the_book_does_not_hold_is_quoted_by_its_symbol_and_exchange() {
+    let d = tempfile::tempdir().unwrap();
+    crate::capacity::build(d.path(), bagholder_wealthsimple::generated::Size { accounts: 4, instruments: 4, trades: 6, months: 2, seed: 7, deep: 0 }, 2).unwrap();
+    let served = crate::tests_mcp::served_for(d.path());
+    crate::tests_common::order_accounts_in(&served.app);
+    *served.app.orders.seam.session.lock().unwrap() = Some(serde_json::from_value(json!({"access_token": "t"})).unwrap());
+    // a listing of a ticker no book holds, on one venue, as Wealthsimple's search and summary state it
+    let row = json!({"id": "sec-s-zzq", "buyable": true, "status": "TRADING", "currency": "USD", "securityType": "EQUITY", "wsTradeEligible": true,
+        "stock": {"symbol": "ZZQ", "name": "ZZQ Holdings", "primaryExchange": "NASDAQ", "primaryMic": "XNAS"}});
+    *served.app.orders.seam.gql.lock().unwrap() = Some(Arc::new(move |op: &str, _: &Value| match op {
+        "FetchSecuritySearchResult" => Ok(json!({"securitySearch": {"results": [row.clone()]}})),
+        "FetchSecuritiesSummary" => Ok(json!({"securities": [row.clone()]})),
+        "FetchSecurityMarketData" => Ok(json!({"security": {"allowedOrderSubtypes": ["MARKET", "LIMIT"], "marginRates": {"clientMarginRate": 0.5}}})),
+        "FetchTradingBalanceBuyingPower" => Ok(json!({"account": {"financials": {"current": {"tradingBalanceViewV2": {"buyingPower": {"quantity": 9000.0, "currency": "USD"}, "cash": {"quantity": 100.0, "currency": "USD"}}}}}})),
+        other => panic!("{other} is not a read the quote makes"),
+    }));
+    let base = format!("http://127.0.0.1:{}", served.port);
+    let page = crate::mcp::ReadOnly::own(&base);
+    let b = base.clone();
+    let h = harness_with(Outside::network(), Arc::new(move || Ok(crate::mcp::ReadOnly::own(&b))));
+    let ask = |query: &str| {
+        let auth = format!("Bearer {}", h.key("api"));
+        h.ask("GET", &format!("/api/agents/order-quote?{query}"), &[("authorization", &auth)], vec![])
+    };
+    let asked = ask("symbol=ZZQ&exchange=NASDAQ&account=acct-margin");
+    assert_eq!(asked.status, StatusCode::OK, "{}", asked.text());
+    let mut agent = asked.json();
+    agent.as_object_mut().unwrap().remove("note");
+    let mut want = page.page("/api/order/quote", &[("security", "sec-s-zzq".to_string()), ("account", "acct-margin".to_string())]).unwrap();
+    mask_instants(&mut agent);
+    mask_instants(&mut want);
+    assert_eq!(agent, want, "the page's quote of the listing the search names");
+    assert_eq!(agent["quote"]["securityId"], json!("sec-s-zzq"), "{agent}");
+    assert_eq!(agent["marginRate"], json!(0.5), "Wealthsimple's margin requirement for it");
+    // found, never written: the book holds no reference to the listing
+    let book = served.app.figures.get().unwrap().book().unwrap();
+    let r = bagholder_core::instrument::Reference::new(bagholder_core::instrument::RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), "sec-s-zzq");
+    assert!(book.instrument_by_ref(&r).unwrap().is_none(), "the book records nothing of a listing an agent asked for");
+    // refused in words: a venue the app does not know, and a listing named neither way
+    let unknown = ask("symbol=ZZQ&exchange=NOWHERE");
+    assert_eq!(unknown.status, StatusCode::BAD_GATEWAY);
+    assert!(unknown.text().contains("NOWHERE is not a venue the app knows"), "{}", unknown.text());
+    let neither = ask("account=acct-margin");
+    assert!(neither.text().contains("Name the listing by `security`, or by `symbol` and `exchange`."), "{}", neither.text());
+    // and the tool says so, on both ways in: what it carries and how a listing is named
+    let (_, _, said, _) = api::routes().into_iter().find(|(p, ..)| *p == "/api/agents/order-quote").unwrap();
+    assert_eq!(said, tools::ORDER_QUOTE);
+    assert!(said.contains("margin requirement") && said.contains("`marginRate`") && said.contains("by `symbol` and `exchange`"), "{said}");
+    drop(served);
+}
+
 /// The notifications read over the agents' address, twice, leave the list, the
 /// unread count and the read marks as they were: an agent's read marks nothing.
 #[test]
