@@ -20,9 +20,20 @@ pub enum Venue {
     /// the early close held to 1:15 p.m. on the same reasoning).
     UsOptions,
     /// TSX and TSX Venture listings (TMX, "Trading Hours", read 2026-10-04: 9:30 AM to
-    /// 4:00 PM ET; TMX "Calendar", read 2026-10-04: 2026 holidays and the 1:00 PM
-    /// Christmas Eve close; 2027 not published yet).
+    /// 4:00 PM ET; TMX "Calendar", read 2026-10-04 and again 2026-11-04: the 2026 and
+    /// 2027 holidays and each year's 1:00 PM Christmas Eve close).
     Tsx,
+    /// CSE listings (the CSE, "Trading Resources", Trading Hours and Holidays, read
+    /// 2026-11-04: CSE-listed securities trade continuously 9:30 am ET to 4 pm ET; its
+    /// holidays to New Year's Day 2027, with Sept. 30 and Nov. 11 "Open for Trading –
+    /// Settlement Holiday only"; no early close listed).
+    Cse,
+    /// Cboe Canada listings (Cboe, "Hours & Holidays", Canadian Equities, read
+    /// 2026-11-04: Cboe Canada listed securities, NEO-L, trade continuously 9:30am to
+    /// 4:00pm; the 2026 and 2027 holidays, Sept. 30 and Nov. 11 settlement holidays
+    /// only; a "Christmas Early Close" on Dec. 24 listed with no time, so that day is
+    /// held as a whole session, never taken as closed while it may trade).
+    CboeCanada,
 }
 
 struct Calendar {
@@ -42,14 +53,24 @@ const US_HOLIDAYS: &[(i16, i8, i8)] = &[
     (2028, 1, 17), (2028, 2, 21), (2028, 4, 14), (2028, 5, 29), (2028, 6, 19), (2028, 7, 4), (2028, 9, 4), (2028, 11, 23), (2028, 12, 25),
 ];
 const US_EARLY: &[(i16, i8, i8)] = &[(2026, 11, 27), (2026, 12, 24), (2027, 11, 26), (2028, 7, 3), (2028, 11, 24)];
-const TSX_HOLIDAYS: &[(i16, i8, i8)] = &[(2026, 1, 1), (2026, 2, 16), (2026, 4, 3), (2026, 5, 18), (2026, 7, 1), (2026, 8, 3), (2026, 9, 7), (2026, 10, 12), (2026, 12, 25), (2026, 12, 28)];
-const TSX_EARLY: &[(i16, i8, i8)] = &[(2026, 12, 24)];
+const TSX_HOLIDAYS: &[(i16, i8, i8)] = &[
+    (2026, 1, 1), (2026, 2, 16), (2026, 4, 3), (2026, 5, 18), (2026, 7, 1), (2026, 8, 3), (2026, 9, 7), (2026, 10, 12), (2026, 12, 25), (2026, 12, 28),
+    (2027, 1, 1), (2027, 2, 15), (2027, 3, 26), (2027, 5, 24), (2027, 7, 1), (2027, 8, 2), (2027, 9, 6), (2027, 10, 11), (2027, 12, 27), (2027, 12, 28),
+];
+const TSX_EARLY: &[(i16, i8, i8)] = &[(2026, 12, 24), (2027, 12, 24)];
+const CSE_HOLIDAYS: &[(i16, i8, i8)] = &[(2026, 1, 1), (2026, 2, 16), (2026, 4, 3), (2026, 5, 18), (2026, 7, 1), (2026, 8, 3), (2026, 9, 7), (2026, 10, 12), (2026, 12, 25), (2026, 12, 28), (2027, 1, 1)];
+const CBOE_CANADA_HOLIDAYS: &[(i16, i8, i8)] = &[
+    (2026, 1, 1), (2026, 2, 16), (2026, 4, 3), (2026, 5, 18), (2026, 7, 1), (2026, 8, 3), (2026, 9, 7), (2026, 10, 12), (2026, 12, 25), (2026, 12, 28),
+    (2027, 1, 1), (2027, 2, 15), (2027, 3, 26), (2027, 5, 24), (2027, 7, 1), (2027, 8, 2), (2027, 9, 6), (2027, 10, 11), (2027, 12, 27), (2027, 12, 28),
+];
 
 fn calendar(v: Venue) -> Calendar {
     match v {
         Venue::UsEquities => Calendar { zone: "America/New_York", open: (9, 30), close: (16, 0), early_close: (13, 0), published_to: (2028, 12, 31), holidays: US_HOLIDAYS, early: US_EARLY },
         Venue::UsOptions => Calendar { zone: "America/New_York", open: (9, 30), close: (16, 15), early_close: (13, 15), published_to: (2028, 12, 31), holidays: US_HOLIDAYS, early: US_EARLY },
-        Venue::Tsx => Calendar { zone: "America/Toronto", open: (9, 30), close: (16, 0), early_close: (13, 0), published_to: (2026, 12, 31), holidays: TSX_HOLIDAYS, early: TSX_EARLY },
+        Venue::Tsx => Calendar { zone: "America/Toronto", open: (9, 30), close: (16, 0), early_close: (13, 0), published_to: (2027, 12, 31), holidays: TSX_HOLIDAYS, early: TSX_EARLY },
+        Venue::Cse => Calendar { zone: "America/Toronto", open: (9, 30), close: (16, 0), early_close: (16, 0), published_to: (2027, 1, 1), holidays: CSE_HOLIDAYS, early: &[] },
+        Venue::CboeCanada => Calendar { zone: "America/Toronto", open: (9, 30), close: (16, 0), early_close: (16, 0), published_to: (2027, 12, 31), holidays: CBOE_CANADA_HOLIDAYS, early: &[] },
     }
 }
 
@@ -62,6 +83,8 @@ pub fn venue_of(mic: &str, option: bool) -> Option<Venue> {
     match mic {
         "XNYS" | "XNAS" | "XASE" | "ARCX" | "BATS" => Some(Venue::UsEquities),
         "XTSE" | "XTSX" => Some(Venue::Tsx),
+        "XCNQ" => Some(Venue::Cse),
+        "NEOE" => Some(Venue::CboeCanada),
         _ => None,
     }
 }
@@ -70,24 +93,67 @@ fn day(d: (i16, i8, i8)) -> Option<Date> {
     Date::new(d.0, d.1, d.2).ok()
 }
 
-/// Whether the venue's regular session is open at `at`; none where the date is past
-/// what the exchange has published (or the zone is not known).
-pub fn in_session(v: Venue, at: Timestamp) -> Option<bool> {
-    let c = calendar(v);
-    let zone = TimeZone::get(c.zone).ok()?;
-    let local = at.to_zoned(zone);
-    let date = local.date();
+/// The venue's session on `date`, its open and its close: `Some(None)` on a day it
+/// does not trade; none where the date is past what the exchange has published (or
+/// the zone is not known).
+fn session_on(c: &Calendar, zone: &TimeZone, date: Date) -> Option<Option<(Timestamp, Timestamp)>> {
     if date > day(c.published_to)? {
         return None;
     }
     use jiff::civil::Weekday;
     if matches!(date.weekday(), Weekday::Saturday | Weekday::Sunday) || c.holidays.iter().any(|h| day(*h) == Some(date)) {
-        return Some(false);
+        return Some(None);
     }
     let close = if c.early.iter().any(|e| day(*e) == Some(date)) { c.early_close } else { c.close };
-    let (open, close) = (Time::new(c.open.0, c.open.1, 0, 0).ok()?, Time::new(close.0, close.1, 0, 0).ok()?);
-    let t = local.time();
-    Some(t >= open && t < close)
+    let at = |(h, m): (i8, i8)| -> Option<Timestamp> { date.to_datetime(Time::new(h, m, 0, 0).ok()?).to_zoned(zone.clone()).ok().map(|z| z.timestamp()) };
+    Some(Some((at(c.open)?, at(close)?)))
+}
+
+/// How many days either way the next open and the last close are looked for: past
+/// any run of weekend and holidays an exchange publishes.
+const LOOK: i64 = 15;
+
+/// Whether the venue's regular session is open at `at`; none where the date is past
+/// what the exchange has published (or the zone is not known).
+pub fn in_session(v: Venue, at: Timestamp) -> Option<bool> {
+    let c = calendar(v);
+    let zone = TimeZone::get(c.zone).ok()?;
+    let date = at.to_zoned(zone.clone()).date();
+    Some(session_on(&c, &zone, date)?.is_some_and(|(open, close)| at >= open && at < close))
+}
+
+/// When the venue's session next opens after `at`; none where that is past what the
+/// exchange has published.
+pub fn next_open(v: Venue, at: Timestamp) -> Option<Timestamp> {
+    let c = calendar(v);
+    let zone = TimeZone::get(c.zone).ok()?;
+    let mut date = at.to_zoned(zone.clone()).date();
+    for _ in 0..LOOK {
+        if let Some((open, _)) = session_on(&c, &zone, date)? {
+            if open > at {
+                return Some(open);
+            }
+        }
+        date = date.tomorrow().ok()?;
+    }
+    None
+}
+
+/// The day of the venue's last session to have closed at or before `at`; none where
+/// the date is past what the exchange has published.
+pub fn last_closed_day(v: Venue, at: Timestamp) -> Option<Date> {
+    let c = calendar(v);
+    let zone = TimeZone::get(c.zone).ok()?;
+    let mut date = at.to_zoned(zone.clone()).date();
+    for _ in 0..LOOK {
+        if let Some((_, close)) = session_on(&c, &zone, date)? {
+            if close <= at {
+                return Some(date);
+            }
+        }
+        date = date.yesterday().ok()?;
+    }
+    None
 }
 
 #[cfg(test)]
@@ -126,8 +192,56 @@ mod tests {
     }
 
     #[test]
+    fn the_cse_and_cboe_canada_keep_their_own_published_hours_and_holidays() {
+        for v in [Venue::Cse, Venue::CboeCanada] {
+            // Monday 2026-11-09, EST: 9:30 is 14:30Z, 4:00 PM is 21:00Z
+            assert_eq!(in_session(v, at("2026-11-09T14:29:00Z")), Some(false), "{v:?}");
+            assert_eq!(in_session(v, at("2026-11-09T14:30:00Z")), Some(true), "{v:?}");
+            assert_eq!(in_session(v, at("2026-11-09T20:59:00Z")), Some(true), "{v:?}");
+            assert_eq!(in_session(v, at("2026-11-09T21:00:00Z")), Some(false), "{v:?}");
+            assert_eq!(in_session(v, at("2026-11-11T15:00:00Z")), Some(true), "{v:?}: a settlement holiday trades");
+            assert_eq!(in_session(v, at("2026-09-30T15:00:00Z")), Some(true), "{v:?}: a settlement holiday trades");
+            assert_eq!(in_session(v, at("2026-12-28T15:00:00Z")), Some(false), "{v:?}: Boxing Day, observed");
+            // no early close is published for either: Christmas Eve trades to 4:00 PM
+            assert_eq!(in_session(v, at("2026-12-24T20:00:00Z")), Some(true), "{v:?}");
+        }
+        assert_eq!(in_session(Venue::CboeCanada, at("2027-03-26T15:00:00Z")), Some(false), "Good Friday 2027");
+        assert_eq!(in_session(Venue::Tsx, at("2027-12-24T18:00:00Z")), Some(false), "TMX's 2027 Christmas Eve closes at 1:00 PM");
+        assert_eq!(in_session(Venue::Tsx, at("2027-12-24T17:59:00Z")), Some(true));
+        assert_eq!(in_session(Venue::Tsx, at("2027-02-15T15:00:00Z")), Some(false), "Family Day 2027");
+        assert_eq!(venue_of("XCNQ", false), Some(Venue::Cse));
+        assert_eq!(venue_of("NEOE", false), Some(Venue::CboeCanada));
+    }
+
+    #[test]
+    fn the_next_open_and_the_last_close_step_over_weekends_and_holidays() {
+        for v in [Venue::Tsx, Venue::Cse, Venue::CboeCanada] {
+            // 02:00 Sunday 2026-11-08 Toronto: the last session closed Friday, the next opens Monday 9:30
+            let sunday = at("2026-11-08T07:00:00Z");
+            assert_eq!(last_closed_day(v, sunday), Some(Date::new(2026, 11, 6).unwrap()), "{v:?}");
+            assert_eq!(next_open(v, sunday), Some(at("2026-11-09T14:30:00Z")), "{v:?}");
+            // before the open on a trading day: that day's own open; the last close is the day before's
+            let early = at("2026-11-10T12:00:00Z");
+            assert_eq!(next_open(v, early), Some(at("2026-11-10T14:30:00Z")), "{v:?}");
+            assert_eq!(last_closed_day(v, early), Some(Date::new(2026, 11, 9).unwrap()), "{v:?}");
+            // during the session: the next open is tomorrow's, the last close yesterday's
+            let open = at("2026-11-10T16:00:00Z");
+            assert_eq!(next_open(v, open), Some(at("2026-11-11T14:30:00Z")), "{v:?}");
+            assert_eq!(last_closed_day(v, open), Some(Date::new(2026, 11, 9).unwrap()), "{v:?}");
+            // over Christmas and Boxing Day observed: Thursday 24th to Tuesday 29th
+            assert_eq!(next_open(v, at("2026-12-25T15:00:00Z")), Some(at("2026-12-29T14:30:00Z")), "{v:?}");
+            assert_eq!(last_closed_day(v, at("2026-12-28T15:00:00Z")), Some(Date::new(2026, 12, 24).unwrap()), "{v:?}");
+        }
+        // a US holiday is the US calendar's alone
+        assert_eq!(next_open(Venue::UsEquities, at("2026-11-26T15:00:00Z")), Some(at("2026-11-27T14:30:00Z")));
+        assert_eq!(next_open(Venue::Tsx, at("2026-11-26T22:00:00Z")), Some(at("2026-11-27T14:30:00Z")));
+    }
+
+    #[test]
     fn a_date_past_what_the_exchange_published_is_not_known() {
-        assert_eq!(in_session(Venue::Tsx, at("2027-01-04T15:00:00Z")), None);
+        assert_eq!(in_session(Venue::Tsx, at("2028-01-04T15:00:00Z")), None);
+        assert_eq!(in_session(Venue::Cse, at("2027-01-04T15:00:00Z")), None, "the CSE has published to New Year's Day 2027");
+        assert_eq!(next_open(Venue::Cse, at("2026-12-31T22:00:00Z")), None, "the next open is past what the CSE has published");
         assert_eq!(in_session(Venue::UsEquities, at("2029-01-02T15:00:00Z")), None);
         assert_eq!(venue_of("XLON", false), None, "a venue with no calendar held");
     }
