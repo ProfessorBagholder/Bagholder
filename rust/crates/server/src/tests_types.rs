@@ -16,7 +16,7 @@ use bagholder_market::stored::feeds::{
 use bagholder_market::stored::feeds::{Notification, NotificationExtra};
 
 use crate::feeds::{ChartHistory, Enriched, FearDoc, FeedFiling, FilingsDoc, FilingsFeed, FilingsPayload, ShortsFeed, ShortsFeedRow, ShortsPayload, SourceStatus};
-use crate::http::orders::{Adjust, Modify, Named, QuoteOf, RefreshAndOrders};
+use crate::http::orders::{Adjust, ListingNamed, Modify, Named, QuoteOf, RefreshAndOrders};
 use crate::orders::{
     BracketCard, Filled, Leg, ListingOf, ListingRef, OrderAccount, SecurityId, OrderListing, OrderListingAnswer, OrderActionAnswer, OrderCard, OrdersDoc, PageDec, PlaceTicketAnswer, RefreshOrdersAnswer, Ticket, TicketQuote, TicketQuoteDetail, TicketQuoteOk, TicketStop, TicketTarget,
 };
@@ -28,7 +28,7 @@ fn declarations() -> String {
     }
     let decls: Vec<String> = decls![
         Filled, Leg, OrderCard, BracketCard, OrdersDoc, PageDec,
-        OrderActionAnswer, RefreshOrdersAnswer, Named, Modify, Adjust, RefreshAndOrders, QuoteOf, OrderAccount, TicketQuoteDetail, TicketQuoteOk, TicketQuote, TicketStop, TicketTarget, Ticket,
+        OrderActionAnswer, RefreshOrdersAnswer, Named, Modify, Adjust, RefreshAndOrders, QuoteOf, ListingNamed, OrderAccount, TicketQuoteDetail, TicketQuoteOk, TicketQuote, TicketStop, TicketTarget, Ticket,
         PlaceTicketAnswer, SecurityId, OrderListing, ListingRef, ListingOf, OrderListingAnswer,
         crate::orders::preview::StopInput, crate::orders::preview::TargetInput, crate::orders::preview::QuoteInput, crate::orders::preview::PreviewRequest, crate::orders::preview::Preview,
     ];
@@ -359,7 +359,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "NotificationIds" | "NotificationsAnswer" | "NotifySettingsAnswer" | "NotifySettingsPatch" | "NotifyTestAnswer" | "NotificationsReadAnswer" | "NotificationsSeenAnswer" | "NotificationsClearAnswer" | "PushSubscription" | "PushEndpoint" | "PushAnswer" => "notifications",
         "OkOr" => "common",
         "StartLoginAnswer" | "CancelLoginAnswer" | "LoginInput" | "Capture" | "RefreshAnswer" | "SyncAnswer" => "session",
-        "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" | "ListingOf" | "OrderListingAnswer" => "orders",
+        "OrdersDoc" | "OrderActionAnswer" | "RefreshOrdersAnswer" | "Named" | "Modify" | "Adjust" | "RefreshAndOrders" | "QuoteOf" | "ListingNamed" | "TicketQuote" | "PlaceTicketAnswer" | "Ticket" | "PreviewRequest" | "Preview" | "ListingOf" | "OrderListingAnswer" => "orders",
         "StatusAnswer" => "status",
         "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "DebtAnswerRequest" | "DebtAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "ImportTold" | "WatchRequest" | "WatchStatus" => "model_api",
         "FilingsAnswer" | "EnrichAnswer" | "FilingText" | "FilingTextAnswer" | "Filings" | "Scope" | "Document" | "DocumentPart" | "FilingsFeed" => "filings",

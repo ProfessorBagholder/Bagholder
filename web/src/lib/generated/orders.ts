@@ -125,6 +125,8 @@ export type RefreshAndOrders = { read: RefreshOrdersAnswer, orders: OrdersDoc, }
 
 export type QuoteOf = { security: SecurityId, account: string, };
 
+export type ListingNamed = { symbol: string, venue: string, };
+
 export type OrderAccount = { id: string, name: string, margin: boolean, 
 /**
  * The margin account whose margin an order here moves: its own for a margin

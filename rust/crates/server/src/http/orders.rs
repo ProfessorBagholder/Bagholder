@@ -17,6 +17,7 @@ pub fn routes() -> Routed {
         post "/api/bracket/cancel" => bracket_cancel;
         post "/api/orders/refresh" => refresh;
         get "/api/order/quote" => quote;
+        get "/api/order/listing" => listing_named;
         post "/api/order/listing" => listing;
         post "/api/order/preview" => preview;
         post "/api/order" => place;
@@ -57,6 +58,25 @@ pub struct QuoteOf {
 
 pub(crate) async fn quote(State(state): State<AppState>, Params(q): Params<QuoteOf>) -> Api<orders::TicketQuote> {
     answer(move || orders::ticket_quote(&state.app, &q.security, &q.account)).await
+}
+
+/// A listing named by its symbol and its venue, in words or as its code, as a ticket
+/// opened from a search or a directory row names it.
+#[derive(Deserialize, ts_rs::TS)]
+#[serde(deny_unknown_fields)]
+pub struct ListingNamed {
+    #[serde(deserialize_with = "text")]
+    symbol: String,
+    #[serde(deserialize_with = "text")]
+    venue: String,
+}
+
+/// `GET /api/order/listing`: a listing named by its symbol and venue, found as the
+/// ticket finds it (`orders::resolve_listing`, by venue): Wealthsimple's search, and
+/// nothing written. A listing of the book is opened by `POST`, which may record the
+/// id found on the book's instrument.
+pub(crate) async fn listing_named(State(state): State<AppState>, Params(q): Params<ListingNamed>) -> Api<orders::OrderListingAnswer> {
+    answer(move || orders::resolve_listing(&state.app, &orders::ListingRef::Venue { symbol: q.symbol, venue: q.venue }, jiff::Timestamp::now())).await
 }
 
 /// `POST /api/order/listing`: the listing a ticket opens on, from the exact listing

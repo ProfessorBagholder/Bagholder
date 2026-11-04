@@ -46,7 +46,7 @@ pub fn routes() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("/api/agents/listings", "listings", "Every listing a symbol given with no venue may be.", schema(schemars::schema_for!(SymbolArgs))),
         ("/api/agents/symbol-search", "symbol_search", "The page's symbol search.", schema(schemars::schema_for!(SearchArgs))),
         ("/api/agents/orders", "orders", "The person's orders, working and past. Reading them places nothing.", schema(schemars::schema_for!(NoArgs))),
-        ("/api/agents/order-quote", "order_quote", "What an order ticket shows for a listing before an order. Reading it places nothing.", schema(schemars::schema_for!(OrderQuoteArgs))),
+        ("/api/agents/order-quote", "order_quote", tools::ORDER_QUOTE, schema(schemars::schema_for!(OrderQuoteArgs))),
         ("/api/agents/notifications", "notifications", "The person's notifications. Reading them marks nothing read.", schema(schemars::schema_for!(NoArgs))),
         ("/api/agents/trade-details", "trade_details", "Every trade's and holding's executions at once.", schema(schemars::schema_for!(NoArgs))),
         ("/api/agents/status", "status", "What the page's header says: the connection, the last sync, and what waits.", schema(schemars::schema_for!(NoArgs))),
