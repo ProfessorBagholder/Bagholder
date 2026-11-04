@@ -93,7 +93,7 @@ from: string | null,
  */
 to: string | null, 
 /**
- * One chequing or credit card account's id, as the book's accounts give it.
+ * One account's id, as the book's accounts give it: any account, open or closed.
  */
 account: string | null, 
 /**
@@ -127,9 +127,20 @@ kind: string,
  */
 company: string | null, 
 /**
- * Into the account (positive) or out of it (negative), as the account states it.
+ * What is on its other side, as Wealthsimple states it.
  */
-amount: string, currency: string, };
+other: OtherSide, 
+/**
+ * Into the account (positive) or out of it (negative), as the account states it; none where
+ * Wealthsimple states no amount, and `problem` says why.
+ */
+amount: string | null, currency: string | null, 
+/**
+ * What the book holds against the row, in its own words, where it states no amount.
+ */
+problem: string | null, };
+
+export type OtherSide = { kind: string, accountId: string | null, account: string | null, institution: string | null, };
 
 export type EntryRequest = { "entry": "trade", account: string, instrument: string | null, symbol: string, exchange: string, currency: string, day: string, side: string, quantity: string, price: string, fee: string, } | { "entry": "cost-of-arrival", arrival: string, cost: string, acquired: string, } | { "entry": "spin-off", event: string, parent: string, children: Array<ChildShare>, } | { "entry": "return-of-capital", distribution: string, perUnit: string, };
 

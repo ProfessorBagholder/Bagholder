@@ -118,7 +118,7 @@ impl Pair {
     /// instrument's history costs.
     fn ops(self) -> &'static [Op] {
         match self {
-            Pair::Breadth => &[Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::NetWorthDays, Op::AgentTrades],
+            Pair::Breadth => &[Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::NetWorthDays, Op::AgentTrades, Op::AgentTransactions],
             // a change dated today, and one dated in the middle of the history: a
             // record that states no venue reads as on the one before it, so a
             // back-dated one re-forms the names after it (brief 44, 2)
@@ -191,10 +191,14 @@ pub enum Op {
     /// list's first page, as `GET /api/view` answers it. No person waits on it, so
     /// its time is reported and not budgeted; its work is held by the growth rule.
     AgentTrades,
+    /// A page of the money in and out of every account an agent reads (the
+    /// `transactions` tool): the first page, as `GET /api/transactions` answers it.
+    /// Reported, not budgeted, as `AgentTrades` is; its work is held by the growth rule.
+    AgentTransactions,
 }
 
 impl Op {
-    pub const ALL: [Op; 13] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::NetWorthDays, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat, Op::AgentTrades];
+    pub const ALL: [Op; 14] = [Op::Startup, Op::AddTrade, Op::Import, Op::Brokers, Op::PriceChanged, Op::FeedStep, Op::NetWorthDays, Op::BackdatedTrade, Op::BackdatedFill, Op::BackdatedRecord, Op::BackdatedFileRow, Op::BackdatedFlat, Op::AgentTrades, Op::AgentTransactions];
     pub fn name(self) -> &'static str {
         match self {
             Op::Startup => "startup",
@@ -210,6 +214,7 @@ impl Op {
             Op::BackdatedFileRow => "backdated-file-row",
             Op::BackdatedFlat => "backdated-flat",
             Op::AgentTrades => "agent-trades-page",
+            Op::AgentTransactions => "agent-transactions-page",
         }
     }
     fn parse(s: &str) -> Option<Op> {
@@ -781,6 +786,17 @@ pub fn probe(op: Op, pair: Pair, min_rows: u64, home: &Path) -> Result<Measured,
             let out = since(&m, 1);
             Ok(Measured { rows: doc.get("total").and_then(serde_json::Value::as_u64), ..out })
         }
+        Op::AgentTransactions => {
+            // the first page, after one read of it: the kept records it opens are warm, as
+            // an agent's second ask finds them
+            let q = crate::http::model::TransactionsQuery::default();
+            let page = || crate::http::model::transactions_page(&app, &q).map_err(|e| format!("{e:?}"));
+            page()?;
+            let m = mark();
+            let answer = page()?;
+            let out = since(&m, 1);
+            Ok(Measured { rows: Some(u64::from(answer.total)), ..out })
+        }
         Op::Brokers => {
             // what a balances read costs an account whose cash moved: the statement
             // kept, and that account's figures brought to it
@@ -1085,7 +1101,7 @@ pub fn budget_ms(op: Op, divisor: u64) -> (f64, &'static str) {
         // with it, is built again on each, so it has the price change's share
         Op::NetWorthDays => (QUOTES_EVERY_MS as f64 / divisor as f64, "quotes cadence / priced holdings"),
         // an agent's read: nobody waits on it as on a screen, so no budget
-        Op::AgentTrades => (f64::INFINITY, "reported, not budgeted (an agent's read)"),
+        Op::AgentTrades | Op::AgentTransactions => (f64::INFINITY, "reported, not budgeted (an agent's read)"),
     }
 }
 
