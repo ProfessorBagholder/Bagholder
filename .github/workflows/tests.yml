@@ -212,7 +212,7 @@ jobs:
       - name: One dry order through the page
         env:
           E2E_URL: http://127.0.0.1:8792
-        run: npx playwright test
+        run: npx playwright test --project=image
         working-directory: web
       # #516: a store the image cannot open leaves the server up with its header
       # whole -- the version, the update on offer and the error line saying why
@@ -267,9 +267,8 @@ jobs:
           BAGHOLDER_PORT=8792 docker compose -f docker-compose.yml -f "$RUNNER_TEMP/rooted.yml" down
           sudo rm -rf "$RUNNER_TEMP/rooted"
       # the shipped updater beside it (docker-compose.updater.yml): its API alone, no
-      # schedule; Bagholder makes the token it reads and offers the button. An update
-      # from one image to the next is not run here: the updater pulls from a
-      # registry, and this image is on this runner alone
+      # schedule; Bagholder makes the token it reads and offers the button (an update
+      # from one image to the next, pressed in the page, is the last step)
       - name: The shipped updater runs on the button alone, with the token Bagholder made
         run: |
           sudo mkdir -m 700 "$RUNNER_TEMP/updated"
@@ -312,6 +311,93 @@ jobs:
           sudo rm -rf "$RUNNER_TEMP/updated"
       - name: Who the image answers, on a local network and from the internet, directly and through Traefik, Caddy and nginx
         run: sh bin/container-network.test.sh bagholder:ci
+      # The button end to end (docs/plans/docker-update-button.md): a copy running the
+      # shipped compose with its updater is offered a release, the button is pressed in
+      # a real browser, the updater pulls the next image and replaces the container,
+      # and the page comes back on the new server by itself (web/e2e/update.spec.ts).
+      # Twice: from the latest release, the page copies run now, to this build; then
+      # from this build, its own page pressing, to the same build as another image (the
+      # updater replaces a container only for an image other than its own). The updater
+      # pulls from a registry on this runner, and GitHub's latest release is stood in,
+      # one newer than any build, since nothing newer than this build is published.
+      - name: The update button replaces the container, and the page comes back on the new one by itself
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          latest=$(gh api "repos/$GITHUB_REPOSITORY/releases/latest" --jq '.tag_name | ltrimstr("v")')
+          this=$(sed -n 's/^pub const APP_VERSION: &str = "\(.*\)";$/\1/p' rust/crates/server/src/app.rs)
+          [ -n "$latest" ] && [ -n "$this" ] || { echo "the latest release is '$latest', this build '$this'"; exit 1; }
+          docker run -d --name registry -p 127.0.0.1:5000:5000 registry:2.8.3@sha256:a3d8aaa63ed8681a604f1dea0aa03f100d5895b6a58ace528858a7b332415373
+          until curl -sf -o /dev/null http://127.0.0.1:5000/v2/; do sleep 1; done
+          docker pull -q "ghcr.io/professorbagholder/bagholder:$latest"
+          # each image with a label of its own, which the container running it then
+          # says: the latest release, this build, and this build again as another image
+          name() { made=$(docker create "$1") && docker commit -c "LABEL bagholder.test=$2" "$made" "bagholder:$2" && docker rm -v "$made"; }
+          name "ghcr.io/professorbagholder/bagholder:$latest" latest
+          name bagholder:ci this
+          name bagholder:ci again
+          # the image the updater takes next, in the registry alone: its tag is pushed
+          # and dropped here, so what runs is what was pulled
+          serve() { docker tag "bagholder:$1" localhost:5000/bagholder:latest && docker push -q localhost:5000/bagholder:latest && docker rmi localhost:5000/bagholder:latest; }
+          runs() { docker inspect -f '{{index .Config.Labels "bagholder.test"}}' bagholder; }
+          serve latest
+          # GitHub's API stood in under its own name on the compose network, with a
+          # certificate the copy is told to trust
+          stand="$RUNNER_TEMP/github"
+          mkdir "$stand"
+          openssl req -x509 -newkey rsa:2048 -nodes -days 1 -subj /CN=api.github.com -addext subjectAltName=DNS:api.github.com \
+            -keyout "$stand/key.pem" -out "$stand/cert.pem" 2> /dev/null
+          cat > "$stand/github.mjs" <<'EOF'
+          import { readFileSync } from 'node:fs'
+          import { createServer } from 'node:https'
+          const tls = { key: readFileSync('/stand-in/key.pem'), cert: readFileSync('/stand-in/cert.pem') }
+          const release = JSON.stringify({ tag_name: 'v99.0.0', html_url: 'https://github.com/ProfessorBagholder/Bagholder/releases/tag/v99.0.0', assets: [] })
+          createServer(tls, (q, s) => q.url.endsWith('/releases/latest') ? s.writeHead(200, { 'content-type': 'application/json' }).end(release) : s.writeHead(404).end()).listen(443)
+          EOF
+          sudo mkdir -m 700 "$RUNNER_TEMP/pressed"
+          cat > "$RUNNER_TEMP/pressed.yml" <<EOF
+          services:
+            bagholder:
+              image: localhost:5000/bagholder:latest
+              environment:
+                - BAGHOLDER_DRY_ORDERS=1
+                - SSL_CERT_FILE=/stand-in/cert.pem
+              volumes: !override
+                - $RUNNER_TEMP/pressed:/data
+                - $stand/cert.pem:/stand-in/cert.pem:ro
+            bagholder-updater:
+              volumes: !override
+                - /var/run/docker.sock:/var/run/docker.sock
+                - $RUNNER_TEMP/pressed/updater:/bagholder-data:ro
+            github:
+              image: node:22.21.1-alpine3.22@sha256:b2358485e3e33bc3a33114d2b1bdb18cdbe4df01bd2b257198eb51beb1f026c5
+              command: [node, /stand-in/github.mjs]
+              volumes:
+                - $stand:/stand-in:ro
+              healthcheck:
+                test: [CMD, node, -e, "require('net').connect(443).on('connect', () => process.exit(0)).on('error', () => process.exit(1))"]
+                interval: 1s
+              networks:
+                default:
+                  aliases: [api.github.com]
+          EOF
+          files="-f docker-compose.yml -f docker-compose.updater.yml -f $RUNNER_TEMP/pressed.yml"
+          # GitHub's stand-in answering before the copy first asks it
+          BAGHOLDER_PORT=8792 docker compose $files up -d --wait github
+          BAGHOLDER_PORT=8792 docker compose $files up -d --wait --wait-timeout 300
+          [ "$(runs)" = latest ]
+          # the image the updater takes next served, the button pressed in the page, and
+          # the container then running that image
+          press() {
+            serve "$3"
+            (cd web && E2E_URL=http://127.0.0.1:8792 E2E_UPDATE_FROM="$1" E2E_UPDATE_TO="$2" npx playwright test --project=update)
+            [ "$(runs)" = "$3" ] || { echo "the container runs the image labelled '$(runs)', not $3"; exit 1; }
+          }
+          press "$latest" "$this" this
+          press "$this" "$this" again
+          BAGHOLDER_PORT=8792 docker compose $files down
+          docker rm -f registry
+          sudo rm -rf "$RUNNER_TEMP/pressed" "$stand"
       - name: The container's log
         if: failure()
         run: |

@@ -12,8 +12,9 @@ export const PORT = Number(process.env.E2E_PORT) || 8791
 // it sends goes to a host but the stand-in
 export const REQUEST_LOG = join(tmpdir(), `bagholder-e2e-requests-${PORT + 1}.log`)
 process.env.E2E_REQUEST_LOG = REQUEST_LOG
-// (E2E_URL: a server already running, the image in CI; only the order test, which
-// stands nothing in, is run against it, and nothing is started here)
+// (E2E_URL: a server already running, the image in CI, and nothing is started here:
+// the order test, which stands nothing in, and the update pressed in the page, each
+// run by its project against the copy CI starts for it)
 const URL = process.env.E2E_URL
 
 export default defineConfig({
@@ -33,9 +34,12 @@ export default defineConfig({
   // the signed-in tests run against a second server, the same made-up book with a
   // saved Wealthsimple sign-in and Wealthsimple's search stood in (`serve.mjs --signed-in`)
   projects: URL
-    ? [{ name: 'image', testMatch: 'dryorder.spec.ts' }]
+    ? [
+        { name: 'image', testMatch: 'dryorder.spec.ts' },
+        { name: 'update', testMatch: 'update.spec.ts' },
+      ]
     : [
-        { name: 'app', testIgnore: 'signedin*.spec.ts' },
+        { name: 'app', testIgnore: ['signedin*.spec.ts', 'update.spec.ts'] },
         { name: 'signed-in', testMatch: 'signedin*.spec.ts', use: { baseURL: `http://127.0.0.1:${PORT + 1}` } },
       ],
   webServer: URL ? undefined : [
