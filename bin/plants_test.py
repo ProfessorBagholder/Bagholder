@@ -8,24 +8,27 @@ judged as the job judges it. Run by tests.yml (plants).
 
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
+from typing import Callable
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import plants  # noqa: E402
 
-# the tree's code and its test: `double` must double
+# the tree's code and its test, which says what it ran as cargo's harness does
 CODE = "def double(x):\n    return x * 2\n"
-TEST = "from code import double\nassert double(3) == 6, 'double(3) is not 6'\n"
+TEST = "from code import double\nok = double(3) == 6\nprint('test doubles ... ' + ('ok' if ok else 'FAILED'))\nraise SystemExit(0 if ok else 1)\n"
 
 
 def block(items: str) -> str:
     return f"The change.\n\n```plants\n{items}\n```\n\nMore words.\n"
 
 
-def stood_in(p: plants.Plant) -> plants.Steps:
-    """The build: the code compiles; the test: TEST, run beside it."""
-    return plants.Steps(build=(((sys.executable, "-m", "py_compile", "code.py"), "src"),), test=((sys.executable, "test.py"), "src"))
+def stood_in(*test: str) -> "Callable[[plants.Plant], plants.Steps]":
+    """The build: the code compiles; the test: TEST run beside it, or the Python given."""
+    argv = (sys.executable, "-c", test[0]) if test else (sys.executable, "test.py")
+    return lambda p: plants.Steps(build=(((sys.executable, "-m", "py_compile", "code.py"), "src"),), test=(argv, "src"))
 
 
 class Read(unittest.TestCase):
@@ -68,17 +71,36 @@ class Run(unittest.TestCase):
     def tearDown(self) -> None:
         self.dir.cleanup()
 
-    def judged(self, old: str, new: str) -> plants.Result:
+    def judged(self, old: str, new: str, *test: str, limit: float = plants.LIMIT) -> plants.Result:
         p = plants.Plant("p", "src/code.py", old, new, "cargo", ("t",))
-        [r] = plants.run([p], self.root, lambda p, root: plants.check(p, root, stood_in))
+        [r] = plants.run([p], self.root, lambda p, root: plants.check(p, root, stood_in(*test), limit))
         # put back as it was, whatever the verdict
         self.assertEqual((self.root / "src/code.py").read_text(), CODE)
         return r
 
     def test_a_real_plant_is_caught(self) -> None:
         r = self.judged("x * 2", "x + 2")
+        self.assertEqual((r.verdict, r.detail), ("caught", "doubles"))
+
+    def test_a_spec_failing_is_caught_by_the_test_it_names(self) -> None:
+        r = self.judged("x * 2", "x + 2", "print('  ✘  1 [app] › e2e/a.spec.ts:3:1 › doubles (1.2s)'); print('  1 failed'); raise SystemExit(1)")
         self.assertEqual(r.verdict, "caught")
-        self.assertIn("double(3) is not 6", r.detail)
+        self.assertIn("e2e/a.spec.ts:3:1 › doubles", r.detail)
+        r = self.judged("x * 2", "x + 2", "print('  1) [app] › e2e/a.spec.ts:3:1 › doubles'); print('  1 failed'); raise SystemExit(1)")
+        self.assertEqual(r.verdict, "caught")
+
+    def test_a_test_command_failing_with_no_test_named_did_not_run(self) -> None:
+        for said in ("Error: No tests found", "error: no test target named `owd`", "running 0 tests"):
+            with self.subTest(said=said):
+                r = self.judged("x * 2", "x + 2", f"print({said!r}); raise SystemExit(1)")
+                self.assertEqual((r.verdict, r.detail), ("did not run", said))
+
+    def test_a_test_that_runs_past_its_limit_is_stopped_with_what_it_started(self) -> None:
+        start = time.monotonic()
+        r = self.judged("x * 2", "x + 2", "import subprocess, sys, time; subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); print('waiting', flush=True); time.sleep(60)", limit=1)
+        self.assertEqual(r.verdict, "timed out")
+        self.assertIn("past 1 s: waiting", r.detail)
+        self.assertLess(time.monotonic() - start, 15)
 
     def test_a_plant_that_changes_nothing_is_not_caught(self) -> None:
         self.assertEqual(self.judged("x * 2", "x * 2").verdict, "not caught")

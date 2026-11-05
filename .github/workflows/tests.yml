@@ -149,6 +149,8 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # a backstop: each command a plant runs has its own limit (bin/plants.py, LIMIT)
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
