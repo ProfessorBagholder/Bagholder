@@ -332,7 +332,7 @@ jobs:
           docker pull -q "ghcr.io/professorbagholder/bagholder:$latest"
           # each image with a label of its own, which the container running it then
           # says: the latest release, this build, and this build again as another image
-          name() { made=$(docker create "$1") && docker commit -q -c "LABEL bagholder.test=$2" "$made" "bagholder:$2" && docker rm -v "$made"; }
+          name() { made=$(docker create "$1") && docker commit -c "LABEL bagholder.test=$2" "$made" "bagholder:$2" && docker rm -v "$made"; }
           name "ghcr.io/professorbagholder/bagholder:$latest" latest
           name bagholder:ci this
           name bagholder:ci again
