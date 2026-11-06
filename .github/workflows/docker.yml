@@ -1,6 +1,7 @@
 # Publishes the app's image to GitHub's container registry for every release, as
-# ghcr.io/professorbagholder/bagholder:<version> and :latest, and under the tags
-# :rust-<version> and :rust too. A Docker user updates with
+# ghcr.io/professorbagholder/bagholder:<version>, and under the tags :rust-<version>
+# and :rust too; :latest is moved to it by release.yml's publish, once the image has
+# been started and checked (image-check). A Docker user updates with
 # `docker compose pull && docker compose up -d`. Built from the repository root.
 name: Docker image
 
@@ -14,7 +15,7 @@ on:
       prebuilt:
         type: boolean
         default: false
-      # the release, `vX.Y.Z`: its image is :X.Y.Z and :latest
+      # the release, `vX.Y.Z`: its image is :X.Y.Z (and :latest once published)
       version:
         type: string
         default: ""
@@ -106,12 +107,12 @@ jobs:
         uses: docker/metadata-action@c299e40c65443455700f0fdfc63efafe5b349051 # v5.10.0
         with:
           images: ghcr.io/professorbagholder/bagholder
-          # a release is :X.Y.Z and :latest, and :rust-X.Y.Z and :rust for the
-          # installs that follow those; a run by hand is :rust alone
+          # a release is :X.Y.Z, and :rust-X.Y.Z and :rust for the installs that
+          # follow those; :latest waits for the release's check (release.yml,
+          # publish); a run by hand is :rust alone
           flavor: latest=false
           tags: |
             type=semver,pattern={{version}},value=${{ inputs.version }},enable=${{ inputs.version != '' }}
-            type=raw,value=latest,enable=${{ inputs.version != '' }}
             type=semver,pattern={{version}},prefix=rust-,value=${{ inputs.version }},enable=${{ inputs.version != '' }}
             type=raw,value=rust
       - name: One image from both architectures

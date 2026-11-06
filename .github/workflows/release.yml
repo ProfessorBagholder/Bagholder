@@ -282,6 +282,20 @@ jobs:
             printf '\nImage: `ghcr.io/professorbagholder/bagholder:%s` (`%s`)\n' "$version" "$digest" >> notes.md
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
           fi
+      # :latest, what every copy's updater pulls, becomes this release's image once
+      # it has been started and checked (image-check), and before the release is
+      # published: a copy is offered the update by GitHub's latest release, and the
+      # button must then pull the new image, never the one it runs
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: The release's image as the latest
+        run: |
+          version="${TAG#v}"
+          docker buildx imagetools create -t ghcr.io/professorbagholder/bagholder:latest "ghcr.io/professorbagholder/bagholder:$version"
+          docker buildx imagetools inspect ghcr.io/professorbagholder/bagholder:latest
       - name: Publish the release as the latest
         run: |
           if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true" ]; then
