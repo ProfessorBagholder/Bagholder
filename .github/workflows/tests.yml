@@ -30,8 +30,15 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # The Rust suite in three parts, each on a runner of its own (nextest's `--partition`):
+  # the runners are free and run at once, so the suite's wall time is a third of its
+  # run; what is not the suite is `rust-checks`, beside it.
   rust:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -45,20 +52,10 @@ jobs:
           workspaces: rust
           shared-key: suite
           save-if: false
-      # the lock committed is the one a release builds with (`release.yml` and the
-      # image build `--locked`): one that cargo would rewrite fails here, before any
-      # step can rewrite it
-      - name: The lock file is current
-        run: cargo metadata --locked --format-version 1 > /dev/null
-        working-directory: rust
       # a start is traced to show it opens no store but the book and the market
       # cache (`server/tests/start_failures.rs`)
       - name: strace
         run: sudo apt-get update && sudo apt-get install -y strace
-      # which release a merge makes (release.yml's first step), over every case, with
-      # `gh` stood in: it cannot be proven before a release
-      - name: The release decision
-        run: sh bin/release-which.test.sh
       # cargo-nextest runs each test in a process of its own, as many at once as the
       # runner has cores: the suite's tests no longer wait in line on one shared lock
       - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
@@ -66,16 +63,43 @@ jobs:
           tool: cargo-nextest@0.9.148
       # a warning fails the build: the workspace is kept warning-free; the suite runs
       # on a temp folder of its own, and a test that leaves anything there fails it;
-      # nextest runs no doc test, so they run apart
-      - name: The Rust suite
+      # each part takes every third test, counted in the suite's own order; nextest
+      # runs no doc test, so the first part runs them apart
+      - name: The Rust suite, its part ${{ matrix.part }} of 3
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
+          PART: ${{ matrix.part }}
         run: |
           cargo nextest list --workspace --locked > /dev/null
-          ../bin/check-test-leftovers.sh cargo nextest run --workspace --locked --no-fail-fast -E 'not test(/^capacity::tests::/)'
-          ../bin/check-test-leftovers.sh cargo test --workspace --locked --doc
+          ../bin/check-test-leftovers.sh cargo nextest run --workspace --locked --no-fail-fast --partition "count:$PART/3" -E 'not test(/^capacity::tests::/)'
+          if [ "$PART" = 1 ]; then ../bin/check-test-leftovers.sh cargo test --workspace --locked --doc; fi
         working-directory: rust
+
+  # What the Rust job checks beside the suite, on a runner of its own.
+  rust-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      # master's, as the suite's (above)
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        with:
+          workspaces: rust
+          shared-key: suite
+          save-if: false
+      # the lock committed is the one a release builds with (`release.yml` and the
+      # image build `--locked`): one that cargo would rewrite fails here, before any
+      # step can rewrite it
+      - name: The lock file is current
+        run: cargo metadata --locked --format-version 1 > /dev/null
+        working-directory: rust
+      # which release a merge makes (release.yml's first step), over every case, with
+      # `gh` stood in: it cannot be proven before a release
+      - name: The release decision
+        run: sh bin/release-which.test.sh
       # the developer's subcommands (`bagholder demo`, `pull-broker`), each behind a
       # feature no release build enables: their own tests, built with them
       - name: The developer's subcommands
@@ -114,9 +138,14 @@ jobs:
         working-directory: rust
 
   # The server's capacity cases, each building made-up books (`capacity::tests`), beside the
-  # suite rather than inside it: the suite's slowest part, run once, in parallel.
+  # suite rather than inside it: the suite's slowest part, in three parts at once, each
+  # case in a process of its own (nextest).
   capacity-cases:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [1, 2, 3]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
@@ -128,11 +157,15 @@ jobs:
           workspaces: rust
           shared-key: suite
           save-if: false
-      - name: The capacity cases
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: The capacity cases, their part ${{ matrix.part }} of 3
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
-        run: cargo test --locked -p bagholder-server --bin bagholder capacity::tests
+          PART: ${{ matrix.part }}
+        run: cargo nextest run --locked -p bagholder-server --bin bagholder --no-fail-fast --partition "count:$PART/3" -E 'test(/^capacity::tests::/)'
         working-directory: rust
 
   # The pull request's plants (bin/plants.py): each a bug put in on purpose, one exact
@@ -500,9 +533,14 @@ jobs:
           fi
 
   # The page driven in a real browser against the real server, on a made-up book
-  # (docs/architecture.md, rule 8). Nothing leaves the runner: BAGHOLDER_OFFLINE.
+  # (docs/architecture.md, rule 8). Nothing leaves the runner: BAGHOLDER_OFFLINE. In
+  # five parts at once (Playwright's `--shard`), each with its own servers and book.
   browser:
     runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
@@ -522,11 +560,32 @@ jobs:
       - name: The browser the tests drive
         run: npx playwright install --with-deps chromium
         working-directory: web
+      # the page first, so the server built next carries it and the tests' own build
+      # of it has nothing left to do
+      - name: The page
+        run: npx vite build
+        working-directory: web
       - name: The server and the made-up book
         run: cargo build --locked --bin bagholder --features demo
         working-directory: rust
       # not under bin/check-test-leftovers.sh yet: the end-to-end servers' temp
       # folders are their own matter, and the browser run failed under the check (#589)
-      - name: The browser tests
-        run: npm run e2e
+      - name: The browser tests, their part ${{ matrix.shard }} of 5
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: npx playwright test --shard="$SHARD/5"
         working-directory: web
+
+  # One result for the run, whichever jobs it was split into: every job passed, or was
+  # not for this run (the plants on a run by hand).
+  result:
+    if: always()
+    needs: [rust, rust-checks, capacity-cases, plants, web, container, audit, browser]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Every job passed
+        env:
+          RESULTS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "$RESULTS"
+          for r in $RESULTS; do case "$r" in success|skipped) ;; *) exit 1;; esac; done

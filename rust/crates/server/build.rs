@@ -20,8 +20,16 @@ fn files_under(dir: &Path, out: &mut Vec<PathBuf>) {
 
 fn main() {
     let dist = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR").unwrap()).join("../../../web/dist");
-    println!("cargo:rerun-if-changed={}", dist.display());
-    println!("cargo:rerun-if-changed={}", dist.join("index.html").display());
+    // a path cargo watches that is not there reads as changed at every build, which
+    // ran this again, and built the server again, at every cargo command on a checkout
+    // with no page built: until the page is built its folder's parent is watched, so
+    // the build after the page's first embeds it
+    if dist.exists() {
+        println!("cargo:rerun-if-changed={}", dist.display());
+        println!("cargo:rerun-if-changed={}", dist.join("index.html").display());
+    } else {
+        println!("cargo:rerun-if-changed={}", dist.parent().unwrap().display());
+    }
     let mut files = Vec::new();
     files_under(&dist, &mut files);
     files.sort();
