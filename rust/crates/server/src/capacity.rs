@@ -1,15 +1,19 @@
 //! `bagholder capacity`: the server held to its cost budget at the reference size
 //! (`docs/architecture.md` §16; `docs/plans/stage-p-capacity-and-process.md`).
 //!
-//! - `capacity build <folder> [--times N] [--seed S]` makes a data folder the
-//!   way the app makes one: a made-up Wealthsimple of the reference size (times N)
-//!   pulled through the real adapter and pull, a year of balances reads at the
-//!   reference rate, the market facts through the cache's own writers, and the
-//!   figures settled as a start settles them.
-//! - `capacity run <work folder>` builds (or reuses) the reference size and four
-//!   times it under the work folder, measures each operation in a process of
-//!   its own, prints the table, and fails when the budget or the growth rule is
-//!   broken (or when an operation listed over budget is now within it).
+//! - `capacity build <folder> [--times N] [--seed S] [--deep]` makes a data folder
+//!   the way the app makes one: a made-up Wealthsimple of the reference size (times
+//!   N; with `--deep`, its deep listing times N instead) pulled through the real
+//!   adapter and pull, a year of balances reads at the reference rate, the market
+//!   facts through the cache's own writers, and the figures settled as a start
+//!   settles them.
+//! - `capacity run <work folder> [--part K/N]` builds (or reuses) the reference size
+//!   and four times it under the work folder, the books at once, each in a process of
+//!   its own, measures each operation in a process of its own, one after another,
+//!   prints the table, and fails when the budget or the growth rule is broken (or
+//!   when an operation listed over budget is now within it). With `--part`, it makes
+//!   every N-th measurement from the K-th, and builds only the books those need: the
+//!   parts on runners of their own make every measurement once (`capacity.yml`).
 //! - `capacity probe <operation> <folder> [--depth <rows>]` is one measured run
 //!   (on a book of the depth pair, its deep listing built with `<rows>`), printed as one
 //!   line; `run` starts it.
@@ -140,6 +144,16 @@ impl Pair {
             // two rows a round trip, the last still open
             Pair::Depth => (self.size(times).deep * 2).saturating_sub(1) as u64,
         }
+    }
+
+    /// What `capacity build` is told to build this pair's book `times` the reference
+    /// size, which reads them back as this size (`build_size`).
+    fn build_args(self, times: usize) -> Vec<String> {
+        let mut a = vec!["--times".into(), times.to_string()];
+        if self == Pair::Depth {
+            a.push("--deep".into());
+        }
+        a
     }
 
     /// The pair's two books, under the work folder.
@@ -449,6 +463,37 @@ fn made_up_now() -> Timestamp {
 /// The reference size times `times`.
 pub fn sized(times: usize, seed: u64) -> Size {
     Size { accounts: REFERENCE.accounts * times, instruments: REFERENCE.instruments * times, trades: REFERENCE.trades * times, seed, ..REFERENCE }
+}
+
+/// The size `capacity build` is asked for: the reference times `--times`, or with
+/// `--deep` the depth pair's book of that many times.
+fn build_size(args: &[String], flag: impl Fn(&str) -> Option<u64>) -> Size {
+    let times = flag("--times").unwrap_or(1) as usize;
+    if args.iter().any(|a| a == "--deep") {
+        Pair::Depth.size(times)
+    } else {
+        sized(times, flag("--seed").unwrap_or(REFERENCE.seed))
+    }
+}
+
+/// Every measurement a run makes, in the order it prints them: each pair's
+/// operations, breadth first.
+fn measurements() -> Vec<(Pair, Op)> {
+    [Pair::Breadth, Pair::Depth].into_iter().flat_map(|pair| pair.ops().iter().map(move |&op| (pair, op))).collect()
+}
+
+/// The measurements part `k` of `n` makes: every n-th, from the k-th. The parts
+/// together make each measurement once, so the run is cut by n on n runners, and
+/// each part still measures one operation at a time on a runner of its own.
+fn part(k: usize, n: usize) -> Vec<(Pair, Op)> {
+    measurements().into_iter().enumerate().filter(|(i, _)| i % n == k - 1).map(|(_, m)| m).collect()
+}
+
+/// `K/N`, a part of a run: 1 ≤ K ≤ N.
+fn parse_part(s: &str) -> Option<(usize, usize)> {
+    let (k, n) = s.split_once('/')?;
+    let (k, n) = (k.parse().ok()?, n.parse().ok()?);
+    (1..=n).contains(&k).then_some((k, n))
 }
 
 /// Make the data folder `home` for `size`, with `balances_days` of balances reads.
@@ -1248,59 +1293,76 @@ pub fn could_come_off(verdicts: &[Verdict]) -> Vec<String> {
         .collect()
 }
 
-pub fn run(work: &Path) -> Result<String, String> {
+/// The run, or its part `k` of `n` (`part`).
+pub fn run(work: &Path, (k, n): (usize, usize)) -> Result<String, String> {
     let exe = std::env::current_exe().map_err(err)?;
-    for pair in [Pair::Breadth, Pair::Depth] {
+    let mine = part(k, n);
+    // the books the part measures on, those not there yet built at once, each in a
+    // process of its own: one book's build is one core's work, and the four built
+    // one after another were near half of a run
+    let mut books = Vec::new();
+    for pair in [Pair::Breadth, Pair::Depth].into_iter().filter(|p| mine.iter().any(|(q, _)| q == p)) {
         let (one, four) = pair.folders(work);
-        for (dir, times) in [(&one, 1), (&four, 4)] {
+        for (dir, times) in [(one, 1), (four, 4)] {
             if !dir.join(bagholder_book::BOOK_FILE).exists() {
-                build(dir, pair.size(times), BALANCES_DAYS)?;
+                books.push((pair, dir, times));
             }
         }
     }
+    let exe_ref = &exe;
+    std::thread::scope(|s| {
+        let builds: Vec<_> = books.iter().map(|(pair, dir, times)| s.spawn(move || std::process::Command::new(exe_ref).args(["capacity", "build"]).arg(dir).args(pair.build_args(*times)).output())).collect();
+        builds.into_iter().zip(&books).try_for_each(|(b, (_, dir, _))| {
+            let out = b.join().map_err(|_| format!("the build of {} panicked", dir.display()))?.map_err(err)?;
+            if out.status.success() {
+                Ok(())
+            } else {
+                Err(format!("the book {} was not built: {}", dir.display(), String::from_utf8_lossy(&out.stderr)))
+            }
+        })
+    })?;
     // each row printed as it is measured, so a long run shows where it is
     let header = "| Operation | Grows by | Rows ×1 → ×4 | Runner (ms) | Pi (ms) | Budget (ms) | From | VM steps ×1 → ×4 | Allocations ×1 → ×4 | Bytes read ×1 → ×4 |\n| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |\n";
     write_out(header)?;
     let mut verdicts = Vec::new();
-    for pair in [Pair::Breadth, Pair::Depth] {
+    for &(pair, op) in &mine {
         let (one, four) = pair.folders(work);
-        for &op in pair.ops() {
-            // an operation listed over budget is measured once: its counts are the
-            // same every run, and one run over its budget keeps it over; only a run
-            // within it is taken to the median of seven, to say it is off the list
-            // every operation the median of seven runs, listed or not (§16)
-            let a = measure(&exe, op, pair, pair.min_rows(1), &one, RUNS)?;
-            let b = measure(&exe, op, pair, pair.min_rows(4), &four, RUNS)?;
-            let verdict = judge(op, pair, &a, &b);
-            let rows = match (a.rows, b.rows) {
-                (Some(x), Some(y)) => format!("{x} → {y}"),
-                _ => "".into(),
-            };
-            let pi = b.wall_ns as f64 / 1e6 * PI_SLOWDOWN;
-            let time = |l: &[(Measure, String)]| l.iter().any(|(m, _)| *m == Measure::Time);
-            let over = if time(&verdict.over) { " (over)" } else if time(&verdict.edge) { " (at the edge)" } else { "" };
-            let (budget, from) = budget_ms(op, b.divisor);
-            let read = match (a.read, b.read) {
-                (Some(x), Some(y)) => format!("{x} → {y}"),
-                _ => "not counted here".into(),
-            };
-            write_out(&format!(
-                "| {} | {} | {rows} | {:.1} | {pi:.1}{over} | {budget:.1} | {from} | {} → {} | {} → {} | {read} |\n",
-                op.name(),
-                pair.name(),
-                b.wall_ns as f64 / 1e6,
-                a.steps,
-                b.steps,
-                a.allocs,
-                b.allocs
-            ))?;
-            verdicts.push(verdict);
-        }
+        // an operation listed over budget is measured once: its counts are the
+        // same every run, and one run over its budget keeps it over; only a run
+        // within it is taken to the median of seven, to say it is off the list
+        // every operation the median of seven runs, listed or not (§16)
+        let a = measure(&exe, op, pair, pair.min_rows(1), &one, RUNS)?;
+        let b = measure(&exe, op, pair, pair.min_rows(4), &four, RUNS)?;
+        let verdict = judge(op, pair, &a, &b);
+        let rows = match (a.rows, b.rows) {
+            (Some(x), Some(y)) => format!("{x} → {y}"),
+            _ => "".into(),
+        };
+        let pi = b.wall_ns as f64 / 1e6 * PI_SLOWDOWN;
+        let time = |l: &[(Measure, String)]| l.iter().any(|(m, _)| *m == Measure::Time);
+        let over = if time(&verdict.over) { " (over)" } else if time(&verdict.edge) { " (at the edge)" } else { "" };
+        let (budget, from) = budget_ms(op, b.divisor);
+        let read = match (a.read, b.read) {
+            (Some(x), Some(y)) => format!("{x} → {y}"),
+            _ => "not counted here".into(),
+        };
+        write_out(&format!(
+            "| {} | {} | {rows} | {:.1} | {pi:.1}{over} | {budget:.1} | {from} | {} → {} | {} → {} | {read} |\n",
+            op.name(),
+            pair.name(),
+            b.wall_ns as f64 / 1e6,
+            a.steps,
+            b.steps,
+            a.allocs,
+            b.allocs
+        ))?;
+        verdicts.push(verdict);
     }
     let wrong = listed_disagree(&verdicts);
     let said: String = could_come_off(&verdicts).iter().map(|s| format!("\n{s}")).collect();
+    let which = if n > 1 { format!("of part {k} of {n} ") } else { String::new() };
     if wrong.is_empty() {
-        Ok(format!("{said}\nEvery operation is within its budget and the growth rule, or listed over it.\n"))
+        Ok(format!("{said}\nEvery operation {which}is within its budget and the growth rule, or listed over it.\n"))
     } else {
         Err(format!("{said}\n{}", wrong.join("\n")))
     }
@@ -1313,16 +1375,17 @@ fn write_out(text: &str) -> Result<(), String> {
 }
 
 pub fn cli(args: &[String]) -> i32 {
-    let usage = "usage: bagholder capacity build <folder> [--times N] [--seed S] | run <work folder> | probe <operation> <folder> [--depth <rows>]";
+    let usage = "usage: bagholder capacity build <folder> [--times N] [--seed S] [--deep] | run <work folder> [--part K/N] | probe <operation> <folder> [--depth <rows>]";
     let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u64>().ok());
     let result = match args.first().map(String::as_str) {
         Some("build") => match args.get(1) {
-            Some(dir) => build(Path::new(dir), sized(flag("--times").unwrap_or(1) as usize, flag("--seed").unwrap_or(REFERENCE.seed)), BALANCES_DAYS),
+            Some(dir) => build(Path::new(dir), build_size(args, &flag), BALANCES_DAYS),
             None => Err(usage.into()),
         },
-        Some("run") => match args.get(1) {
-            Some(dir) => run(Path::new(dir)),
-            None => Err(usage.into()),
+        Some("run") => match (args.get(1), args.iter().position(|a| a == "--part").map(|i| args.get(i + 1).and_then(|p| parse_part(p)))) {
+            (Some(dir), None) => run(Path::new(dir), (1, 1)),
+            (Some(dir), Some(Some(part))) => run(Path::new(dir), part),
+            _ => Err(usage.into()),
         },
         Some("probe") => match (args.get(1).and_then(|o| Op::parse(o)), args.get(2)) {
             (Some(op), Some(dir)) => {
@@ -1360,6 +1423,45 @@ mod tests {
     /// reads the clock, the measuring of time aside (`Instant`). A read of the
     /// clock walked each family to the real today, and a contract expiring after
     /// the made-up today changed the book (2026-10-30).
+    /// The parts of a run make every measurement once, however many parts there
+    /// are: none left out and none made twice (`capacity.yml` runs three).
+    #[test]
+    fn the_parts_of_a_run_make_every_measurement_once() {
+        let all = measurements();
+        assert_eq!(all.len(), Pair::Breadth.ops().len() + Pair::Depth.ops().len());
+        assert_eq!(part(1, 1), all);
+        for n in 1..=all.len() + 1 {
+            let made: Vec<(Pair, Op)> = (1..=n).flat_map(|k| part(k, n)).collect();
+            assert_eq!(made.len(), all.len(), "{n} parts");
+            for m in &all {
+                assert_eq!(made.iter().filter(|x| *x == m).count(), 1, "{n} parts make {} ({}) other than once", m.1.name(), m.0.name());
+            }
+        }
+    }
+
+    /// A part is `K/N` with K from 1 to N, and nothing else is one.
+    #[test]
+    fn a_part_is_one_of_n() {
+        assert_eq!(parse_part("2/3"), Some((2, 3)));
+        assert_eq!(parse_part("1/1"), Some((1, 1)));
+        for bad in ["0/3", "4/3", "3", "a/3", "1/0", "1/", ""] {
+            assert_eq!(parse_part(bad), None, "{bad:?}");
+        }
+    }
+
+    /// A book a run builds in a process of its own is the size the run asks for:
+    /// `capacity build` reads each pair's arguments back as that pair's size.
+    #[test]
+    fn a_book_built_apart_is_the_size_the_run_asks_for() {
+        for pair in [Pair::Breadth, Pair::Depth] {
+            for times in [1, 4] {
+                let args: Vec<String> = ["build".to_string(), "dir".to_string()].into_iter().chain(pair.build_args(times)).collect();
+                let flag = |name: &str| args.iter().position(|a| a == name).and_then(|i| args.get(i + 1)).and_then(|v| v.parse::<u64>().ok());
+                assert_eq!(build_size(&args, flag), pair.size(times), "{} x{times}", pair.name());
+            }
+        }
+    }
+
     #[test]
     fn the_capacity_tool_reads_no_clock() {
         let source = include_str!("capacity.rs");
