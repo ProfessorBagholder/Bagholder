@@ -37,6 +37,11 @@ pub struct FactNeeds {
     /// 2026-10-28, point 5). Read while any page is open, as the trades it holds
     /// back are shown on every screen.
     pub before_sales: BTreeSet<Date>,
+    /// Of `holdings_on`, each day a distribution waits on: the day before an ex-date,
+    /// whose units held into it say what is owed and a distribution's form
+    /// (`crate::cashflow::held_into`). Read while any page is open, as `before_sales`
+    /// is: the Cashflow screen shows what they hold back and asks for no positions.
+    pub held_into: BTreeSet<Date>,
     /// Each security held now: its distributions and schedule are read.
     pub payers: BTreeSet<InstrumentId>,
     /// The person's oldest day: the span the benchmarks must cover.

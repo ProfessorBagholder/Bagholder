@@ -177,6 +177,7 @@ fn new_in(now: &FactNeeds, before: &FactNeeds) -> FactNeeds {
         // the broker's reads, not the market sources', read past days (`broker_reads`)
         holdings_on: Default::default(),
         before_sales: Default::default(),
+        held_into: Default::default(),
         spans: now
             .spans
             .iter()
@@ -398,6 +399,7 @@ mod tests {
             held: [i(1)].into(),
             holdings_on: Default::default(),
         before_sales: Default::default(),
+        held_into: Default::default(),
             payers: [i(1)].into(),
             first_day: Some(date(2024, 1, 2)),
         };
@@ -408,6 +410,7 @@ mod tests {
             held: [i(1), i(3)].into(),
             holdings_on: Default::default(),
         before_sales: Default::default(),
+        held_into: Default::default(),
             payers: [i(1), i(3)].into(),
             first_day: Some(date(2024, 1, 2)),
         };
