@@ -78,6 +78,7 @@ fn a_distribution_s_form_waits_on_the_day_s_positions_and_is_judged_when_they_ar
     let per = e.figures().payers[&i].per.clone();
     assert!(per.as_ref().err().is_some_and(|g| g.iter().any(|x| matches!(x, bagholder_engine::gap::Gap::HoldingsUnread(d) if *d == waits))), "{per:?}");
     assert!(e.needs().holdings_on.contains(&waits));
+    assert!(e.needs().held_into.contains(&waits), "read with any page open, the Cashflow screen's included");
     // the day read: held, so paid in units and passed over; the rate is the one before
     let mut stated = b.inputs.market.brokers[&a].clone();
     stated.days_held.insert(waits, bagholder_engine::input::HeldDay { held: [(i, dec("100"))].into(), ..Default::default() });
@@ -109,4 +110,5 @@ fn an_account_the_broker_states_waits_on_its_day_and_is_never_judged_by_the_jour
     let f = Filters::default();
     assert!(e.cashflow(&f, &e.portfolio(&f)).owed.is_empty(), "no row on the journal's units");
     assert!(e.needs().holdings_on.contains(&day("2026-04-14")), "the day before the ex-date asked for");
+    assert!(e.needs().held_into.contains(&day("2026-04-14")), "asked for with any page open");
 }

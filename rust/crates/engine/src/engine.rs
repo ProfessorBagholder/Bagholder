@@ -650,15 +650,16 @@ impl Engine {
         n.holdings_on.extend(crate::coverage::days_waited(&self.trades));
         // each day held into an ex-date waits on: a distribution owed, and a
         // distribution's form (`crate::cashflow::held_into`)
-        n.holdings_on.extend(crate::cashflow::owed(&self.inputs, &self.matched, &self.cash).1);
+        n.held_into.extend(crate::cashflow::owed(&self.inputs, &self.matched, &self.cash).1);
         for p in self.payers.values() {
             if let Err(g) = &p.per {
-                n.holdings_on.extend(g.iter().filter_map(|x| match x {
+                n.held_into.extend(g.iter().filter_map(|x| match x {
                     Gap::HoldingsUnread(d) => Some(*d),
                     _ => None,
                 }));
             }
         }
+        n.holdings_on.extend(n.held_into.iter().copied());
         // each day the net worth history needs an account's cash of: a margin
         // account's, from its first stated value to its last (a day after it is its
         // last's, as the value is), and one whose value is never stated

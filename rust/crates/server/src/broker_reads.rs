@@ -351,17 +351,11 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
         let balances = cash.and_then(|t| t.checked_add(BALANCES_EVERY).ok()).unwrap_or(now);
         next = Some(next.map_or(balances, |n| n.min(balances)));
     }
-    // a past day a page shows, or the net worth history needs, whose positions read
-    // is not read yet (brief 79 §2.4): the newest first, one a second, only while a
-    // page shows the holdings (the positions document carries the net worth
-    // history), and never while resting from a failure; a day a sale's units wait
-    // on while any page is open (amended 2026-10-28, point 5)
+    // a past day whose positions read is not read yet (`past_day_due`), one a
+    // second, never while resting from a failure
     if open && !rest.resting(now) {
         let watched = app.events.watched("positions");
-        let due = f.read(|e| {
-            let n = e.needs();
-            n.before_sales.last().copied().or_else(|| n.holdings_on.last().copied().filter(|_| watched))
-        });
+        let due = f.read(|e| past_day_due(&e.needs(), watched));
         if let Some(day) = due.flatten() {
             match past_holdings_now(app, f, &book, conn, session_file(app), day, now)? {
                 Read::Lapsed => {
@@ -380,6 +374,16 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
         next = Some(next.map_or(u, |n| n.max(u)));
     }
     Ok(next)
+}
+
+/// The past day whose positions are read next, the newest first (brief 79 §2.4): a
+/// day a sale's units wait on (amended 2026-10-28, point 5) or a distribution held
+/// into its ex-date waits on, while any page is open, as what they hold back is
+/// shown on every screen or on Cashflow, which asks for no positions; any other day
+/// a page shows or the net worth history needs only while a page shows the holdings
+/// (`holdings_shown`: the positions document carries the net worth history).
+fn past_day_due(n: &bagholder_engine::needs::FactNeeds, holdings_shown: bool) -> Option<bagholder_core::jiff::civil::Date> {
+    n.before_sales.last().or(n.held_into.last()).copied().or_else(|| n.holdings_on.last().copied().filter(|_| holdings_shown))
 }
 
 /// One past day's holdings read for every account in one request, and each
@@ -599,6 +603,22 @@ mod tests {
 
     fn t(s: &str) -> Timestamp {
         s.parse().unwrap()
+    }
+
+    /// A day a distribution held into its ex-date waits on is read with any page
+    /// open, as a day a sale's units wait on is: the Cashflow screen, which shows
+    /// what is owed, asks for no positions. Any other past day only while a page
+    /// shows the holdings.
+    #[test]
+    fn a_day_a_distribution_waits_on_is_read_with_any_page_open() {
+        use bagholder_core::jiff::civil::date;
+        let mut n = bagholder_engine::needs::FactNeeds { holdings_on: [date(2026, 9, 30), date(2026, 10, 29)].into(), ..Default::default() };
+        assert_eq!(past_day_due(&n, false), None);
+        assert_eq!(past_day_due(&n, true), Some(date(2026, 10, 29)));
+        n.held_into = [date(2026, 9, 30)].into();
+        assert_eq!(past_day_due(&n, false), Some(date(2026, 9, 30)));
+        n.before_sales = [date(2026, 8, 3)].into();
+        assert_eq!(past_day_due(&n, false), Some(date(2026, 8, 3)), "a sale's day first, as before");
     }
 
     #[test]
