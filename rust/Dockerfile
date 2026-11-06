@@ -30,7 +30,10 @@ RUN npm ci
 COPY web ./
 RUN npm run build
 
-FROM debian:bookworm-slim
+# What the app runs on, before anything of its own is copied in: built once for
+# every image whose system packages and entrypoint are the same (`suite-cache.yml`
+# keeps it for the pull requests' images).
+FROM debian:bookworm-slim AS runtime
 # Chromium for the Wealthsimple sign-in, on a virtual display (Xvfb): the app's page shows
 # its window and passes your clicks and keys to it, so nothing is needed on the host but
 # Docker. Passkeys need a real browser; sign in with the password and 2FA.
@@ -41,6 +44,7 @@ RUN useradd --uid 1000 --user-group --home-dir /data --no-create-home --shell /u
 COPY rust/docker-entrypoint.sh /usr/local/bin/bagholder-entrypoint
 RUN chmod +x /usr/local/bin/bagholder-entrypoint
 
+FROM runtime
 WORKDIR /app
 COPY --from=binaries /src/target/release/bagholder /src/target/release/bagholder-browser /src/target/release/sedar ./
 COPY --from=web /web/dist ./web/dist

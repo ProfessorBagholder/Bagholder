@@ -232,13 +232,38 @@ jobs:
       version: ${{ needs.release.outputs.tag }}
     secrets: inherit
 
+  # The image this release pushed, run before the release is published, on each of its
+  # architectures (bin/image-check.sh): healthy as its own user, its page and its
+  # version served, answering whom it should. CI checks an image of the same code built
+  # from a debug build; this is the image people pull.
+  image-check:
+    needs: [release, docker]
+    if: needs.release.outputs.tag != ''
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      TAG: ${{ needs.release.outputs.tag }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          ref: ${{ github.event.inputs.tag || github.sha }}
+      - name: The release's image, by its digest, started and checked
+        run: |
+          version="${TAG#v}"
+          digest=$(docker buildx imagetools inspect "ghcr.io/professorbagholder/bagholder:$version" --format '{{json .Manifest}}' | jq -r .digest)
+          case "$digest" in sha256:*) ;; *) echo "no digest for the image $version: $digest"; exit 1;; esac
+          sh bin/image-check.sh "ghcr.io/professorbagholder/bagholder@$digest" "$version"
+
   # The release stays a draft (or, run by hand, a prerelease), which GitHub's latest
   # release (the one every installed copy checks) leaves out; it becomes the latest
   # only once every platform's archive and the image are there and both suites
   # passed, so no copy is ever offered a release it cannot take. A draft is
   # published on this run's own commit, which tags it.
   publish:
-    needs: [release, rust, docker, suite-macos, suite-windows]
+    needs: [release, rust, docker, image-check, suite-macos, suite-windows]
     if: needs.release.outputs.tag != ''
     runs-on: ubuntu-latest
     env:
@@ -257,6 +282,20 @@ jobs:
             printf '\nImage: `ghcr.io/professorbagholder/bagholder:%s` (`%s`)\n' "$version" "$digest" >> notes.md
             gh release edit "$TAG" --repo "$GITHUB_REPOSITORY" --notes-file notes.md
           fi
+      # :latest, what every copy's updater pulls, becomes this release's image once
+      # it has been started and checked (image-check), and before the release is
+      # published: a copy is offered the update by GitHub's latest release, and the
+      # button must then pull the new image, never the one it runs
+      - uses: docker/login-action@c94ce9fb468520275223c153574b00df6fe4bcc9 # v3.7.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: The release's image as the latest
+        run: |
+          version="${TAG#v}"
+          docker buildx imagetools create -t ghcr.io/professorbagholder/bagholder:latest "ghcr.io/professorbagholder/bagholder:$version"
+          docker buildx imagetools inspect ghcr.io/professorbagholder/bagholder:latest
       - name: Publish the release as the latest
         run: |
           if [ "$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft)" = "true" ]; then
