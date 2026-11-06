@@ -94,6 +94,33 @@ test('an expired sign-in in front of Bagholder loads the page again once, and no
   expect(loads).toBe(2)
 })
 
+// The owner, 2026-11-06: "TypeError: Failed to fetch" under the filter's search, on
+// a listing's chart and for its short interest. The stream, opened before the sign-in
+// in front expired, still ran, and every new request was sent to the sign-in's page,
+// another origin, which the browser reports as no answer at all.
+test('a request an expired sign-in sends away says so in words, and the sign-in renews once the field is left', async ({ page, request }) => {
+  let expired = false
+  await stream(page, request, () => 'serve')
+  await signIn(page, () => expired)
+  await page.route('**/api/symbols/search?*', (route) => (expired ? route.fulfill({ status: 302, headers: { location: 'https://team.example.com/cdn-cgi/access/login/page' } }) : route.fallback()))
+  let loads = 0
+  page.on('request', (r) => { if (r.resourceType() === 'document' && new URL(r.url()).pathname === '/') loads++ })
+  await page.goto('/#trades')
+  await ready(page)
+  expired = true
+  await page.keyboard.press('ControlOrMeta+k')
+  await expect(page.getByLabel('Search', { exact: true })).toBeFocused()
+  await page.keyboard.type('ZQV')
+  await expect(page.locator('.pop .status-err').first()).toHaveText('Signing in again…')
+  await expect(line(page)).toContainText('Signing in again…')
+  await expect(page.getByText('Failed to fetch', { exact: false })).toHaveCount(0)
+  // not while the field is in use
+  await page.waitForTimeout(1000)
+  expect(loads).toBe(1)
+  await page.keyboard.press('Escape')
+  await expect.poll(() => loads, { timeout: 5_000 }).toBe(2)
+})
+
 test('the page waits to load itself again while a dialog is open, and loads once it closes', async ({ page, request }) => {
   let expired = false
   await stream(page, request, () => (expired ? 'sign-in' : 'serve'))

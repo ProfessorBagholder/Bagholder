@@ -74,7 +74,37 @@ export function request<T = Record<string, unknown>>(method: 'GET' | 'POST', pat
   }
   return fetch(path, opts)
     .then((r) => answered<T>(r))
-    .catch((e: unknown) => failure(String(e)))
+    .catch((e: unknown) => unanswered(e))
+}
+
+/** What the page shows while the sign-in in front of Bagholder renews. */
+export const RENEWING = 'Signing in again…'
+/** What a request no one answered says. */
+export const UNREACHABLE = 'Could not reach Bagholder.'
+
+// the stream's renewal (live.svelte.ts), which this module cannot import
+let expired: () => void = () => {}
+
+/** What to do when a request finds the sign-in in front of Bagholder expired. */
+export function onSignInExpired(go: () => void): void {
+  expired = go
+}
+
+/**
+ * A request that had no answer, in words, never the browser's own text ("Failed to
+ * fetch"). An expired sign-in in front of Bagholder refuses every new request with
+ * a redirect to its login page while the stream, opened before, still runs, so the
+ * page asks which it is: an expired sign-in is renewed as a refused stream's is
+ * (docs/plans/sign-in-renews-itself.md), and anything else is said as Bagholder out
+ * of reach. A request the page itself stopped says so as before.
+ */
+function unanswered<T>(e: unknown): Promise<Answer<T>> {
+  if (e instanceof DOMException && e.name === 'AbortError') return Promise.resolve(failure(String(e)))
+  return signInState().then((at) => {
+    if (at !== 'expired') return failure(UNREACHABLE)
+    expired()
+    return failure(RENEWING)
+  })
 }
 
 /**

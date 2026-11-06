@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { call, get, post, query } from './api'
+import { call, get, onSignInExpired, post, query, RENEWING, UNREACHABLE } from './api'
 import { searchSymbols } from './reads.svelte'
 
 const sources = import.meta.glob('/src/**/*.{ts,svelte}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
@@ -77,8 +77,38 @@ describe('the one way to the server', () => {
   it('answers a failure in the server\'s own shape, and never throws', async () => {
     vi.stubGlobal('fetch', vi.fn(async () => new Response(JSON.stringify({ ok: false, error: 'symbol required' }), { status: 400 })))
     expect(await get('/api/filings')).toEqual({ ok: false, error: 'symbol required' })
+    // nothing answered, and the status asked after it neither: out of reach, in words
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
-    expect(await get('/api/status')).toEqual({ ok: false, error: 'TypeError: Failed to fetch' })
+    expect(await get('/api/status')).toEqual({ ok: false, error: UNREACHABLE })
+  })
+
+  // the browser's "Failed to fetch" never shown: a request an expired sign-in in front
+  // of Bagholder sent to its login page (another origin, so no answer the page may
+  // read) has the sign-in renewed, as a refused stream does
+  it('renews an expired sign-in a request ran into, and says so in words', async () => {
+    let renewed = 0
+    onSignInExpired(() => renewed++)
+    const fetched = vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.redirect === 'manual') return { type: 'opaqueredirect', status: 0 } as Response
+      throw new TypeError('Failed to fetch')
+    })
+    vi.stubGlobal('fetch', fetched)
+    expect(await get('/api/symbols/search', { q: 'ZZQT' })).toEqual({ ok: false, error: RENEWING })
+    expect(renewed).toBe(1)
+    expect(fetched.mock.calls.map((c) => c[0])).toEqual(['/api/symbols/search?q=ZZQT', '/api/status'])
+    // Bagholder answers its status: the request was lost on the way, said as out of reach
+    vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
+      if (init?.redirect === 'manual') return new Response(JSON.stringify({ ok: true }))
+      throw new TypeError('Failed to fetch')
+    }))
+    expect(await get('/api/symbols/search', { q: 'ZZQT' })).toEqual({ ok: false, error: UNREACHABLE })
+    expect(renewed).toBe(1)
+    // a request the page stopped is not asked about
+    const stopped = vi.fn(async () => { throw new DOMException('The operation was aborted.', 'AbortError') })
+    vi.stubGlobal('fetch', stopped)
+    expect((await get('/api/filings')).error).toContain('AbortError')
+    expect(stopped).toHaveBeenCalledTimes(1)
+    onSignInExpired(() => {})
   })
 
   it('reads an answer strictly: a refusal without a reason, a failed status and an unreadable body are failures', async () => {
