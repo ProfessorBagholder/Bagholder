@@ -260,16 +260,27 @@ jobs:
   # one order through the page's own path (e2e/dryorder.spec.ts): docker.yml builds it
   # only on a tag, so an image that no longer builds, starts or serves would otherwise
   # first fail at a release.
+  # The image is built from binaries compiled here, as a release builds its image from
+  # the binaries it compiled (`BINARIES=prebuilt`), never by a compile inside Docker,
+  # which no cache carried from one change to the next. They are a debug build, on
+  # master's cache (`suite-cache.yml`, image); the image a release pushes is checked
+  # by the release run before it is published (`release.yml`, image-check). On Ubuntu
+  # 22.04, as a release's Linux binaries are built, so they run on the image's Debian.
   container:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
+    # no debug info: a quicker build and a smaller image, with master's cache built so
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-      # master's, as the suite's (the rust job)
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev pkg-config libssl-dev
+      # master's (suite-cache.yml, image)
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
-          shared-key: demo-server
+          shared-key: image
           save-if: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
@@ -286,15 +297,26 @@ jobs:
         run: |
           cargo build --locked --bin bagholder --features demo
           target/debug/bagholder demo "$RUNNER_TEMP/book"
+      - name: The image's binaries
+        working-directory: rust
+        run: |
+          cargo build --locked --bin bagholder --bin bagholder-browser --bin sedar
+          mkdir -p prebuilt/amd64
+          cp target/debug/bagholder target/debug/bagholder-browser target/debug/sedar prebuilt/amd64/
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      # the system packages and the page from master's cache, the binaries from above
       - name: The image builds
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
           file: rust/Dockerfile
+          build-args: BINARIES=prebuilt
           load: true
           tags: bagholder:ci
-          cache-from: type=gha,scope=image
+          cache-from: |
+            type=gha,scope=image-runtime
+            type=gha,scope=image-web
+            type=gha,scope=image
           cache-to: type=gha,scope=image,mode=max
       # the port the same inside and out, as docker-compose.yml publishes it
       - name: The image starts on the book
@@ -407,8 +429,13 @@ jobs:
           ask made-up-token | grep -q '^HTTP/1.1 401'
           BAGHOLDER_PORT=8792 docker compose $files down
           sudo rm -rf "$RUNNER_TEMP/updated"
-      - name: Who the image answers, on a local network and from the internet, directly and through Traefik, Caddy and nginx
-        run: sh bin/container-network.test.sh bagholder:ci
+      # as the release run checks its own image before it is published: healthy as
+      # its own user, its page, its version, and who it answers on a local network and
+      # from the internet, directly and through Traefik, Caddy and nginx
+      - name: The image checked as a release checks its own
+        run: |
+          this=$(sed -n 's/^pub const APP_VERSION: &str = "\(.*\)";$/\1/p' rust/crates/server/src/app.rs)
+          sh bin/image-check.sh bagholder:ci "$this"
       # The button end to end (docs/plans/docker-update-button.md): a copy running the
       # shipped compose with its updater is offered a release, the button is pressed in
       # a real browser, the updater pulls the next image and replaces the container,

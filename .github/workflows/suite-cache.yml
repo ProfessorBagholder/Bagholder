@@ -10,6 +10,7 @@ on:
     branches: [master]
     paths:
       - 'rust/**'
+      - 'web/**'
       - '.github/workflows/tests.yml'
       - '.github/workflows/suite-cache.yml'
 
@@ -50,8 +51,49 @@ jobs:
           cargo build --locked --bin bagholder
           cargo clippy --locked --workspace --lib --bins --features bagholder-ws/standin
         working-directory: rust
-      # what `tests.yml`'s browser and container jobs build
+      # what `tests.yml`'s browser job builds
       - name: The server with the made-up book
         if: matrix.key == 'demo-server' && steps.cache.outputs.cache-hit != 'true'
         run: cargo build --locked --bin bagholder --features demo
         working-directory: rust
+
+  # What `tests.yml`'s container job builds: the image's binaries (a debug build, on
+  # Ubuntu 22.04 as a release's are) and the made-up book's, and the image's system
+  # packages and page, the layers every change's image shares.
+  image:
+    runs-on: ubuntu-22.04
+    # as tests.yml's container job builds
+    env:
+      CARGO_PROFILE_DEV_DEBUG: "0"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - name: Build tools
+        run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev pkg-config libssl-dev
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        id: cache
+        with:
+          workspaces: rust
+          shared-key: image
+      - name: The image's binaries and the made-up book's
+        if: steps.cache.outputs.cache-hit != 'true'
+        run: |
+          cargo build --locked --bin bagholder --bin bagholder-browser --bin sedar
+          cargo build --locked --bin bagholder --features demo
+        working-directory: rust
+      - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+      # each kept under a scope of its own, so neither replaces the other's
+      - name: The image's system packages
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: rust/Dockerfile
+          target: runtime
+          cache-to: type=gha,scope=image-runtime,mode=max
+      - name: The image's page
+        uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
+        with:
+          context: .
+          file: rust/Dockerfile
+          target: web
+          cache-to: type=gha,scope=image-web,mode=max
