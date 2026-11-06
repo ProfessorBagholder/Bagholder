@@ -54,7 +54,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 # a refused request says the reason alone, not axum's wrapper around it
 serde_urlencoded = "0.7"
 tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["catch-panic", "limit", "set-header", "timeout"] }
+tower-http = { version = "0.7", features = ["catch-panic", "limit", "set-header", "timeout"] }
 # streams for response bodies (the event stream, the sign-in frames)
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 
