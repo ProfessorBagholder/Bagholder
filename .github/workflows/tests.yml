@@ -135,6 +135,71 @@ jobs:
         run: cargo test --locked -p bagholder-server --bin bagholder capacity::tests
         working-directory: rust
 
+  # The pull request's plants (bin/plants.py): each a bug put in on purpose, one exact
+  # replacement in one file, which the test it names must catch; the tree is put back
+  # after each. Its description carries them as one fenced block tagged `plants`, read
+  # when the job runs, so a run again after the description is edited reads the edited
+  # one; with none, nothing is built. Cargo plants are built as the suite builds, on its
+  # cache, browser plants as the browser job does, on its own. The table is the job's
+  # summary.
+  plants:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    # the description, read when the job runs
+    permissions:
+      contents: read
+      pull-requests: read
+    # a backstop: each command a plant runs has its own limit (bin/plants.py, LIMIT)
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        kind: [cargo, spec]
+    env:
+      KIND: ${{ matrix.kind }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: The plant runner's own test
+        if: matrix.kind == 'cargo'
+        run: python3 bin/plants_test.py
+      - name: The pull request's plants
+        id: read
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ github.event.pull_request.number }}
+        run: |
+          gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.body // ""' > "$RUNNER_TEMP/body.md"
+          echo "count=$(python3 bin/plants.py count "$RUNNER_TEMP/body.md" "$KIND")" >> "$GITHUB_OUTPUT"
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        if: steps.read.outputs.count != '0'
+      # master's, as the suite's and the browser job's
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        if: steps.read.outputs.count != '0'
+        with:
+          workspaces: rust
+          shared-key: ${{ matrix.kind == 'cargo' && 'suite' || 'demo-server' }}
+          save-if: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: matrix.kind == 'spec' && steps.read.outputs.count != '0'
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - name: The page's packages and the browser the specs drive
+        if: matrix.kind == 'spec' && steps.read.outputs.count != '0'
+        run: npm ci && npx playwright install --with-deps chromium
+        working-directory: web
+      # with the suite's flags, so the suite's cache is the build's
+      - name: Each plant put in, its test run, and the tree put back
+        if: matrix.kind == 'cargo' && steps.read.outputs.count != '0'
+        env:
+          CI: "true"
+          RUSTFLAGS: "-D warnings"
+        run: python3 bin/plants.py run "$RUNNER_TEMP/body.md" cargo
+      - name: Each browser plant put in, its spec run, and the tree put back
+        if: matrix.kind == 'spec' && steps.read.outputs.count != '0'
+        run: python3 bin/plants.py run "$RUNNER_TEMP/body.md" spec
+
   web:
     runs-on: ubuntu-latest
     defaults:
