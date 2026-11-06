@@ -7,9 +7,14 @@ import { modelDoc, ready, streamBody } from './helpers'
 // The stand-in stream ends after its documents and the browser connects again
 // every 200 ms, so each change to what the stand-in answers is met at once.
 
-type Answer = 'serve' | 'refuse' | 'sign-in'
+type Answer = 'serve' | 'refuse' | 'sign-in' | 'hold'
 
-/** The page's stream stood in for: served, refused as a proxy refuses it, or sent to a sign-in elsewhere. */
+/**
+ * The page's stream stood in for: served, refused as a proxy refuses it, sent to a
+ * sign-in elsewhere, or held unanswered: the stand-in's stream ends after its
+ * documents and the browser connects again, where a real one stays open, so `hold`
+ * is a stream that stays open, with no new hello to say it opened again.
+ */
 async function stream(page: Page, request: Parameters<typeof modelDoc>[0], answer: () => Answer): Promise<{ asked: () => number }> {
   const model = await modelDoc(request)
   let asked = 0
@@ -18,6 +23,7 @@ async function stream(page: Page, request: Parameters<typeof modelDoc>[0], answe
     const a = answer()
     if (a === 'refuse') return route.fulfill({ status: 502, contentType: 'text/plain', body: 'Bad gateway' })
     if (a === 'sign-in') return route.fulfill({ status: 302, headers: { location: 'https://team.example.com/cdn-cgi/access/login/page' } })
+    if (a === 'hold') return new Promise<void>(() => {})
     return route.fulfill({ status: 200, contentType: 'text/event-stream', body: streamBody(model) })
   })
   await page.route('**/api/events/watch', (route) => route.fallback())
@@ -100,7 +106,8 @@ test('an expired sign-in in front of Bagholder loads the page again once, and no
 // another origin, which the browser reports as no answer at all.
 test('a request an expired sign-in sends away says so in words, and the sign-in renews once the field is left', async ({ page, request }) => {
   let expired = false
-  await stream(page, request, () => 'serve')
+  // the stream, opened before the sign-in expired, stays open
+  await stream(page, request, () => (expired ? 'hold' : 'serve'))
   await signIn(page, () => expired)
   await page.route('**/api/symbols/search?*', (route) => (expired ? route.fulfill({ status: 302, headers: { location: 'https://team.example.com/cdn-cgi/access/login/page' } }) : route.fallback()))
   let loads = 0
