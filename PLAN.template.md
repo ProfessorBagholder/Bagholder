@@ -1,6 +1,6 @@
 # Plan: <one line: what changes and why>
 
-A done-contract for a heavy lift (the gate in `CLAUDE.md`). Copy this file per plan; do not edit the template in place. Push the plan to `docs/plans/` before building; the reviewer's verdict comes back as the next brief. If the contract turns out to conflict with `SPEC.md`, `docs/decisions.md` or the code, stop and say so (*Right to refuse*).
+A done-contract for a heavy lift (the gate in `CLAUDE.md`). Copy this file per plan; do not edit the template in place. The plan goes in the build PR (its description, or `docs/plans/<name>.md` in the same PR); a real design choice in it goes to the reviewer as a message first, and its ruling comes back the same way. If the contract turns out to conflict with `SPEC.md`, `docs/decisions.md` or the code, stop and say so (*Right to refuse*).
 
 ## For the owner to decide
 

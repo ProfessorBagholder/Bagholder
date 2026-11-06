@@ -1419,10 +1419,6 @@ mod tests {
     const BROAD: Size = Size { accounts: SMALL.accounts * 32, instruments: SMALL.instruments * 32, trades: SMALL.trades * 32, ..SMALL };
     const DEEP: Size = Size { deep: 320, ..SMALL };
 
-    /// The made-up book is the same book on every run: nothing in the capacity tool
-    /// reads the clock, the measuring of time aside (`Instant`). A read of the
-    /// clock walked each family to the real today, and a contract expiring after
-    /// the made-up today changed the book (2026-10-30).
     /// The parts of a run make every measurement once, however many parts there
     /// are: none left out and none made twice (`capacity.yml` runs three).
     #[test]
@@ -1462,6 +1458,10 @@ mod tests {
         }
     }
 
+    /// The made-up book is the same book on every run: nothing in the capacity tool
+    /// reads the clock, the measuring of time aside (`Instant`). A read of the
+    /// clock walked each family to the real today, and a contract expiring after
+    /// the made-up today changed the book (2026-10-30).
     #[test]
     fn the_capacity_tool_reads_no_clock() {
         let source = include_str!("capacity.rs");
