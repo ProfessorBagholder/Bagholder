@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { call, get, onSignInExpired, post, query, RENEWING, UNREACHABLE } from './api'
+import { call, get, NOT_SAVED, onSignInExpired, post, query, RENEWING, UNREACHABLE } from './api'
 import { searchSymbols } from './reads.svelte'
 
 const sources = import.meta.glob('/src/**/*.{ts,svelte}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>
@@ -96,13 +96,16 @@ describe('the one way to the server', () => {
     expect(await get('/api/symbols/search', { q: 'ZZQT' })).toEqual({ ok: false, error: RENEWING })
     expect(renewed).toBe(1)
     expect(fetched.mock.calls.map((c) => c[0])).toEqual(['/api/symbols/search?q=ZZQT', '/api/status'])
+    // a write says it was not saved, never that it is under way
+    expect(await post('/api/notes', { text: 'a note' })).toEqual({ ok: false, error: NOT_SAVED })
+    expect(renewed).toBe(2)
     // Bagholder answers its status: the request was lost on the way, said as out of reach
     vi.stubGlobal('fetch', vi.fn(async (path: string, init?: RequestInit) => {
       if (init?.redirect === 'manual') return new Response(JSON.stringify({ ok: true }))
       throw new TypeError('Failed to fetch')
     }))
     expect(await get('/api/symbols/search', { q: 'ZZQT' })).toEqual({ ok: false, error: UNREACHABLE })
-    expect(renewed).toBe(1)
+    expect(renewed).toBe(2)
     // a request the page stopped is not asked about
     const stopped = vi.fn(async () => { throw new DOMException('The operation was aborted.', 'AbortError') })
     vi.stubGlobal('fetch', stopped)

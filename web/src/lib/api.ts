@@ -74,11 +74,13 @@ export function request<T = Record<string, unknown>>(method: 'GET' | 'POST', pat
   }
   return fetch(path, opts)
     .then((r) => answered<T>(r))
-    .catch((e: unknown) => unanswered(e))
+    .catch((e: unknown) => unanswered(e, method))
 }
 
 /** What the page shows while the sign-in in front of Bagholder renews. */
 export const RENEWING = 'Signing in again…'
+/** What a write the renewing sign-in turned away says: it was not saved, and is sent again by the person. */
+export const NOT_SAVED = 'Not saved: signing in again. Send it again once the page has loaded.'
 /** What a request no one answered says. */
 export const UNREACHABLE = 'Could not reach Bagholder.'
 
@@ -98,12 +100,14 @@ export function onSignInExpired(go: () => void): void {
  * (docs/plans/sign-in-renews-itself.md), and anything else is said as Bagholder out
  * of reach. A request the page itself stopped says so as before.
  */
-function unanswered<T>(e: unknown): Promise<Answer<T>> {
+function unanswered<T>(e: unknown, method: 'GET' | 'POST'): Promise<Answer<T>> {
   if (e instanceof DOMException && e.name === 'AbortError') return Promise.resolve(failure(String(e)))
   return signInState().then((at) => {
     if (at !== 'expired') return failure(UNREACHABLE)
     expired()
-    return failure(RENEWING)
+    // a write never reads as under way: the page loads itself again, and what was
+    // sent is not there
+    return failure(method === 'POST' ? NOT_SAVED : RENEWING)
   })
 }
 
