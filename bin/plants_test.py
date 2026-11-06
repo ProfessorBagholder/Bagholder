@@ -37,15 +37,22 @@ class Read(unittest.TestCase):
 
     def test_a_block_reads_as_plants_of_each_kind(self) -> None:
         got = plants.read(block('[{"name": "n", "file": "a.rs", "old": "x", "new": "y", "cargo": ["-p", "c", "--test", "t"]},'
-                                ' {"name": "m", "file": "w.ts", "old": "a", "new": "", "spec": ["e2e/s.spec.ts"]}]'))
-        self.assertEqual(got, [plants.Plant("n", "a.rs", "x", "y", "cargo", ("-p", "c", "--test", "t")), plants.Plant("m", "w.ts", "a", "", "spec", ("e2e/s.spec.ts",))])
+                                ' {"name": "m", "file": "w.ts", "old": "a", "new": "", "spec": ["e2e/s.spec.ts"]},'
+                                ' {"name": "u", "file": "p.ts", "old": "b", "new": "c", "vitest": ["src/lib/p.test.ts", "-t", "waits"]}]'))
+        self.assertEqual(got, [
+            plants.Plant("n", "a.rs", "x", "y", "cargo", ("-p", "c", "--test", "t")),
+            plants.Plant("m", "w.ts", "a", "", "spec", ("e2e/s.spec.ts",)),
+            plants.Plant("u", "p.ts", "b", "c", "vitest", ("src/lib/p.test.ts", "-t", "waits")),
+        ])
+        # each kind run as the suite runs it: a page unit test with nothing to build first
+        self.assertEqual(plants.steps(got[2]), plants.Steps(build=(), test=(("npx", "vitest", "run", "src/lib/p.test.ts", "-t", "waits"), "web")))
 
     def test_a_block_that_cannot_be_read_is_refused_in_words(self) -> None:
         for items, says in [
             ("[{", "not JSON"),
             ('{"name": "n"}', "a JSON list"),
-            ('[{"name": "n", "file": "a.rs", "old": "x", "new": "y"}]', "one of cargo or spec"),
-            ('[{"name": "n", "file": "a.rs", "old": "x", "new": "y", "cargo": ["t"], "spec": ["s"]}]', "one of cargo or spec"),
+            ('[{"name": "n", "file": "a.rs", "old": "x", "new": "y"}]', "one of cargo, spec or vitest"),
+            ('[{"name": "n", "file": "a.rs", "old": "x", "new": "y", "cargo": ["t"], "spec": ["s"]}]', "one of cargo, spec or vitest"),
             ('[{"name": "n", "file": "a.rs", "old": "", "new": "y", "cargo": ["t"]}]', "old is empty"),
             ('[{"name": "n", "file": "a.rs", "old": "x", "new": "y", "cargo": []}]', "a list of arguments"),
             ('[{"name": "n", "file": "../a.rs", "old": "x", "new": "y", "cargo": ["t"]}]', "inside the repository"),
@@ -81,6 +88,13 @@ class Run(unittest.TestCase):
     def test_a_real_plant_is_caught(self) -> None:
         r = self.judged("x * 2", "x + 2")
         self.assertEqual((r.verdict, r.detail), ("caught", "doubles"))
+
+    def test_a_page_unit_test_failing_is_caught_by_the_test_it_names(self) -> None:
+        r = self.judged("x * 2", "x + 2", "print(' FAIL  src/lib/a.test.ts > the page > doubles'); print('   × doubles 3ms'); raise SystemExit(1)")
+        self.assertEqual(r.verdict, "caught")
+        self.assertIn("src/lib/a.test.ts > the page > doubles", r.detail)
+        r = self.judged("x * 2", "x + 2", "print('No test files found, exiting with code 1'); raise SystemExit(1)")
+        self.assertEqual(r.verdict, "did not run")
 
     def test_a_spec_failing_is_caught_by_the_test_it_names(self) -> None:
         r = self.judged("x * 2", "x + 2", "print('  ✘  1 [app] › e2e/a.spec.ts:3:1 › doubles (1.2s)'); print('  1 failed'); raise SystemExit(1)")

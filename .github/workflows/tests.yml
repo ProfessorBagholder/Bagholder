@@ -173,7 +173,8 @@ jobs:
   # after each. Its description carries them as one fenced block tagged `plants`, read
   # when the job runs, so a run again after the description is edited reads the edited
   # one; with none, nothing is built. Cargo plants are built as the suite builds, on its
-  # cache, browser plants as the browser job does, on its own. The table is the job's
+  # cache, browser plants as the browser job does, on its own, and the page's unit-test
+  # plants run as the web job runs them. The table is the job's
   # summary.
   plants:
     if: github.event_name == 'pull_request'
@@ -187,7 +188,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        kind: [cargo, spec]
+        kind: [cargo, spec, vitest]
     env:
       KIND: ${{ matrix.kind }}
     steps:
@@ -204,23 +205,27 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/pulls/$PR" --jq '.body // ""' > "$RUNNER_TEMP/body.md"
           echo "count=$(python3 bin/plants.py count "$RUNNER_TEMP/body.md" "$KIND")" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-        if: steps.read.outputs.count != '0'
+        if: matrix.kind != 'vitest' && steps.read.outputs.count != '0'
       # master's, as the suite's and the browser job's
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
-        if: steps.read.outputs.count != '0'
+        if: matrix.kind != 'vitest' && steps.read.outputs.count != '0'
         with:
           workspaces: rust
           shared-key: ${{ matrix.kind == 'cargo' && 'suite' || 'demo-server' }}
           save-if: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        if: matrix.kind == 'spec' && steps.read.outputs.count != '0'
+        if: matrix.kind != 'cargo' && steps.read.outputs.count != '0'
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: The page's packages and the browser the specs drive
+      - name: The page's packages
+        if: matrix.kind != 'cargo' && steps.read.outputs.count != '0'
+        run: npm ci
+        working-directory: web
+      - name: The browser the specs drive
         if: matrix.kind == 'spec' && steps.read.outputs.count != '0'
-        run: npm ci && npx playwright install --with-deps chromium
+        run: npx playwright install --with-deps chromium
         working-directory: web
       # with the suite's flags, so the suite's cache is the build's
       - name: Each plant put in, its test run, and the tree put back
@@ -232,6 +237,9 @@ jobs:
       - name: Each browser plant put in, its spec run, and the tree put back
         if: matrix.kind == 'spec' && steps.read.outputs.count != '0'
         run: python3 bin/plants.py run "$RUNNER_TEMP/body.md" spec
+      - name: Each page plant put in, its unit test run, and the tree put back
+        if: matrix.kind == 'vitest' && steps.read.outputs.count != '0'
+        run: python3 bin/plants.py run "$RUNNER_TEMP/body.md" vitest
 
   web:
     runs-on: ubuntu-latest

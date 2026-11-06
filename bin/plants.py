@@ -4,21 +4,22 @@
 A plant is a bug put in on purpose: one exact replacement in one file, and the test
 that must catch it. The pull request's description carries its plants as one fenced
 block tagged `plants`, a JSON list of `{name, file, old, new, cargo: [...]}`, the
-arguments of a `cargo test`, or `{..., spec: [...]}`, the arguments of a
-`playwright test`. A plant is caught when the tree built with it and its test failed,
+arguments of a `cargo test`, `{..., spec: [...]}`, the arguments of a `playwright
+test`, or `{..., vitest: [...]}`, the arguments of a `vitest run` of the page's unit
+tests (a file, and `-t` and a test's name). A plant is caught when the tree built with it and its test failed,
 naming the test that failed; one not applied (its `old` found other than once), one
 the tree did not compile with, one whose test failed naming no test (nothing ran:
 a spec path mistyped, a filter that matches nothing, a server that never started),
 one that ran past its limit, and one its test did not catch each fail the run. That
-the named tests pass without the plants is the suite's to prove (tests.yml, rust and
-browser). The table goes to the job's summary (tests.yml, plants).
+the named tests pass without the plants is the suite's to prove (tests.yml, rust,
+browser and web). The table goes to the job's summary (tests.yml, plants).
 
 Cargo plants build with the suite's flags (`-D warnings`), so the suite's cache is
 their build: a plant builds without a warning, and one that leaves an unused variable
 reads `did not compile`, the warning its detail.
 
-    python3 bin/plants.py count <body.md> <cargo|spec>   how many plants of that kind
-    python3 bin/plants.py run <body.md> <cargo|spec>     run them, from the repository's root
+    python3 bin/plants.py count <body.md> <cargo|spec|vitest>   how many plants of that kind
+    python3 bin/plants.py run <body.md> <cargo|spec|vitest>     run them, from the repository's root
 """
 
 from __future__ import annotations
@@ -34,8 +35,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Literal
 
-Kind = Literal["cargo", "spec"]
-KINDS: tuple[Kind, ...] = ("cargo", "spec")
+Kind = Literal["cargo", "spec", "vitest"]
+KINDS: tuple[Kind, ...] = ("cargo", "spec", "vitest")
 Verdict = Literal["caught", "not applied", "did not compile", "did not run", "timed out", "not caught"]
 
 # Each build or test command's limit: a plant can make its test wait for ever (a wait
@@ -48,6 +49,8 @@ LIMIT = 30 * 60
 # line, its `1) [project] › file › title` heading or its `N failed` count
 CARGO_FAILED = re.compile(r"^test (\S+) \.\.\. FAILED$")
 SPEC_FAILED = re.compile(r"^(✘.*|\d+\) \[.*› .*|[1-9]\d* failed\b.*)$")
+# and vitest's `FAIL  <file> > <describe> > <test>` heading or its `×` line
+VITEST_FAILED = re.compile(r"^(FAIL\s+\S+\s+>\s.*|×\s.*)$")
 
 BLOCK = re.compile(r"^```plants[ \t]*\r?\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
@@ -105,7 +108,7 @@ def plant(n: int, item: object) -> Plant:
         raise PlantsError(f"plant {n} is not an object")
     kinds = [k for k in KINDS if k in item]
     if len(kinds) != 1:
-        raise PlantsError(f"plant {n} names its test as one of cargo or spec")
+        raise PlantsError(f"plant {n} names its test as one of cargo, spec or vitest")
     extra = set(item) - {"name", "file", "old", "new", kinds[0]}
     if extra:
         raise PlantsError(f"plant {n} has fields a plant has not: {', '.join(sorted(extra))}")
@@ -127,6 +130,10 @@ def steps(p: Plant) -> Steps:
     """The build and the test of a plant of each kind, as the suite runs them."""
     if p.kind == "cargo":
         return Steps(build=((("cargo", "test", "--locked", "--no-run", *p.args), "rust"),), test=(("cargo", "test", "--locked", *p.args), "rust"))
+    # vitest builds what it tests as it runs: a page that does not build fails naming
+    # no test, which is `did not run`
+    if p.kind == "vitest":
+        return Steps(build=(), test=(("npx", "vitest", "run", *p.args), "web"))
     # the page is built into the server, so the page is built first
     return Steps(
         build=((("npx", "vite", "build"), "web"), (("cargo", "build", "--locked", "--bin", "bagholder", "--features", "demo"), "rust")),
@@ -172,7 +179,7 @@ def failures(out: str) -> list[str]:
     """The failed tests a test command's output names."""
     lines = [l.strip() for l in out.splitlines()]
     cargo = sorted({m.group(1) for l in lines if (m := CARGO_FAILED.match(l))})
-    return cargo + [l for l in lines if SPEC_FAILED.match(l)]
+    return cargo + [l for l in lines if SPEC_FAILED.match(l) or VITEST_FAILED.match(l)]
 
 
 def said(out: str, marks: tuple[str, ...]) -> str:

@@ -13,6 +13,7 @@
   import { ICONS } from './icons'
   import { searchSymbols } from './reads.svelte'
   import { rememberListing } from './listing.svelte'
+  import { tickerPage } from './tickerPage'
 
   // `field` opens the popover straight at one field's editor (for a chip's Edit /
   // ledger chipEdit: 'search' → the fields view, any other key → that field). The
@@ -210,13 +211,25 @@
     }, 500)
   }
 
-  // A symbol row goes to its ticker's page: the holding's where the book holds the instrument, the listing's own otherwise.
+  // A symbol row goes to its ticker's page: the holding's where the book holds the
+  // instrument, the listing's own otherwise; with the holdings not read yet, the
+  // choice waits for them (`tickerPage`), the popover open and saying so.
+  let opening = $state<{ symbol: string; exchange: string; instrument: string; kind: string } | null>(null)
   function listingOpen(symbol: string, exchange: string, instrument = '', kind = '') {
+    const to = tickerPage(instrument, positions.data?.positions)
+    if (to === 'wait') {
+      opening = { symbol, exchange, instrument, kind }
+      return
+    }
+    opening = null
     onclose()
-    const held = instrument ? positions.data?.positions.find((p) => p.instrument === instrument) : undefined
-    if (held) goSub('portfolio', held.id)
-    else goSub('markets', rememberListing({ symbol, exchange, kind }))
+    if (to === 'markets') goSub('markets', rememberListing({ symbol, exchange, kind }))
+    else goSub('portfolio', to.holding)
   }
+  // the holdings read: the ticker chosen meanwhile opens where they say
+  $effect(() => {
+    if (opening && positions.data) listingOpen(opening.symbol, opening.exchange, opening.instrument, opening.kind)
+  })
   // A row of the book trades its own instrument; a row a directory gave trades the
   // symbol on the venue it names. Never a ticker alone.
   function tradeBook(instrument: string, side: 'BUY' | 'SELL') {
@@ -381,6 +394,7 @@
             {/if}
           {/each}
         </div>
+        {#if opening}<div class="muted" style="padding:4px 7px 2px;font-size:12px">Reading your holdings…</div>{/if}
         {#if extError}<div class="status-err" style="padding:4px 7px 2px;font-size:12px">{extError}</div>{/if}
       {:else}
         {#if extError}<div class="status-err" style="padding:2px 7px 8px;font-size:12px">{extError}</div>
