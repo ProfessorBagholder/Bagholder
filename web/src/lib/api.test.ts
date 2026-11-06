@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { call, get, NOT_SAVED, onSignInExpired, post, query, RENEWING, UNREACHABLE } from './api'
+import { call, get, NOT_SAVED, post, query, RENEWING, UNREACHABLE } from './api'
+import { onSignInExpired } from './signin'
 import { searchSymbols } from './reads.svelte'
 
 const sources = import.meta.glob('/src/**/*.{ts,svelte}', { query: '?raw', import: 'default', eager: true }) as Record<string, string>

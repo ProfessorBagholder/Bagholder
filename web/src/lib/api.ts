@@ -12,6 +12,7 @@
 // stream (live.ts); this is for what the person does, and for the few things looked
 // up on demand.
 
+import { signInExpired } from './signin'
 import type { Routes } from './generated/routes'
 
 /** A request that failed: the server's reason, or why it was never answered. Never empty. */
@@ -84,14 +85,6 @@ export const NOT_SAVED = 'Not saved: signing in again. Send it again once the pa
 /** What a request no one answered says. */
 export const UNREACHABLE = 'Could not reach Bagholder.'
 
-// the stream's renewal (live.svelte.ts), which this module cannot import
-let expired: () => void = () => {}
-
-/** What to do when a request finds the sign-in in front of Bagholder expired. */
-export function onSignInExpired(go: () => void): void {
-  expired = go
-}
-
 /**
  * A request that had no answer, in words, never the browser's own text ("Failed to
  * fetch"). An expired sign-in in front of Bagholder refuses every new request with
@@ -104,7 +97,7 @@ function unanswered<T>(e: unknown, method: 'GET' | 'POST'): Promise<Answer<T>> {
   if (e instanceof DOMException && e.name === 'AbortError') return Promise.resolve(failure(String(e)))
   return signInState().then((at) => {
     if (at !== 'expired') return failure(UNREACHABLE)
-    expired()
+    signInExpired()
     // a write never reads as under way: the page loads itself again, and what was
     // sent is not there
     return failure(method === 'POST' ? NOT_SAVED : RENEWING)

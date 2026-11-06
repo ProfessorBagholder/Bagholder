@@ -12,7 +12,8 @@
 //
 // Nothing here polls. There is no timer in this file.
 
-import { onSignInExpired, post, signInState } from './api'
+import { post, signInState } from './api'
+import { onSignInExpired } from './signin'
 import { PROTOCOL } from './protocol'
 import { ROW_KEYS } from './generated/keys'
 import { bookIs, kept, keptLatest, keptRead, lastBook, readKept, save } from './kept'
