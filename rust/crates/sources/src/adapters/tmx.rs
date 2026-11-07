@@ -7,7 +7,13 @@
 //! symbol answered on another venue than the one asked is another listing, and is
 //! refused by the caller against the venue the book names.
 //!
-//! **Quotes.** A halted listing is answered with a null price: TMX states it has
+//! **Quotes.** Up to twenty listings are asked in one request, each its own
+//! `getQuoteBySymbol` under an alias of its place (`q0`, `q1`, …), read as one
+//! listing's quote. An alias TMX does not know answers null with an error naming
+//! its alias and code 404: not carried. Any other error naming an alias fails
+//! that listing alone; the others still answer.
+//!
+//! A halted listing is answered with a null price: TMX states it has
 //! no price now, and the price read last stands. The schedule the quote states
 //! (`dividendFrequency`) is read for the payer's record alone: a word this reader
 //! does not know is that record's mismatch, and leaves the price standing. The
@@ -42,7 +48,12 @@ pub const PACE: bagholder_net::Pace = bagholder_net::Pace { gap: std::time::Dura
 const URL: &str = "https://app-money.tmx.com/graphql";
 const HEADERS: [(&str, &str); 5] = [("Content-Type", "application/json"), ("locale", "en"), ("Origin", "https://money.tmx.com"), ("Referer", "https://money.tmx.com/"), ("User-Agent", "Mozilla/5.0")];
 
-const QUOTE: &str = "query getQuoteBySymbol($symbol: String, $locale: String) { getQuoteBySymbol(symbol: $symbol, locale: $locale) { symbol name exchangeName exchangeCode price priceChange percentChange prevClose currency datetime dividendFrequency exDividendDate } }";
+/// The fields one listing's quote is asked for.
+const QUOTE_FIELDS: &str = "symbol name exchangeName exchangeCode price priceChange percentChange prevClose currency datetime dividendFrequency exDividendDate";
+/// The most listings one quote request asks for. TMX states no limit: twenty,
+/// the spark's, keeps each request's query near 4 KB and a pass's TMX requests at
+/// one for every twenty Canadian listings.
+pub const QUOTES_MOST: usize = 20;
 const DIVIDENDS: &str = "query getDividendsForSymbol($symbol: String!, $page: Int, $batch: Int) { dividends: getDividendsForSymbol(symbol: $symbol, page: $page, batch: $batch) { dividends { exDate recordDate payableDate declarationDate amount currency } } }";
 /// Rows per page of distributions; a full page means another is asked.
 const BATCH: usize = 100;
@@ -53,9 +64,12 @@ pub fn source() -> SourceName {
     SourceName::named(SOURCE)
 }
 
-pub fn quote_shape() -> RecordedShape {
-    ask::recorded_shape(include_str!("../../shapes/tmx-quote.paths"))
+pub fn quotes_shape() -> RecordedShape {
+    ask::recorded_shape(include_str!("../../shapes/tmx-quotes.paths"))
 }
+
+/// A quote reply's `data` is keyed by the aliases asked.
+pub const QUOTES_KEYED: &[crate::reply::Keyed] = &[crate::reply::Keyed { parent: "data", fields: &[] }];
 
 pub fn dividends_shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/tmx-dividends.paths"))
@@ -149,10 +163,6 @@ fn body(operation: &str, variables: &str, query: &str) -> Vec<u8> {
     format!("{{\"operationName\":{},\"variables\":{variables},\"query\":{}}}", escaped(operation), escaped(query)).into_bytes()
 }
 
-/// The `errors` of a reply that answers "not found" for the symbol.
-fn not_found(root: &Node) -> bool {
-    root.list("errors").is_ok_and(|errs| errs.iter().any(|e| e.text("code").is_ok_and(|c| c == "404")))
-}
 
 fn post(net: &Net, body: &[u8]) -> Result<Value, Outcome<()>> {
     let reply = match ask::send(net, &Ask::post(URL, &HEADERS, body), &[]) {
@@ -162,26 +172,63 @@ fn post(net: &Net, body: &[u8]) -> Result<Value, Outcome<()>> {
     ask::json(&reply.body).map_err(Outcome::Mismatch)
 }
 
-/// Read a quote reply for `form`.
-pub fn parse_quote(v: &Value, form: &str) -> Outcome<TmxQuote> {
-    let root = Node::root(v);
-    if not_found(&root) {
-        return Outcome::NotCarried(format!("TMX does not know {form}"));
-    }
-    match read_quote(&root, form) {
-        // TMX answers a form with the listing it knows by that symbol, which can
-        // be on another venue than the form asks: that listing is not this one
-        Ok(Ok(q)) if !crate::venue::tmx_venue_matches(form.find(':').map_or("", |i| &form[i..]), &q.exchange_name) => {
-            Outcome::NotCarried(format!("TMX answers {form} on {}, not the venue asked", q.exchange_name))
-        }
-        Ok(Ok(q)) => Outcome::Answered(q),
-        Ok(Err(why)) => Outcome::Meaning(why),
-        Err(m) => Outcome::Mismatch(m),
-    }
+/// The alias the listing in place `i` of a quote request is asked under.
+fn alias(i: usize) -> String {
+    format!("q{i}")
 }
 
-fn read_quote(root: &Node, form: &str) -> Result<Result<TmxQuote, String>, Mismatch> {
-    let q = root.obj("data")?.obj("getQuoteBySymbol")?;
+/// The quote request for `forms`, each under its alias.
+fn quotes_body(forms: &[String]) -> Vec<u8> {
+    let asked: Vec<String> = forms.iter().enumerate().map(|(i, f)| format!("{}: getQuoteBySymbol(symbol: {}, locale: \"en\") {{ {QUOTE_FIELDS} }}", alias(i), escaped(f))).collect();
+    body("getQuotes", "{}", &format!("query getQuotes {{ {} }}", asked.join(" ")))
+}
+
+/// Read a quote reply for `forms`, asked in that order: what came of each.
+pub fn parse_quotes(v: &Value, forms: &[String]) -> Outcome<Vec<Outcome<TmxQuote>>> {
+    let root = Node::root(v);
+    // each error that names the alias it is for, by that alias: (code, message)
+    let mut named: Vec<(String, String, String)> = Vec::new();
+    let mut whole: Option<String> = None;
+    if let Ok(errs) = root.list("errors") {
+        for e in errs {
+            let message = e.text("message").unwrap_or("").to_string();
+            let code = e.text("code").unwrap_or("").to_string();
+            match e.list("path").ok().and_then(|p| p.first().and_then(|a| a.as_text().ok().map(str::to_string))) {
+                Some(a) => named.push((a, code, message)),
+                None => whole = Some(message),
+            }
+        }
+    }
+    let data = match root.obj("data") {
+        Ok(d) => d,
+        // no answer for any listing: an error of the request's own, or a reply this reader cannot read
+        Err(m) => return whole.map_or(Outcome::Mismatch(m), |why| Outcome::Unreachable(format!("TMX: {why}"))),
+    };
+    let each = forms
+        .iter()
+        .enumerate()
+        .map(|(i, form)| {
+            let a = alias(i);
+            match named.iter().find(|(n, _, _)| *n == a) {
+                Some((_, code, _)) if code == "404" => Outcome::NotCarried(format!("TMX does not know {form}")),
+                Some((_, code, message)) => Outcome::Unreachable(format!("TMX could not answer {form}: {message} (code {code})")),
+                None => match data.obj(&a).and_then(|q| read_quote(&q, form)) {
+                    // TMX answers a form with the listing it knows by that symbol, which can
+                    // be on another venue than the form asks: that listing is not this one
+                    Ok(Ok(q)) if !crate::venue::tmx_venue_matches(form.find(':').map_or("", |i| &form[i..]), &q.exchange_name) => {
+                        Outcome::NotCarried(format!("TMX answers {form} on {}, not the venue asked", q.exchange_name))
+                    }
+                    Ok(Ok(q)) => Outcome::Answered(q),
+                    Ok(Err(why)) => Outcome::Meaning(why),
+                    Err(m) => Outcome::Mismatch(m),
+                },
+            }
+        })
+        .collect();
+    Outcome::Answered(each)
+}
+
+fn read_quote(q: &Node, form: &str) -> Result<Result<TmxQuote, String>, Mismatch> {
     let symbol = q.text("symbol")?;
     // a TSX or TSX-V listing is answered by its bare ticker, any other venue's by
     // the form itself (`QIMC:CNX`)
@@ -256,11 +303,15 @@ fn read_dividends(v: &Value, form: &str) -> Result<Result<Vec<TmxDistribution>, 
     Ok(Ok(out))
 }
 
-/// Ask for `form`'s quote.
-pub fn ask_quote(net: &Net, form: &str) -> Noted<TmxQuote> {
-    let b = body("getQuoteBySymbol", &format!("{{\"symbol\":{},\"locale\":\"en\"}}", escaped(form)), QUOTE);
-    match post(net, &b) {
-        Ok(v) => Noted { outcome: parse_quote(&v, form), shape_change: ask::noticed(&v, &quote_shape(), &[]) },
+/// Ask for the quotes of `forms`, at most `QUOTES_MOST` of them, in one request:
+/// what came of each, in the order asked. A failure of the request is the outcome
+/// itself.
+pub fn ask_quotes(net: &Net, forms: &[String]) -> Noted<Vec<Outcome<TmxQuote>>> {
+    if forms.len() > QUOTES_MOST {
+        return Noted { outcome: Outcome::Meaning(format!("{} listings asked of TMX at once, more than its {QUOTES_MOST}", forms.len())), shape_change: None };
+    }
+    match post(net, &quotes_body(forms)) {
+        Ok(v) => Noted { outcome: parse_quotes(&v, forms), shape_change: ask::noticed(&v, &quotes_shape(), QUOTES_KEYED) },
         Err(o) => Noted { outcome: o.failed().unwrap_or(Outcome::Unreachable("no reply".into())), shape_change: None },
     }
 }

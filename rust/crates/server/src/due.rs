@@ -163,7 +163,7 @@ pub fn pass(app: &Arc<App>, f: &Figures, now: Timestamp) -> Result<Option<Timest
         last = Some(n);
     }
     let (quoting, quiet_until) = demand(&ctx, &needs.held, app.events.watchers() > 0)?;
-    quote_by_source(app, f, &ctx, &quoting, |l| quotes::read_quotes(&ctx, std::slice::from_ref(l)).map_err(|e| e.to_string()))?;
+    quote_by_source(app, f, &ctx, &quoting, |ctx, ls, kept| quotes::read_quotes_then(ctx, ls, kept).map_err(|e| e.to_string()))?;
     // the option contracts held: their chains are asked when Cboe's copy has moved on
     // (`options::chain_due`), a contract shown for the first time at once
     bagholder_sources::options::read(&ctx, &needs.contracts).map_err(|e| e.to_string())?;
@@ -179,7 +179,7 @@ pub fn pass(app: &Arc<App>, f: &Figures, now: Timestamp) -> Result<Option<Timest
 /// public feeds (`read_public`) the rest, and every one while signed out. A
 /// listing Wealthsimple carries never reaches a public feed while signed in, its
 /// read failed or not.
-fn quote_by_source(app: &Arc<App>, f: &Figures, ctx: &Ctx, listings: &[bagholder_sources::contract::Listing], read_public: impl FnMut(&bagholder_sources::contract::Listing) -> Result<(), String>) -> Result<(), String> {
+fn quote_by_source(app: &Arc<App>, f: &Figures, ctx: &Ctx, listings: &[bagholder_sources::contract::Listing], read_public: impl FnOnce(&Ctx, &[bagholder_sources::contract::Listing], &mut dyn FnMut(&[InstrumentId])) -> Result<(), String>) -> Result<(), String> {
     let sess = crate::ws_quotes::session(app);
     let (broker, public) = crate::ws_quotes::split(listings, sess.is_some());
     if let Some(sess) = sess.as_ref().filter(|_| !broker.is_empty()) {
@@ -193,20 +193,31 @@ fn quote_by_source(app: &Arc<App>, f: &Figures, ctx: &Ctx, listings: &[bagholder
         }
         quotes::read_ex_dividends(ctx, &broker).map_err(|e| e.to_string())?;
     }
-    quote_each(app, f, &public, read_public)
+    quote_each(app, f, ctx, &public, read_public)
 }
 
-/// Each listing read in turn, and its price taken into the figures and said to the
-/// pages as soon as it is kept, before the next is asked: a tile or a holding's row
-/// moves as its quote lands, never when the last of the pass does.
-fn quote_each(app: &App, f: &Figures, listings: &[bagholder_sources::contract::Listing], mut read: impl FnMut(&bagholder_sources::contract::Listing) -> Result<(), String>) -> Result<(), String> {
-    for l in listings {
-        read(l)?;
-        if !f.price_changed(l.id)?.is_empty() {
+/// The listings read by `read` (the public feeds: Yahoo's and TMX's twenty to a
+/// request, `quotes::read_quotes_then`), each request's prices taken into the
+/// figures and said to the pages as soon as they are kept, before the next request
+/// is sent: a tile or a holding's row moves as its request lands, never when the
+/// last of the pass does.
+fn quote_each(app: &App, f: &Figures, ctx: &Ctx, listings: &[bagholder_sources::contract::Listing], read: impl FnOnce(&Ctx, &[bagholder_sources::contract::Listing], &mut dyn FnMut(&[InstrumentId])) -> Result<(), String>) -> Result<(), String> {
+    let mut failed: Option<String> = None;
+    read(ctx, listings, &mut |ids| {
+        let mut moved = false;
+        for id in ids {
+            match f.price_changed(*id) {
+                Ok(c) => moved |= !c.is_empty(),
+                Err(e) => {
+                    failed.get_or_insert(e);
+                }
+            }
+        }
+        if moved {
             app.events.signal();
         }
-    }
-    Ok(())
+    })?;
+    failed.map_or(Ok(()), Err)
 }
 
 /// What is quoted now: what is held and what is followed, while the app runs, page
@@ -524,10 +535,10 @@ mod tests {
         }
     }
 
-    /// Each quote is taken into the figures before the next listing is read, so a
-    /// tile moves as its quote lands, never when the pass ends.
+    /// Each request's quotes are taken into the figures before the next request is
+    /// sent, so a tile moves as its request lands, never when the pass ends.
     #[test]
-    fn each_quote_reaches_the_figures_before_the_next_listing_is_read() {
+    fn each_requests_quotes_reach_the_figures_before_the_next_request() {
         let home = tempfile::tempdir().unwrap();
         crate::tests_common::pulled_book(home.path());
         let app = App::new(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
@@ -540,16 +551,17 @@ mod tests {
         let book = f.book().unwrap();
         let tiles = crate::following::listings(&book).unwrap();
         assert!(tiles.len() >= 2);
-        let cache = f.cache().unwrap();
+        let (cache, bank) = (f.cache().unwrap(), bank_zone().unwrap());
+        let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now, bank: &bank };
         let price = |id: InstrumentId| f.read(|e| e.inputs().market.quotes.get(&id).map(|q| q.price.amount)).flatten();
-        let mut read = Vec::new();
-        quote_each(&app, f, &tiles[..2], |l| {
-            if let Some(first) = read.first() {
-                assert_eq!(price(*first), Some(bagholder_core::Dec::parse("101").unwrap()), "the first tile's price is in the figures before the second is asked");
-            }
-            let q = bagholder_sources::cache::StoredQuote { instrument: l.id, source: bagholder_core::SourceName::named("stand-in"), price: bagholder_core::Money::new(bagholder_core::Dec::parse("101").unwrap(), l.currency), change: None, change_pct: None, quoted_at: now, allowance: std::time::Duration::ZERO, received_at: now };
-            cache.store_quote(&q).map_err(|e| e.to_string())?;
-            read.push(l.id);
+        let store = |l: &bagholder_sources::contract::Listing| cache.store_quote(&bagholder_sources::cache::StoredQuote { instrument: l.id, source: bagholder_core::SourceName::named("stand-in"), price: bagholder_core::Money::new(bagholder_core::Dec::parse("101").unwrap(), l.currency), change: None, change_pct: None, quoted_at: now, allowance: std::time::Duration::ZERO, received_at: now }).unwrap();
+        quote_each(&app, f, &ctx, &tiles[..2], |_, ls, kept| {
+            // the first request's listing, then the second's
+            store(&ls[0]);
+            kept(&[ls[0].id]);
+            assert_eq!(price(ls[0].id), Some(bagholder_core::Dec::parse("101").unwrap()), "the first request's price is in the figures before the second is sent");
+            store(&ls[1]);
+            kept(&[ls[1].id]);
             Ok(())
         })
         .unwrap();
@@ -878,8 +890,8 @@ mod tests {
         let index = bagholder_sources::contract::Listing { kind: bagholder_core::instrument::InstrumentKind::Index, routes: Default::default(), ..carried(99) };
         let listings = vec![carried(1), carried(2), index.clone()];
         let mut public = Vec::new();
-        quote_by_source(&app, f, &ctx, &listings, |l| {
-            public.push(l.id);
+        quote_by_source(&app, f, &ctx, &listings, |_, ls, _| {
+            public.extend(ls.iter().map(|l| l.id));
             Ok(())
         })
         .unwrap();
@@ -889,11 +901,141 @@ mod tests {
         app.state.lock().unwrap().connected = false;
         assert!(crate::ws_quotes::session(&app).is_none());
         let mut public = Vec::new();
-        quote_by_source(&app, f, &ctx, &listings, |l| {
-            public.push(l.id);
+        quote_by_source(&app, f, &ctx, &listings, |_, ls, _| {
+            public.extend(ls.iter().map(|l| l.id));
             Ok(())
         })
         .unwrap();
         assert_eq!(public, listings.iter().map(|l| l.id).collect::<Vec<_>>(), "signed out: the public feeds quote every one");
+    }
+
+    /// Yahoo's spark and TMX's quote request, stood in for: every listing asked is
+    /// answered at 10.5 from a close of 10, in the currency the test names for it,
+    /// stamped at the network's clock; each request is written down with its host and
+    /// how many listings it names. Any other request fails the test.
+    struct Feeds {
+        clock: Arc<bagholder_net::ManualClock>,
+        /// Each Yahoo code's currency.
+        currency: std::sync::Mutex<std::collections::BTreeMap<String, String>>,
+        asked: std::sync::Mutex<Vec<(String, usize)>>,
+    }
+
+    struct FeedsNet(Arc<Feeds>);
+
+    impl bagholder_net::Transport for FeedsNet {
+        fn answer(&self, ask: &bagholder_net::Ask) -> Result<bagholder_net::Answer, bagholder_net::NetError> {
+            use bagholder_net::Clock;
+            let feeds = &self.0;
+            let at = feeds.clock.now();
+            let host = ask.url.split('/').nth(2).unwrap_or("").to_string();
+            let body = if host == bagholder_sources::adapters::yahoo::HOST && ask.url.contains("/v7/finance/spark?symbols=") {
+                let named = ask.url.split("symbols=").nth(1).unwrap().split('&').next().unwrap();
+                let symbols: Vec<String> = named.split(',').map(|s| s.replace("%5E", "^").replace("%3D", "=")).collect();
+                feeds.asked.lock().unwrap().push((host, symbols.len()));
+                let currency = feeds.currency.lock().unwrap();
+                let results: Vec<serde_json::Value> = symbols
+                    .iter()
+                    .map(|s| {
+                        let c = currency.get(s).unwrap_or_else(|| panic!("a code no listing has: {s}"));
+                        serde_json::json!({"symbol": s, "response": [{"meta": {"symbol": s, "currency": c, "regularMarketPrice": 10.5, "regularMarketTime": at.as_second(), "chartPreviousClose": 10, "regularMarketChangePercent": 5}}]})
+                    })
+                    .collect();
+                serde_json::json!({"spark": {"result": results, "error": null}})
+            } else if host == bagholder_sources::adapters::tmx::HOST && ask.body.is_some_and(|b| String::from_utf8_lossy(b).contains("\"operationName\":\"getQuotes\"")) {
+                let sent: serde_json::Value = serde_json::from_slice(ask.body.unwrap()).unwrap();
+                let query = sent["query"].as_str().unwrap().to_string();
+                let parts: Vec<&str> = query.split(": getQuoteBySymbol(symbol: \"").collect();
+                let mut data = serde_json::Map::new();
+                for (before, after) in parts.iter().zip(parts.iter().skip(1)) {
+                    let alias = before.rsplit([' ', '{']).next().unwrap();
+                    let form = after.split('"').next().unwrap();
+                    data.insert(alias.to_string(), serde_json::json!({"symbol": form, "name": form, "exchangeName": "Toronto Stock Exchange", "exchangeCode": "TSX", "price": 10.5, "priceChange": 0.5, "percentChange": 5, "prevClose": 10, "currency": "CAD", "datetime": at.to_string(), "dividendFrequency": null, "exDividendDate": ""}));
+                }
+                feeds.asked.lock().unwrap().push((host, data.len()));
+                serde_json::json!({"data": data})
+            } else {
+                panic!("a request the quote pass does not make: {} {}", ask.method, ask.url);
+            };
+            Ok((200, ask.url.to_string(), vec![], body.to_string().into_bytes()))
+        }
+    }
+
+    /// A book of 30 US and 30 TSX holdings, 10 US and 10 TSX listings watched and the
+    /// six tiles, its quotes owed every minute for an hour of a trading day with no
+    /// page open, on the network's own paces and rests: every listing is quoted every
+    /// minute, Yahoo is asked 3 times a minute and TMX twice (180 and 120 an hour,
+    /// from 2,760 and 2,400 at one request a listing), and no request names more than
+    /// the 20 symbols Yahoo's spark takes (the owner, 2026-11-07).
+    #[test]
+    fn an_hour_of_quotes_asks_each_source_once_for_every_twenty_listings() {
+        use bagholder_net::Clock;
+        let start = t("2026-02-04T15:00:00Z"); // a Wednesday, 10:00 in New York and Toronto
+        let clock = Arc::new(bagholder_net::ManualClock::at(start));
+        let feeds = Arc::new(Feeds { clock: clock.clone(), currency: Default::default(), asked: Default::default() });
+        let limiter = Arc::new(bagholder_net::Limiter::new());
+        bagholder_sources::adapters::pace_every_source(&limiter);
+        let net = bagholder_net::Net::answered_by(clock.clone(), limiter, Box::new(FeedsNet(feeds.clone())));
+        let home = tempfile::tempdir().unwrap();
+        let app = App::with_net(home.path().to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into(), net);
+        let f = crate::figures::Figures::open(home.path(), start).unwrap();
+        f.state_zone("America/Toronto", start).unwrap();
+        app.set_figures(f);
+        let f = app.figures.get().unwrap();
+        // the holdings' instruments, recorded by trades entered by hand; the watched
+        // listings; the tiles
+        let venues = [("NASDAQ", "USD", "ZQU"), ("TSX", "CAD", "ZQT")];
+        for (exchange, currency, prefix) in venues {
+            for n in 0..30 {
+                let req = crate::entries::EntryRequest::Trade { account: String::new(), instrument: None, symbol: format!("{prefix}{n:02}"), exchange: exchange.into(), currency: currency.into(), day: "2026-02-03".into(), side: "BUY".into(), quantity: "10".into(), price: "10".into(), fee: String::new() };
+                crate::entries::enter(f, &req, start).unwrap();
+            }
+        }
+        crate::following::ensure(&app).unwrap();
+        let book = f.book().unwrap();
+        for (exchange, currency, prefix) in venues {
+            for n in 30..40 {
+                let named = crate::following::Named { symbol: format!("{prefix}{n:02}"), exchange: exchange.into(), currency: currency.into(), ..Default::default() };
+                book.watch(&crate::following::draft(&book, &named).unwrap(), start).unwrap();
+            }
+        }
+        // what is held is what the broker states (brief 79): the holdings are the
+        // instruments the trades recorded, each asked for as the pass builds it
+        let watched: Vec<InstrumentId> = crate::following::listings(&book).unwrap().iter().map(|l| l.id).collect();
+        let held: Vec<_> = book.instruments().unwrap().iter().filter(|i| !watched.contains(&i.id)).filter_map(|i| crate::read_sources::listing(&book, i.id).unwrap()).collect();
+        let followed = crate::following::listings(&book).unwrap();
+        assert_eq!((held.len(), followed.len()), (60, 26), "the holdings; the watched listings and the six tiles");
+        let all: Vec<_> = held.iter().chain(&followed).collect();
+        let at_yahoo = all.iter().filter(|l| l.market().is_none_or(|m| m != bagholder_sources::contract::Market::Canada)).count();
+        assert_eq!((at_yahoo, all.len() - at_yahoo), (46, 40), "the US listings and the tiles; the TSX listings");
+        for l in &all {
+            let codes = match l.market() {
+                Some(_) => bagholder_sources::market::yahoo_forms(l),
+                None => l.routes.get(&bagholder_core::instrument::RefScheme::Yahoo).cloned().unwrap_or_default(),
+            };
+            for c in codes {
+                feeds.currency.lock().unwrap().insert(c, l.currency.as_str().to_string());
+            }
+        }
+        let (cache, bank) = (f.cache().unwrap(), bank_zone().unwrap());
+        for minute in 0..60 {
+            let now = start + SignedDuration::from_mins(minute);
+            // the network's clock is the hour's, and further on by the paces slept
+            if clock.now() < now {
+                clock.advance(now.duration_since(clock.now()).unsigned_abs());
+            }
+            let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now, bank: &bank };
+            let (owed, _) = demand(&ctx, &held, false).unwrap();
+            quote_by_source(&app, f, &ctx, &owed, |ctx, ls, kept| quotes::read_quotes_then(ctx, ls, kept).map_err(|e| e.to_string())).unwrap();
+            for l in &all {
+                let kept = cache.quotes_of(l.id).unwrap().into_iter().max_by_key(|q| q.received_at);
+                assert_eq!(kept.map(|q| q.received_at), Some(now), "{} quoted at minute {minute}", l.symbol);
+            }
+        }
+        let asked = feeds.asked.lock().unwrap();
+        // Yahoo's spark answers more than twenty with a 400
+        assert!(asked.iter().all(|(_, n)| *n <= 20), "a request named more than 20: {:?}", asked.iter().map(|(_, n)| n).max());
+        let per_hour = |host: &str| asked.iter().filter(|(h, _)| h == host).count();
+        assert_eq!(per_hour(bagholder_sources::adapters::yahoo::HOST), 180, "Yahoo: 3 requests a minute for 46 listings");
+        assert_eq!(per_hour(bagholder_sources::adapters::tmx::HOST), 120, "TMX: 2 requests a minute for 40 listings");
     }
 }

@@ -53,14 +53,19 @@ impl Payer for TmxRecord {
         let mut not_carried = format!("{} names no venue TMX carries", l.symbol);
         let mut found = None;
         for form in venue::tmx_forms(&l.symbol, l.venue_mic.as_deref()) {
-            let quote = tmx::ask_quote(net, &form);
-            match quote.outcome {
+            let quote = tmx::ask_quotes(net, std::slice::from_ref(&form));
+            let shape_change = quote.shape_change;
+            let outcome = match quote.outcome {
+                Outcome::Answered(mut each) => each.pop().expect("one form asked, one answered"),
+                other => other.failed().expect("not answered"),
+            };
+            match outcome {
                 Outcome::Answered(q) => {
-                    found = Some((form, q.per_year, quote.shape_change));
+                    found = Some((form, q.per_year, shape_change));
                     break;
                 }
                 Outcome::NotCarried(why) => not_carried = why,
-                other => return Noted { outcome: other.failed().expect("not answered"), shape_change: quote.shape_change },
+                other => return Noted { outcome: other.failed().expect("not answered"), shape_change },
             }
         }
         let Some((form, per_year, quote_shape)) = found else {

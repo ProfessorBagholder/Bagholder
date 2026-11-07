@@ -23,7 +23,8 @@ const TMX: &str = "tmx";
 #[test]
 fn the_recorded_shapes_are_the_answers_union() {
     common::shape_is_the_answers_union("yahoo-chart.paths", Y, "", yahoo::KEYED);
-    common::shape_is_the_answers_union("tmx-quote.paths", TMX, "quote-", &[]);
+    common::shape_is_the_answers_union("yahoo-spark.paths", "yahoo-spark", "spark-", &[]);
+    common::shape_is_the_answers_union("tmx-quotes.paths", TMX, "quotes-", tmx::QUOTES_KEYED);
     common::shape_is_the_answers_union("tmx-dividends.paths", TMX, "dividends-", &[]);
 }
 
@@ -110,8 +111,70 @@ fn a_wrong_chart_writes_nothing_and_an_unknown_symbol_is_not_carried() {
     assert_eq!(bagholder_sources::ask::status(reply, &[404]).kind(), OutcomeKind::NotCarried);
 }
 
+/// What TMX's quote request for `form` alone comes to, answered with the recorded
+/// reply to its own quote (`tmx/name`).
 fn quote(name: &str, form: &str) -> Outcome<tmx::TmxQuote> {
-    tmx::parse_quote(&common::json(TMX, name), form)
+    match tmx::parse_quotes(&common::tmx_quote_alone(form, name), &[form.to_string()]) {
+        Outcome::Answered(mut each) => each.pop().unwrap(),
+        other => panic!("{name}: {other:?}"),
+    }
+}
+
+fn strings(s: &[&str]) -> Vec<String> {
+    s.iter().map(|s| s.to_string()).collect()
+}
+
+/// The spark answers each symbol asked by its name, in an order of its own, and
+/// leaves out one it does not carry: each is read from its own result, the one
+/// left out not carried and the others still answered. A pair is named as asked,
+/// and a coin's change is over its UTC day, from the close the chart states.
+#[test]
+fn the_spark_answers_each_symbol_by_its_name_and_leaves_out_one_it_does_not_carry() {
+    let asked = strings(&["AAPL", "ZZQXNOTREAL", "RY.TO"]);
+    let Outcome::Answered(each) = yahoo::parse_spark(&common::json("yahoo-spark", "spark-AAPL-ZZQXNOTREAL-RY.TO.json"), &asked) else { panic!() };
+    let Outcome::Answered(aapl) = &each[0] else { panic!("{:?}", each[0]) };
+    assert_eq!((aapl.symbol.as_str(), aapl.currency, aapl.quote.price, aapl.previous_close, aapl.quote.change_pct), ("AAPL", Currency::USD, dec("212.5"), Some(dec("215")), Some(dec("-1.1628"))), "AAPL's own result, the second the spark lists");
+    assert_eq!(aapl.quote.at, Timestamp::from_second(1770411601).unwrap());
+    assert!(matches!(&each[1], Outcome::NotCarried(w) if w.contains("ZZQXNOTREAL")));
+    let Outcome::Answered(ry) = &each[2] else { panic!() };
+    assert_eq!((ry.currency, ry.quote.price), (Currency::CAD, dec("151.2")));
+    let asked = strings(&["^GSPC", "CAD=X", "BTC-USD", "GC=F"]);
+    let Outcome::Answered(each) = yahoo::parse_spark(&common::json("yahoo-spark", "spark-^GSPC-CAD=X-BTC-USD-GC=F.json"), &asked) else { panic!() };
+    let got: Vec<_> = each.iter().map(|o| match o {
+        Outcome::Answered(q) => (q.symbol.clone(), q.currency, q.quote.price, q.quote.change_pct),
+        other => panic!("{other:?}"),
+    }).collect();
+    assert_eq!(got, [
+        ("^GSPC".to_string(), Currency::USD, dec("5120"), Some(dec("0.3922"))),
+        ("CAD=X".to_string(), Currency::CAD, dec("1.3612"), Some(dec("0.8296"))),
+        // a coin: its percent from the close where its UTC day began, never Yahoo's 24 hours
+        ("BTC-USD".to_string(), Currency::USD, dec("61000.5"), Some(dec("1.6671"))),
+        ("GC=F".to_string(), Currency::USD, dec("2310.4"), Some(dec("0.4522"))),
+    ]);
+    // a result this reader cannot read fails its own symbol alone
+    let broken = common::read("yahoo-spark", "spark-AAPL-ZZQXNOTREAL-RY.TO.json").replacen("\"regularMarketPrice\":212.5", "\"regularMarketPrice\":\"212.5\"", 1);
+    let Outcome::Answered(each) = yahoo::parse_spark(&bagholder_sources::reply::parse(&broken).unwrap(), &strings(&["AAPL", "RY.TO"])) else { panic!() };
+    assert!(matches!(&each[0], Outcome::Mismatch(m) if m.path.contains("regularMarketPrice")), "{:?}", each[0]);
+    assert_eq!(each[1].kind(), OutcomeKind::Answered);
+}
+
+/// TMX answers each listing of a quote request under its alias: one it does not
+/// know is null with a 404 naming its alias, not carried, and the others still
+/// answer; any other error naming an alias fails that listing alone.
+#[test]
+fn tmx_answers_each_alias_alone_and_an_unknown_one_is_not_carried() {
+    let forms = strings(&["RY", "ZZQXNOTREAL", "XIU"]);
+    let Outcome::Answered(each) = tmx::parse_quotes(&common::json(TMX, "quotes-RY-ZZQXNOTREAL-XIU.json"), &forms) else { panic!() };
+    let kinds: Vec<_> = each.iter().map(|o| o.kind()).collect();
+    assert_eq!(kinds, [OutcomeKind::Answered, OutcomeKind::NotCarried, OutcomeKind::Answered]);
+    let Outcome::Answered(xiu) = &each[2] else { panic!() };
+    assert_eq!((xiu.symbol.as_str(), xiu.price, xiu.change, xiu.per_year.clone(), xiu.ex_dividend.clone()), ("XIU", Some(dec("40.5")), Some(dec("-0.25")), Ok(Some(4)), Ok(Some(date(2025, 12, 22)))));
+    let Outcome::Answered(each) = tmx::parse_quotes(&common::json(TMX, "quotes-RY-XIU.json"), &strings(&["RY", "XIU"])) else { panic!() };
+    assert!(each.iter().all(|o| o.kind() == OutcomeKind::Answered));
+    let failing = common::read(TMX, "quotes-RY-ZZQXNOTREAL-XIU.json").replacen("\"code\":\"404\"", "\"code\":\"500\"", 1);
+    let Outcome::Answered(each) = tmx::parse_quotes(&bagholder_sources::reply::parse(&failing).unwrap(), &forms) else { panic!() };
+    let kinds: Vec<_> = each.iter().map(|o| o.kind()).collect();
+    assert_eq!(kinds, [OutcomeKind::Answered, OutcomeKind::Unreachable, OutcomeKind::Answered], "another error fails its own listing alone");
 }
 
 #[test]
@@ -141,12 +204,12 @@ fn a_tmx_quote_states_its_venue_schedule_and_ex_dividend_date() {
     // is the mismatch naming it, for the payer's record to refuse
     let Outcome::Answered(q) = quote("wrong-shape-quote-ENB-schedule-unknown.json", "ENB") else { panic!("the price stands") };
     assert_eq!(q.price, Some(dec("66.13")));
-    assert!(matches!(q.per_year, Err(m) if m.why.contains("Fortnightly") && m.path == "data.getQuoteBySymbol.dividendFrequency"));
+    assert!(matches!(q.per_year, Err(m) if m.why.contains("Fortnightly") && m.path == "data.q0.dividendFrequency"));
     // an ex-dividend date in a form the reader does not know: the quote stands,
     // and the date is the mismatch naming it
     let Outcome::Answered(q) = quote("wrong-shape-quote-ENB-ex-dividend-unknown.json", "ENB") else { panic!("the price stands") };
     assert_eq!((q.price, q.per_year), (Some(dec("66.13")), Ok(Some(4))));
-    assert!(matches!(q.ex_dividend, Err(m) if m.why.contains("2026-08-14T00:00:00-04:00") && m.path == "data.getQuoteBySymbol.exDividendDate"));
+    assert!(matches!(q.ex_dividend, Err(m) if m.why.contains("2026-08-14T00:00:00-04:00") && m.path == "data.q0.exDividendDate"));
     assert!(matches!(quote("wrong-meaning-quote-ENB-another-symbol.json", "ENB"), Outcome::Meaning(w) if w.contains("TRP")));
 }
 

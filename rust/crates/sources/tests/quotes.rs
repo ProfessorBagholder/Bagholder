@@ -35,7 +35,6 @@ fn listing(n: u8, kind: InstrumentKind, currency: Currency, symbol: &str, mic: O
     Listing { id: id(n), kind, currency, symbol: symbol.into(), venue_mic: mic.map(str::to_string), routes: BTreeMap::new() }
 }
 
-const TMX: &str = "https://app-money.tmx.com/graphql";
 
 #[test]
 fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
@@ -48,11 +47,11 @@ fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
     let recorded = Arc::new(
         common::Recorded::new()
-            .with_body(TMX, "\"symbol\":\"ENB\"", 200, "tmx", "quote-ENB.json")
+            .with_tmx_quote("ENB", "quote-ENB.json")
             // TMX's answer for the TSX listing, served to the CSE form: another listing
-            .with_body(TMX, "\"symbol\":\"ENB:CNX\"", 200, "tmx", "quote-ENB.json")
+            .with_tmx_quote("ENB:CNX", "quote-ENB.json")
             .with("https://www-api.cboe.com/ca/equities/securities-1/HBIX/quote/", 200, "cboe-canada", "quote-HBIX.json")
-            .with("https://query1.finance.yahoo.com/v8/finance/chart/SPY?range=1d&interval=1d", 200, "yahoo", "SPY-range-1d.json")
+            .with_spark("SPY", 200, "yahoo", "SPY-range-1d.json")
             .with("https://api.coinbase.com/v2/prices/BTC-CAD/spot", 200, "coinbase", "spot-BTC-CAD.json")
             .with("https://api.exchange.coinbase.com/products/BTC-USD/ticker", 200, "coinbase-exchange", "ticker-BTC-USD.json")
             // the coins' last closes: the CAD market is none of the Exchange's, and the
@@ -98,7 +97,7 @@ fn each_market_is_quoted_by_its_own_source_with_the_time_it_states() {
 }
 
 /// An index, a future, a rate and a currency pair of the app's directory are
-/// quoted by Yahoo's chart under the code the directory gives each (its `yahoo`
+/// quoted by Yahoo's spark under the code the directory gives each (its `yahoo`
 /// route), each with the day's change in points from the previous close the
 /// chart states; one with no such code is not asked for, and says so.
 #[test]
@@ -111,13 +110,12 @@ fn the_directory_s_instruments_are_quoted_by_yahoo_under_their_own_code() {
         common::instrument_in_book(&dir.path().join("book.db"), id(n), kind.as_str(), c.as_str());
     }
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
-    let chart = |code: &str| format!("https://query1.finance.yahoo.com/v8/finance/chart/{}?range=1d&interval=1d", code.replace('^', "%5E").replace('=', "%3D"));
     let recorded = Arc::new(
         common::Recorded::new()
-            .with(&chart("^GSPC"), 200, "yahoo", "^GSPC-range-1d.json")
-            .with(&chart("GC=F"), 200, "yahoo", "GC=F-range-1d.json")
-            .with(&chart("ZQ=F"), 200, "yahoo", "ZQ=F-range-1d.json")
-            .with(&chart("CAD=X"), 200, "yahoo", "CAD=X-range-1d.json"),
+            .with_spark("^GSPC", 200, "yahoo", "^GSPC-range-1d.json")
+            .with_spark("GC=F", 200, "yahoo", "GC=F-range-1d.json")
+            .with_spark("ZQ=F", 200, "yahoo", "ZQ=F-range-1d.json")
+            .with_spark("CAD=X", 200, "yahoo", "CAD=X-range-1d.json"),
     );
     let net = common::net(&recorded, "2026-09-26T20:00:00Z");
     let zone = TimeZone::get("America/Toronto").unwrap();
@@ -142,7 +140,9 @@ fn the_directory_s_instruments_are_quoted_by_yahoo_under_their_own_code() {
     assert!(!got.contains_key(&id(15)));
     let yahoo_rows = cache.outcomes(&bagholder_core::SourceName::named("yahoo")).unwrap();
     assert!(yahoo_rows.iter().any(|o| o.instrument == Some(id(15)) && o.outcome == OutcomeKind::NotCarried && o.detail.contains("no code")));
-    assert_eq!(recorded.asked.lock().unwrap().len(), 4, "only the four with a code were asked for");
+    let asked = recorded.asked.lock().unwrap();
+    assert_eq!(asked.len(), 1, "the four with a code, in one request: {asked:?}");
+    assert!(asked[0].contains("symbols=%5EGSPC,GC%3DF,ZQ%3DF,CAD%3DX&"), "{asked:?}");
 }
 
 /// A coin's day change is against the close of the last completed UTC day on its
@@ -214,6 +214,50 @@ fn tmx_world(at: &str) -> (tempfile::TempDir, Book, MarketCache) {
     (dir, book, cache)
 }
 
+/// A spark request naming no symbol Yahoo carries is answered 404, which is each
+/// one's miss, never a failure of Yahoo's: a listing alone in its request (the last
+/// of a pass's, a glance's) that Yahoo does not carry is not carried, and nothing
+/// fails.
+#[test]
+fn a_spark_request_naming_no_symbol_yahoo_carries_is_each_ones_miss() {
+    let at = "2026-09-24T04:40:00Z";
+    let (_dir, book, cache) = tmx_world(at);
+    let recorded = Arc::new(common::Recorded::new().with_spark("ZZQXNOTREAL", 404, "yahoo", "ZZZQX-status-404.json"));
+    let net = common::net(&recorded, at);
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(at), bank: &zone };
+    quotes::read_quotes(&ctx, &[listing(1, InstrumentKind::Security, Currency::CAD, "ZZQXNOTREAL", Some("XNAS"))]).unwrap();
+    let rows = cache.outcomes(&bagholder_core::SourceName::named("yahoo")).unwrap();
+    assert_eq!(rows.iter().map(|o| (o.instrument, o.outcome)).collect::<Vec<_>>(), [(Some(id(1)), OutcomeKind::NotCarried)], "{rows:?}");
+    assert!(rows.iter().all(|o| !o.outcome.is_failure()));
+    let glance = quotes::GlanceOf { kind: InstrumentKind::Security, currency: Currency::USD, symbol: "ZZQXNOTREAL".into(), venue_mic: Some("XNAS".into()), yahoo: None };
+    assert_eq!(quotes::glance(&net, t(at), &glance, &BTreeMap::new()).kind(), OutcomeKind::NotCarried, "a glance of it: not carried, not a failure");
+}
+
+/// Canadian listings are asked of TMX twenty to a request: one TMX does not know
+/// is not carried, and the others in its request are still quoted.
+#[test]
+fn a_listing_tmx_does_not_know_never_holds_up_the_others_in_its_request() {
+    let at = "2026-09-24T04:40:00Z";
+    let (_dir, book, cache) = tmx_world(at);
+    let recorded = Arc::new(common::Recorded::new().with_tmx_quote("ENB", "quote-ENB.json").with_tmx_quote("ZZZQX", "quote-ZZZQX-unknown.json").with_tmx_quote("QCN", "quote-QCN.json"));
+    let net = common::net(&recorded, at);
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(at), bank: &zone };
+    let listings = [
+        listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE")),
+        listing(2, InstrumentKind::Security, Currency::CAD, "ZZZQX", Some("XTSE")),
+        listing(3, InstrumentKind::Security, Currency::CAD, "QCN", Some("XTSE")),
+    ];
+    quotes::read_quotes(&ctx, &listings).unwrap();
+    assert_eq!(recorded.asked.lock().unwrap().len(), 1, "one request for the three");
+    let quoted: Vec<InstrumentId> = cache.quotes().unwrap().into_iter().map(|q| q.instrument).collect();
+    assert_eq!(quoted.len(), 2);
+    assert!(quoted.contains(&id(1)) && quoted.contains(&id(3)), "the two TMX knows are quoted: {quoted:?}");
+    let rows = cache.outcomes(&bagholder_core::SourceName::named("tmx")).unwrap();
+    assert!(rows.iter().any(|o| o.instrument == Some(id(2)) && o.outcome == OutcomeKind::NotCarried), "{rows:?}");
+}
+
 /// A listing is asked of TMX under its own venue's form alone: one TMX answers
 /// with another venue's listing has no quote, and is asked again under that form
 /// only, once a day; one whose record names no venue known here, or none, is asked
@@ -224,9 +268,9 @@ fn tmx_is_asked_the_listings_own_form_alone() {
     let (_dir, book, cache) = tmx_world(at);
     let recorded = Arc::new(
         common::Recorded::new()
-            .with_body(TMX, "\"symbol\":\"ENB:CNX\"", 200, "tmx", "quote-ENB-CNX-unknown.json")
-            .with_body(TMX, "\"symbol\":\"ENB\"", 200, "tmx", "quote-ENB.json")
-            .with_body(TMX, "ZZZQX", 200, "tmx", "quote-ZZZQX-unknown.json"),
+            .with_tmx_quote("ENB:CNX", "quote-ENB-CNX-unknown.json")
+            .with_tmx_quote("ENB", "quote-ENB.json")
+            .with_tmx_quote("ZZZQX", "quote-ZZZQX-unknown.json"),
     );
     let zone = TimeZone::get("America/Toronto").unwrap();
     let listings = [
@@ -259,7 +303,7 @@ fn a_halted_listing_keeps_the_price_read_last() {
     let zone = TimeZone::get("America/Toronto").unwrap();
     let enb = [listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE"))];
     let read = |name: &str, now: &str| {
-        let recorded = Arc::new(common::Recorded::new().with(TMX, 200, "tmx", name));
+        let recorded = Arc::new(common::Recorded::new().with_tmx_quote("*", name));
         let net = common::net(&recorded, now);
         let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(now), bank: &zone };
         quotes::read_quotes(&ctx, &enb).unwrap();
@@ -281,7 +325,7 @@ fn a_listing_quoted_elsewhere_is_asked_of_tmx_once_a_day_for_its_ex_dividend_dat
     let at = "2026-09-27T06:20:00Z";
     let (_dir, book, cache) = tmx_world(at);
     let zone = TimeZone::get("America/Toronto").unwrap();
-    let recorded = Arc::new(common::Recorded::new().with(TMX, 200, "tmx", "quote-ENB.json"));
+    let recorded = Arc::new(common::Recorded::new().with_tmx_quote("*", "quote-ENB.json"));
     let enb = [listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE"))];
     let run = |now: &str| {
         let net = common::net(&recorded, now);
@@ -310,7 +354,7 @@ fn the_ex_dividend_date_a_quote_states_is_kept_with_it() {
     let enb = listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE"));
     let fbtc = listing(2, InstrumentKind::Security, Currency::CAD, "FBTC", Some("XTSE"));
     let read_for = |l: &Listing, name: &str| {
-        let recorded = Arc::new(common::Recorded::new().with(TMX, 200, "tmx", name));
+        let recorded = Arc::new(common::Recorded::new().with_tmx_quote("*", name));
         let net = common::net(&recorded, at);
         let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(at), bank: &zone };
         quotes::read_quotes(&ctx, std::slice::from_ref(l)).unwrap();
@@ -342,7 +386,7 @@ fn the_ex_dividend_date_a_quote_states_is_kept_with_it() {
 fn an_unknown_schedule_word_fails_the_payers_record_and_not_the_price() {
     let at = "2026-09-24T04:40:00Z";
     let (_dir, book, cache) = tmx_world(at);
-    let recorded = Arc::new(common::Recorded::new().with_body(TMX, "getQuoteBySymbol", 200, "tmx", "wrong-shape-quote-ENB-schedule-unknown.json"));
+    let recorded = Arc::new(common::Recorded::new().with_tmx_quote("*", "wrong-shape-quote-ENB-schedule-unknown.json"));
     let net = common::net(&recorded, at);
     let zone = TimeZone::get("America/Toronto").unwrap();
     let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(at), bank: &zone };
@@ -368,11 +412,10 @@ fn a_pair_answered_under_its_other_name_is_quoted_and_a_coin_s_change_is_over_it
     common::instrument_in_book(&dir.path().join("book.db"), id(14), InstrumentKind::CurrencyPair.as_str(), Currency::CAD.as_str());
     common::instrument_in_book(&dir.path().join("book.db"), id(16), InstrumentKind::CurrencyPair.as_str(), Currency::USD.as_str());
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
-    let chart = |code: &str| format!("https://query1.finance.yahoo.com/v8/finance/chart/{}?range=1d&interval=1d", code.replace('=', "%3D"));
     let recorded = Arc::new(
         common::Recorded::new()
-            .with(&chart("CAD=X"), 200, "yahoo", "USDCAD=X-range-1d.json")
-            .with(&chart("BTC-USD"), 200, "yahoo", "BTC-USD-range-1d.json"),
+            .with_spark("CAD=X", 200, "yahoo", "USDCAD=X-range-1d.json")
+            .with_spark("BTC-USD", 200, "yahoo", "BTC-USD-range-1d.json"),
     );
     let net = common::net(&recorded, "2026-09-27T03:00:00Z");
     let zone = TimeZone::get("America/Toronto").unwrap();
