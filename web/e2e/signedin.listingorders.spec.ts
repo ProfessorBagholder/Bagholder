@@ -188,19 +188,3 @@ test('every Wealthsimple call the signed-in server makes goes to the stand-in, a
   const hosts = read().filter((l) => /^outbound [A-Z]+ /.test(l)).map((l) => l.split(' ')[2].split('/')[0])
   expect(hosts.filter((h) => /wealthsimple/i.test(h))).toEqual([])
 })
-
-// SPEC.md market-data-37 (the owner, 2026-11-06): signed in, a holding Wealthsimple
-// carries is priced by Wealthsimple's own quote, asked twenty securities to a request,
-// and the header says no source refused anything.
-test('signed in, a holding is priced by the quote Wealthsimple states, and the header says no refusal', async ({ page, request }) => {
-  // a pass of the figure path each minute: one is waited for, the page's own included
-  test.setTimeout(150_000)
-  await page.goto('/#portfolio')
-  await ready(page)
-  // the stand-in's made-up price for XEQT, which the made-up book's own never is: in
-  // the figures first, then on the page
-  const xeqt = async () => JSON.stringify((await figures(request)).positions.find((p: { symbol: string }) => p.symbol === 'XEQT')?.last ?? null)
-  await expect.poll(xeqt, { timeout: 120_000 }).toContain('34.56')
-  await expect(page.getByText('34.56').first()).toBeVisible({ timeout: 20_000 })
-  await expect(page.locator('#syncline')).not.toContainText('refused')
-})

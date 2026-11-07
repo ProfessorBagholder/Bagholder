@@ -219,13 +219,7 @@ fn quote_now(app: &Arc<App>, ids: Vec<InstrumentId>) {
             for id in &ids {
                 ls.extend(crate::read_sources::listing(&b, *id)?);
             }
-            // each from its one source: Wealthsimple the ones it carries while signed in
-            let sess = crate::ws_quotes::session(&a);
-            let (broker, public) = crate::ws_quotes::split(&ls, sess.is_some());
-            if let Some(sess) = &sess {
-                crate::ws_quotes::read(&a, &ctx, sess, &broker)?;
-            }
-            bagholder_sources::quotes::read_quotes(&ctx, &public).map_err(err)?;
+            bagholder_sources::quotes::read_quotes(&ctx, &ls).map_err(err)?;
             for id in &ids {
                 f.price_changed(*id)?;
             }

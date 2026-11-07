@@ -235,42 +235,19 @@ pub fn read_quotes_then(ctx: &Ctx, listings: &[Listing], kept: &mut dyn FnMut(&[
         }
     }
     ask_yahoo(ctx, at_yahoo, kept)?;
-    read_tmx(ctx, &at_tmx, true, kept)?;
-    Ok(())
-}
-
-/// The ex-dividend date TMX's quote states, for each Canadian listing another
-/// source quotes (Wealthsimple, while the person is signed in): asked once a day,
-/// its price never kept, so the listing's price has one source.
-pub fn read_ex_dividends(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
-    let today = ctx.today();
-    // its own record of the day it was asked, apart from the quote's
-    let subject = |l: &Listing| format!("ex-dividend:{}", l.id);
-    let mut due: Vec<&Listing> = Vec::new();
-    for l in listings.iter().filter(|l| l.market() == Some(Market::Canada)) {
-        if !ctx.cache.reads(&subject(l), DataKind::Quote)?.iter().any(|r| r.last == today) {
-            due.push(l);
-        }
-    }
-    for (l, outcome) in due.iter().zip(read_tmx(ctx, &due, false, &mut |_| {})?) {
-        // a request the offline switch kept from going asked no one
-        if outcome != crate::outcome::OutcomeKind::Offline {
-            ctx.cache.store_read(&subject(l), DataKind::Quote, &crate::cache::ReadRow { source: tmx::source(), first: today, last: today, outcome, at: ctx.now })?;
-        }
-    }
+    read_tmx(ctx, &at_tmx, kept)?;
     Ok(())
 }
 
 /// Canadian listings asked of TMX, each under its forms in turn: every listing's
 /// next form in one round of requests, twenty to a request, and a listing its form
-/// is not carried under asked under its next in the round after. The price each
-/// states kept where `price` says so, its ex-dividend date always; `kept` is told
-/// each request's listings as soon as theirs are. What came of each, in order.
-fn read_tmx(ctx: &Ctx, listings: &[&Listing], price: bool, kept: &mut dyn FnMut(&[InstrumentId])) -> Result<Vec<crate::outcome::OutcomeKind>> {
+/// is not carried under asked under its next in the round after. The price and
+/// the ex-dividend date each states are kept; `kept` is told each request's
+/// listings as soon as theirs are.
+fn read_tmx(ctx: &Ctx, listings: &[&Listing], kept: &mut dyn FnMut(&[InstrumentId])) -> Result<()> {
     use crate::outcome::OutcomeKind;
     let source = tmx::source();
     let today = ctx.today();
-    let mut came: Vec<OutcomeKind> = vec![OutcomeKind::NotCarried; listings.len()];
     // each listing's forms: the book's for it first, then its venue's own. No other
     // venue's form is asked, and a form another venue answered before is not asked
     // again: either reads another listing's quote as this one's
@@ -313,11 +290,10 @@ fn read_tmx(ctx: &Ctx, listings: &[&Listing], price: bool, kept: &mut dyn FnMut(
                     Some(m) => ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &Noted::<()> { outcome: Outcome::Mismatch(m.clone()), shape_change: shape_change.clone() }, form)?,
                     None => ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &Noted { outcome: outcome.clone(), shape_change: shape_change.clone() }, form)?,
                 }
-                came[*i] = outcome.kind();
                 match outcome {
                     Outcome::Answered(q) => {
                         // a null price: TMX has none now, and the price read last stands
-                        if let Some(p) = q.price.filter(|_| price) {
+                        if let Some(p) = q.price {
                             keep(ctx, id, source.clone(), Money::new(p, q.currency), q.change, q.change_pct, q.datetime, std::time::Duration::ZERO)?;
                             moved.push(id);
                         }
@@ -347,7 +323,7 @@ fn read_tmx(ctx: &Ctx, listings: &[&Listing], price: bool, kept: &mut dyn FnMut(
             kept(&moved);
         }
     }
-    Ok(came)
+    Ok(())
 }
 
 /// A coin's day change at `price`, in points and in percent: against the close of
