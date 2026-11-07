@@ -45,7 +45,6 @@ mod update;
 mod versions;
 mod views;
 mod wire;
-mod ws_quotes;
 
 use std::path::{Path, PathBuf};
 
