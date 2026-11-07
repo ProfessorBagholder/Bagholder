@@ -1,6 +1,6 @@
 // Wealthsimple stood in on loopback for the signed-in browser tests (`serve.mjs
-// --signed-in`): its search, answered from the listings below, and the token refresh
-// a saved sign-in makes. Any other call is an error, said as Wealthsimple says one,
+// --signed-in`): its search, answered from the listings below, its quotes of the
+// securities named below, and the token refresh a saved sign-in makes. Any other call is an error, said as Wealthsimple says one,
 // so nothing else the app asks of it is made up here.
 
 // Listings Wealthsimple's search knows that the made-up book does not hold: a second
@@ -8,6 +8,14 @@
 export const LISTINGS = [
   { id: 'sec-enb-nyse', symbol: 'ENB', name: 'Enbridge Inc.', primaryExchange: 'NYSE', primaryMic: 'XNYS', currency: 'USD', securityType: 'EQUITY' },
 ]
+
+// Quotes Wealthsimple states for listings the made-up book holds, by its own id
+// (`sec-<ticker>`): made-up prices, so a price on the page from here is told apart
+// from the made-up book's own. Any other security asked for is one it states nothing of.
+export const QUOTED = {
+  'sec-xeqt': { currency: 'CAD', price: 34.56, previousBaseline: 34.0 },
+  'sec-aapl': { currency: 'USD', price: 234.56, previousBaseline: 230.0 },
+}
 
 function result(l) {
   return { id: l.id, buyable: true, status: 'TRADING', currency: l.currency, securityType: l.securityType, wsTradeEligible: true, stock: { symbol: l.symbol, name: l.name, primaryExchange: l.primaryExchange, primaryMic: l.primaryMic } }
@@ -42,6 +50,11 @@ export function standIn(req, res) {
     if (asked.operationName === 'FetchSecuritySearchResult') {
       const q = String(asked.variables?.query || '').toUpperCase()
       return send(200, { data: { securitySearch: { results: LISTINGS.filter((l) => l.symbol === q).map(result) } } })
+    }
+    if (asked.operationName === 'FetchSecuritiesSummary') {
+      const ids = asked.variables?.ids || []
+      const securities = ids.filter((id) => QUOTED[id]).map((id) => ({ id, currency: QUOTED[id].currency, quoteV2: { ...QUOTED[id], quotedAsOf: new Date().toISOString() } }))
+      return send(200, { data: { securities } })
     }
     send(200, { errors: [{ message: `${asked.operationName || 'this call'} is not stood in for the browser tests` }] })
   })
