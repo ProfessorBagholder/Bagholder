@@ -152,8 +152,8 @@ fn an_unknown_symbol_on_cboe_canada_and_on_coinbase_is_not_carried_and_nothing_i
 fn yahoo_leaves_out_a_form_it_does_not_list_and_nothing_is_read() {
     let recorded = Arc::new(common::Recorded::new().with_spark("ONE.TO", 404, "yahoo", "ONE.TO-status-404.json"));
     let net = common::net(&recorded, AT);
+    // a request naming no symbol the spark carries is a 404: not carried
     let noted = yahoo::ask_spark(&net, &["ONE.TO".to_string()]);
-    let Outcome::Answered(each) = noted.outcome else { panic!() };
-    assert_eq!(each[0].kind(), OutcomeKind::NotCarried);
-    assert!(each[0].detail().contains("ONE.TO"));
+    assert_eq!(noted.outcome.kind(), OutcomeKind::NotCarried);
+    assert_eq!(noted.outcome.detail(), "status 404");
 }

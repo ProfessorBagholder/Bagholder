@@ -214,6 +214,26 @@ fn tmx_world(at: &str) -> (tempfile::TempDir, Book, MarketCache) {
     (dir, book, cache)
 }
 
+/// A spark request naming no symbol Yahoo carries is answered 404, which is each
+/// one's miss, never a failure of Yahoo's: a listing alone in its request (the last
+/// of a pass's, a glance's) that Yahoo does not carry is not carried, and nothing
+/// fails.
+#[test]
+fn a_spark_request_naming_no_symbol_yahoo_carries_is_each_ones_miss() {
+    let at = "2026-09-24T04:40:00Z";
+    let (_dir, book, cache) = tmx_world(at);
+    let recorded = Arc::new(common::Recorded::new().with_spark("ZZQXNOTREAL", 404, "yahoo", "ZZZQX-status-404.json"));
+    let net = common::net(&recorded, at);
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(at), bank: &zone };
+    quotes::read_quotes(&ctx, &[listing(1, InstrumentKind::Security, Currency::CAD, "ZZQXNOTREAL", Some("XNAS"))]).unwrap();
+    let rows = cache.outcomes(&bagholder_core::SourceName::named("yahoo")).unwrap();
+    assert_eq!(rows.iter().map(|o| (o.instrument, o.outcome)).collect::<Vec<_>>(), [(Some(id(1)), OutcomeKind::NotCarried)], "{rows:?}");
+    assert!(rows.iter().all(|o| !o.outcome.is_failure()));
+    let glance = quotes::GlanceOf { kind: InstrumentKind::Security, currency: Currency::USD, symbol: "ZZQXNOTREAL".into(), venue_mic: Some("XNAS".into()), yahoo: None };
+    assert_eq!(quotes::glance(&net, t(at), &glance, &BTreeMap::new()).kind(), OutcomeKind::NotCarried, "a glance of it: not carried, not a failure");
+}
+
 /// Canadian listings are asked of TMX twenty to a request: one TMX does not know
 /// is not carried, and the others in its request are still quoted.
 #[test]

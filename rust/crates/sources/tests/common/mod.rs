@@ -162,7 +162,8 @@ impl bagholder_net::Transport for Shared {
         self.0.headers.lock().unwrap().push(ask.headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
         let sent = ask.body.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
         if let Some(symbols) = ask.url.strip_prefix(SPARK).filter(|_| !self.0.spark.is_empty()) {
-            return Ok((200, ask.url.to_string(), vec![], spark_of(&self.0.spark, symbols).canonical().into_bytes()));
+            let (status, body) = spark_of(&self.0.spark, symbols);
+            return Ok((status, ask.url.to_string(), vec![], body.into_bytes()));
         }
         if ask.url == TMX && sent.contains("\"operationName\":\"getQuotes\"") && !self.0.tmx_quotes.is_empty() {
             return Ok((200, ask.url.to_string(), vec![], tmx_quotes_of(&self.0.tmx_quotes, &sent).canonical().into_bytes()));
@@ -209,9 +210,10 @@ fn decoded(s: &str) -> String {
 }
 
 /// The spark's reply to the symbols asked (`a,b,…&range=…`): each one's recorded
-/// chart as its result, a 404's left out. A symbol no chart is recorded for fails
-/// the test.
-fn spark_of(charts: &[(String, u16, Value)], query: &str) -> Value {
+/// chart as its result, a 404's left out; with none left, the 404 the spark
+/// answers a request naming no symbol it carries (`yahoo-spark/spark-*-status-404`).
+/// A symbol no chart is recorded for fails the test.
+fn spark_of(charts: &[(String, u16, Value)], query: &str) -> (u16, String) {
     let named = query.split('&').next().unwrap();
     let mut results = Vec::new();
     for symbol in named.split(',').map(decoded) {
@@ -222,7 +224,10 @@ fn spark_of(charts: &[(String, u16, Value)], query: &str) -> Value {
         let Value::Array(r) = field(field(chart, "chart"), "result") else { panic!("{symbol}'s chart holds no result") };
         results.push(object(vec![("symbol", Value::String(symbol.clone())), ("response", Value::Array(vec![r[0].clone()]))]));
     }
-    object(vec![("spark", object(vec![("result", Value::Array(results)), ("error", Value::Null)]))])
+    if results.is_empty() {
+        return (404, read("yahoo-spark", "spark-ZZQXNOTREAL-status-404.json"));
+    }
+    (200, object(vec![("spark", object(vec![("result", Value::Array(results)), ("error", Value::Null)]))]).canonical())
 }
 
 /// The forms a TMX quote request asks, each with its alias, in order.

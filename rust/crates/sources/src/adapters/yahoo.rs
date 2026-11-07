@@ -21,7 +21,8 @@
 //!
 //! The spark answers in an order of its own, each result named by the symbol
 //! asked, and leaves out a symbol it does not carry: that symbol is not carried
-//! by that form, and the others still answer.
+//! by that form, and the others still answer. A request naming no symbol it
+//! carries is answered 404: no symbol it names is carried.
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::tz::TimeZone;
@@ -377,13 +378,14 @@ pub fn ask_span(net: &Net, symbol: &str, from: Date, to: Date, now: Timestamp) -
 }
 
 /// Ask the spark for the quotes of `symbols`, at most `SPARK_MOST` of them, in one
-/// request: what came of each, in the order asked. A failure of the request is
-/// the outcome itself.
+/// request: what came of each, in the order asked. A failure of the request, or a
+/// 404 (none of them carried), is the outcome itself, each symbol's.
 pub fn ask_spark(net: &Net, symbols: &[String]) -> Noted<Vec<Outcome<Quoted>>> {
     if symbols.len() > SPARK_MOST {
         return Noted { outcome: Outcome::Meaning(format!("{} symbols asked of the spark at once, more than its {SPARK_MOST}", symbols.len())), shape_change: None };
     }
-    let reply = match ask::send(net, &Ask::get(&spark_url(symbols), &HEADERS), &[]) {
+    // a 404: no symbol asked is one Yahoo carries, each one's miss
+    let reply = match ask::send(net, &Ask::get(&spark_url(symbols), &HEADERS), NOT_CARRIED) {
         Outcome::Answered(r) => r,
         other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
     };
