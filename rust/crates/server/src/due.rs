@@ -788,6 +788,26 @@ mod tests {
         assert_eq!(q.quoted_at, t("2025-11-19T20:59:00Z"));
     }
 
+    /// A holding the book's records name by its Wealthsimple id is a listing
+    /// Wealthsimple quotes: the listing the figure path asks for carries that id,
+    /// though it identifies the holding rather than routes it.
+    #[test]
+    fn a_holding_read_from_wealthsimple_is_one_it_quotes() {
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let now = t("2025-11-19T21:00:00Z");
+        let f = crate::figures::Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let book = f.book().unwrap();
+        let n = f.read(|e| e.needs()).unwrap();
+        let held = crate::read_sources::needs_of(&book, &n, now.to_zoned(TimeZone::get("America/Toronto").unwrap()).date()).unwrap().held;
+        let shares: Vec<_> = held.iter().filter(|l| l.kind == bagholder_core::instrument::InstrumentKind::Security && l.venue_mic.is_some()).collect();
+        assert!(!shares.is_empty());
+        for l in shares {
+            assert!(crate::ws_quotes::carried(l).is_some_and(|id| !id.is_empty()), "{} carries no Wealthsimple id", l.symbol);
+        }
+    }
+
     /// A batch Wealthsimple refuses whole for one security it rejects (one delisted or
     /// merged, still in the book) is asked one security at a time from the next pass:
     /// the one it rejects fails alone and the rest are priced, and those back in

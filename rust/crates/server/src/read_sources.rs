@@ -91,8 +91,12 @@ pub fn listing(book: &Book, id: InstrumentId) -> Result<Option<Listing>, String>
     let i = book.instrument(id).map_err(err)?;
     let Some(now) = book.current_name(id).map_err(err)? else { return Ok(None) };
     let mut routes: BTreeMap<RefScheme, Vec<String>> = BTreeMap::new();
+    // the ways to ask for it: its routing references, and Wealthsimple's own id,
+    // which is how Wealthsimple's quotes ask for it (`ws_quotes`) though it also
+    // identifies it
+    let wealthsimple = RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple"));
     for r in book.instrument_refs(id).map_err(err)? {
-        if !r.identifies() {
+        if !r.identifies() || r.scheme == wealthsimple {
             routes.entry(r.scheme).or_default().push(r.value);
         }
     }
