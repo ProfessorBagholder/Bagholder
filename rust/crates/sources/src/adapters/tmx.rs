@@ -36,6 +36,9 @@ use crate::reply::{Mismatch, Node, RecordedShape};
 
 pub const SOURCE: &str = "tmx";
 pub const HOST: &str = "app-money.tmx.com";
+/// TMX's pace for every request to it, quotes included: the gap the heatmap's
+/// and the news's readers already kept, set before anything asks it.
+pub const PACE: bagholder_net::Pace = bagholder_net::Pace { gap: std::time::Duration::from_millis(600), rest: std::time::Duration::from_secs(60) };
 const URL: &str = "https://app-money.tmx.com/graphql";
 const HEADERS: [(&str, &str); 5] = [("Content-Type", "application/json"), ("locale", "en"), ("Origin", "https://money.tmx.com"), ("Referer", "https://money.tmx.com/"), ("User-Agent", "Mozilla/5.0")];
 

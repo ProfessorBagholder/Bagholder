@@ -45,6 +45,7 @@ mod update;
 mod versions;
 mod views;
 mod wire;
+mod ws_quotes;
 
 use std::path::{Path, PathBuf};
 
@@ -186,6 +187,8 @@ fn serve() -> i32 {
         logfile::start(&home, bagholder_core::jiff::Timestamp::now()).map_err(|e| format!("the log in {} could not be opened: {e}", home.display()))?;
         // every line the app says from here on goes to the log, not the terminal
         bagholder_core::log::set_sink(|line| logfile::write(line, bagholder_core::jiff::Timestamp::now()));
+        // every source's pace, before anything asks one
+        bagholder_sources::adapters::pace_every_source(bagholder_net::machine::global());
         let b = app::env_text("BAGHOLDER_BIND")?.unwrap_or_default().trim().to_string();
         let bind_host = if b.is_empty() { "127.0.0.1".to_string() } else { b };
         let hosts = app::parse_hosts(&app::env_text("BAGHOLDER_HOSTS")?.unwrap_or_default())?;
