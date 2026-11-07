@@ -45,6 +45,34 @@ test('a held symbol chosen before the holdings are read opens its holding once t
   await expect(page.locator('.pop')).toHaveCount(0)
 })
 
+// SPEC motion-25: asked open again (⌘K) while a chosen ticker waits for the holdings, the
+// panel returns to its search as a fresh one opens, the waiting choice dropped: the
+// holdings landing then open nothing and close nothing
+test('⌘K while a chosen symbol waits for the holdings drops it, and the panel stays on its search', async ({ page, request }) => {
+  const model = await figures(request)
+  const held = model.positions.find((p: { kind: string }) => p.kind === 'Shares')
+  let release = () => {}
+  const released = new Promise<void>((r) => (release = r))
+  await page.route('**/api/events/watch', async (route) => {
+    if ((route.request().postData() ?? '').includes('"positions"')) await released
+    await route.fallback()
+  })
+  await open(page)
+  await page.keyboard.type(held.symbol)
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.pop')).toContainText('Reading your holdings…')
+  await page.keyboard.press('ControlOrMeta+k')
+  await expect(page.getByLabel('Search', { exact: true })).toBeFocused()
+  await expect(page.locator('.pop')).not.toContainText('Reading your holdings…')
+  const read = page.waitForResponse((r) => r.url().includes('/api/events/watch') && (r.request().postData() ?? '').includes('"positions"'))
+  release()
+  await read
+  await page.waitForTimeout(500)
+  await expect(page).toHaveURL(/#trades/)
+  await expect(page.locator('.pop')).toHaveCount(1)
+  await expect(page.getByLabel('Search', { exact: true })).toBeFocused()
+})
+
 test('Enter on a held symbol opens its holding; Shift+Enter narrows the book by it; Backspace in the empty box deselects it', async ({ page, request }) => {
   const model = await figures(request)
   const held = model.positions.find((p: { kind: string }) => p.kind === 'Shares')

@@ -306,7 +306,10 @@
   $effect(() => {
     boxEl?.focus()
   })
-  // asked open again: back to where it opens, its box taking the keyboard
+  // asked open again: back to where it opens, its box taking the keyboard. The reset
+  // clears everything a fresh panel starts without: the field and the queries, a ticker
+  // chosen that waits for the holdings (it would open and close the panel just asked
+  // for), and the outside lookup of the old query, pending or answered.
   let asked = untrack(() => opened)
   $effect(() => {
     if (opened === asked) return
@@ -316,6 +319,9 @@
       fieldQuery = null
       valueQuery = ''
       valueHi = 0
+      opening = null
+      clearTimeout(extTimer)
+      extResults = { q: '', rows: [], error: '' }
     })
     queueMicrotask(() => boxEl?.focus())
   })
