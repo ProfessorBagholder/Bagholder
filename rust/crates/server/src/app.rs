@@ -309,6 +309,9 @@ pub struct App {
     pub notify: crate::notify::NotifyState,
     /// The order loops' own state: brackets in flight, and the last readback.
     pub orders: crate::orders::OrdersState,
+    /// The Wealthsimple securities whose quotes are asked one to a request
+    /// (`ws_quotes`): those of a batch Wealthsimple refused whole.
+    pub ws_alone: Mutex<std::collections::BTreeSet<String>>,
     /// The figure path: the book, the market cache and the engine, opened when
     /// the server starts (`figures`).
     pub figures: std::sync::OnceLock<crate::figures::Figures>,
@@ -391,6 +394,7 @@ impl App {
             market_failing: Mutex::new(crate::reading::Failing::default()),
             notify: crate::notify::NotifyState::default(),
             orders: crate::orders::OrdersState::from_env(),
+            ws_alone: Mutex::new(Default::default()),
             figures: std::sync::OnceLock::new(),
             net,
             pull_asked: AtomicBool::new(false),

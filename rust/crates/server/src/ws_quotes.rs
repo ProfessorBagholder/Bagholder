@@ -23,7 +23,13 @@ use serde_json::json;
 
 use crate::app::App;
 
-/// Securities to a request, as the balances are asked.
+/// Securities to a request, as the balances are asked: Wealthsimple's own web
+/// client (its build `assets.wealthsimple.com/app-378b1c4acb7ba965.js`, read
+/// 2026-11-07) sends no request for several securities' quotes to take a size from
+/// (it asks `FetchSecurityQuoteV2` or `FetchSecuritySummary` of one security, and
+/// its holdings and watchlist by the person), so a batch it refuses whole is asked
+/// one security at a time from the next pass (`read`): a large one can only slow a
+/// pass, never stop its prices.
 pub const CHUNK: usize = 20;
 /// The host the quotes are asked of, as their reads are recorded.
 pub const HOST: &str = "my.wealthsimple.com";
@@ -57,12 +63,30 @@ pub fn split(listings: &[Listing], signed_in: bool) -> (Vec<Listing>, Vec<Listin
 }
 
 /// Quote `listings` (each carried) from Wealthsimple, `CHUNK` to a request, each
-/// answer kept as it lands and its outcome recorded: what is kept.
+/// answer kept as it lands and its outcome recorded: what is kept. A request
+/// Wealthsimple answers with an error is refused whole for one security it rejects
+/// (one delisted or merged, still in the book): its securities are asked one to a
+/// request from the next pass, so the one it rejects fails alone and the rest are
+/// priced; one that answers alone goes back to the batches.
 pub fn read(app: &Arc<App>, ctx: &Ctx, sess: &Session, listings: &[Listing]) -> Result<Vec<Listing>, String> {
     let mut kept = Vec::new();
-    for chunk in listings.chunks(CHUNK) {
+    let alone = app.ws_alone.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    let (single, batched): (Vec<Listing>, Vec<Listing>) = listings.iter().cloned().partition(|l| carried(l).is_some_and(|id| alone.contains(id)));
+    for chunk in batched.chunks(CHUNK).chain(single.chunks(1)) {
         let ids: Vec<&str> = chunk.iter().filter_map(carried).collect();
         let answer: Result<wire::SecuritiesSummary, _> = crate::orders::gql_as(app, sess, "FetchSecuritiesSummary", json!({ "ids": ids }));
+        {
+            let mut alone = app.ws_alone.lock().unwrap_or_else(|e| e.into_inner());
+            match &answer {
+                // refused whole by Wealthsimple: each asked alone from the next pass
+                Err(bagholder_ws::session::CallError::Graphql(_)) => alone.extend(ids.iter().map(|id| id.to_string())),
+                // answered: back to the batches
+                Ok(_) if ids.len() == 1 => {
+                    alone.remove(ids[0]);
+                }
+                _ => {}
+            }
+        }
         for l in chunk {
             let id = carried(l).unwrap_or_default();
             let outcome = match &answer {
