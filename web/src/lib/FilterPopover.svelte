@@ -14,11 +14,16 @@
   import { searchSymbols } from './reads.svelte'
   import { rememberListing } from './listing.svelte'
   import { tickerPage } from './tickerPage'
+  import { drop, lift } from './motion'
+  import { untrack } from 'svelte'
 
   // `field` opens the popover straight at one field's editor (for a chip's Edit /
   // ledger chipEdit: 'search' → the fields view, any other key → that field). The
   // funnel opens with no `field`, i.e. the fields view.
-  let { options, onclose, field }: { options: Options; onclose: () => void; field?: string } = $props()
+  // `opened` counts the times it is asked open: each ask after the first (⌘K with it
+  // open, or a press on the funnel while it fades out) returns it to where it opens, in
+  // place, so one panel is ever shown.
+  let { options, onclose, field, opened = 0 }: { options: Options; onclose: () => void; field?: string; opened?: number } = $props()
 
   // Which field is open: 'fields' is the list-of-fields view (the funnel opens here),
   // otherwise the key of the field being edited. fieldQuery null means "use the
@@ -301,6 +306,25 @@
   $effect(() => {
     boxEl?.focus()
   })
+  // asked open again: back to where it opens, its box taking the keyboard. The reset
+  // clears everything a fresh panel starts without: the field and the queries, a ticker
+  // chosen that waits for the holdings (it would open and close the panel just asked
+  // for), and the outside lookup of the old query, pending or answered.
+  let asked = untrack(() => opened)
+  $effect(() => {
+    if (opened === asked) return
+    asked = opened
+    untrack(() => {
+      picker = field && field !== 'search' ? field : 'fields'
+      fieldQuery = null
+      valueQuery = ''
+      valueHi = 0
+      opening = null
+      clearTimeout(extTimer)
+      extResults = { q: '', rows: [], error: '' }
+    })
+    queueMicrotask(() => boxEl?.focus())
+  })
   // the highlight is kept in view as the arrows move it
   $effect(() => {
     void valueHi
@@ -366,7 +390,7 @@
 <svelte:window onpointerdown={onPointerDown} />
 
 <!-- svelte-ignore a11y_no_static_element_interactions -->
-<div class="pop elev-md" bind:this={popEl}>
+<div class="pop elev-md" bind:this={popEl} in:drop out:lift>
   {#if !active}
     <!-- fields view: search box + matches, or the list of fields -->
     <div style="display:flex;align-items:center;gap:7px;padding:5px 7px;margin-bottom:8px;border-radius:6px;background:var(--n900);box-shadow:inset 0 0 0 1px rgba(var(--ink-rgb),.1)">

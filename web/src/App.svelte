@@ -56,6 +56,7 @@
   function editChip(key: string) {
     filterField = key === 'search' ? 'fields' : key
     filterOpen = true
+    filterOpened++
   }
   function removeChip(key: string) {
     clearField(key)
@@ -500,11 +501,11 @@
         {#if notesUnread}<span class="od-badge">{notesUnread}</span>{/if}
       </button>
       <div id="popAnchor" style="position:relative;flex:none">
-        <button class="btn btn-icon btn-secondary" aria-label="Filters" onclick={() => (filterOpen = !filterOpen)}>
+        <button class="btn btn-icon btn-secondary" aria-label="Filters" onclick={() => { filterOpen = !filterOpen; if (filterOpen) filterOpened++ }}>
           <svg width="15" height="15" viewBox="0 0 256 256" fill="currentColor"><path d={ICONS.funnel} /></svg>
         </button>
         {#if activeCount() > 0}<span style="position:absolute;top:-1px;right:-1px;width:7px;height:7px;border-radius:50%;background:var(--accent);box-shadow:0 0 0 2px var(--bg);pointer-events:none"></span>{/if}
-        {#if filterOpen && book.data}{#key filterOpened}<FilterPopover options={book.data.options} field={filterField} onclose={() => { filterOpen = false; filterField = undefined }} />{/key}{/if}
+        {#if filterOpen && book.data}<FilterPopover options={book.data.options} field={filterField} opened={filterOpened} onclose={() => { filterOpen = false; filterField = undefined }} />{/if}
       </div>
       <div style="position:relative;flex:none" bind:this={menuWrap}>
         <button class="btn btn-icon btn-secondary" aria-label="Menu" onclick={() => (ui.menuOpen = !ui.menuOpen)}>

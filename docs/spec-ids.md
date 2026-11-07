@@ -980,6 +980,9 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `motion-20`
 - `motion-21`
 - `motion-22`
+- `motion-23`
+- `motion-24`
+- `motion-25`
 - `what-a-published-copy-carries-1`
 - `what-a-published-copy-carries-2`
 - `what-a-published-copy-carries-3`
