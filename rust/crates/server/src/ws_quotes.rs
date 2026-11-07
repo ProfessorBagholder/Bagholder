@@ -31,8 +31,6 @@ use crate::app::App;
 /// one security at a time from the next pass (`read`): a large one can only slow a
 /// pass, never stop its prices.
 pub const CHUNK: usize = 20;
-/// The host the quotes are asked of, as their reads are recorded.
-pub const HOST: &str = "my.wealthsimple.com";
 
 /// The source a Wealthsimple quote is kept under.
 pub fn source() -> SourceName {
@@ -69,6 +67,8 @@ pub fn split(listings: &[Listing], signed_in: bool) -> (Vec<Listing>, Vec<Listin
 /// request from the next pass, so the one it rejects fails alone and the rest are
 /// priced; one that answers alone goes back to the batches.
 pub fn read(app: &Arc<App>, ctx: &Ctx, sess: &Session, listings: &[Listing]) -> Result<Vec<Listing>, String> {
+    // the host its reads are recorded under: the stand-in's where one is named
+    let host = bagholder_net::host_of(&bagholder_ws::session::graphql_url());
     let mut kept = Vec::new();
     let alone = app.ws_alone.lock().unwrap_or_else(|e| e.into_inner()).clone();
     let (single, batched): (Vec<Listing>, Vec<Listing>) = listings.iter().cloned().partition(|l| carried(l).is_some_and(|id| alone.contains(id)));
@@ -104,7 +104,7 @@ pub fn read(app: &Arc<App>, ctx: &Ctx, sess: &Session, listings: &[Listing]) -> 
                     },
                 },
             };
-            ctx.record_detail(&source(), HOST, DataKind::Quote, Some(l.id), &Noted { outcome, shape_change: None }, id).map_err(|e| e.to_string())?;
+            ctx.record_detail(&source(), &host, DataKind::Quote, Some(l.id), &Noted { outcome, shape_change: None }, id).map_err(|e| e.to_string())?;
         }
     }
     Ok(kept)

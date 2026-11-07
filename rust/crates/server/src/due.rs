@@ -163,7 +163,7 @@ pub fn pass(app: &Arc<App>, f: &Figures, now: Timestamp) -> Result<Option<Timest
         last = Some(n);
     }
     let (quoting, quiet_until) = demand(&ctx, &needs.held, app.events.watchers() > 0)?;
-    quote_by_source(app, f, &ctx, &quoting, crate::ws_quotes::session(app).as_ref(), |l| quotes::read_quotes(&ctx, std::slice::from_ref(l)).map_err(|e| e.to_string()))?;
+    quote_by_source(app, f, &ctx, &quoting, |l| quotes::read_quotes(&ctx, std::slice::from_ref(l)).map_err(|e| e.to_string()))?;
     // the option contracts held: their chains are asked when Cboe's copy has moved on
     // (`options::chain_due`), a contract shown for the first time at once
     bagholder_sources::options::read(&ctx, &needs.contracts).map_err(|e| e.to_string())?;
@@ -179,9 +179,10 @@ pub fn pass(app: &Arc<App>, f: &Figures, now: Timestamp) -> Result<Option<Timest
 /// public feeds (`read_public`) the rest, and every one while signed out. A
 /// listing Wealthsimple carries never reaches a public feed while signed in, its
 /// read failed or not.
-fn quote_by_source(app: &Arc<App>, f: &Figures, ctx: &Ctx, listings: &[bagholder_sources::contract::Listing], sess: Option<&bagholder_ws::session::Session>, read_public: impl FnMut(&bagholder_sources::contract::Listing) -> Result<(), String>) -> Result<(), String> {
+fn quote_by_source(app: &Arc<App>, f: &Figures, ctx: &Ctx, listings: &[bagholder_sources::contract::Listing], read_public: impl FnMut(&bagholder_sources::contract::Listing) -> Result<(), String>) -> Result<(), String> {
+    let sess = crate::ws_quotes::session(app);
     let (broker, public) = crate::ws_quotes::split(listings, sess.is_some());
-    if let Some(sess) = sess.filter(|_| !broker.is_empty()) {
+    if let Some(sess) = sess.as_ref().filter(|_| !broker.is_empty()) {
         let kept = crate::ws_quotes::read(app, ctx, sess, &broker)?;
         let mut moved = false;
         for l in &kept {
@@ -857,23 +858,22 @@ mod tests {
         let index = bagholder_sources::contract::Listing { kind: bagholder_core::instrument::InstrumentKind::Index, routes: Default::default(), ..carried(99) };
         let listings = vec![carried(1), carried(2), index.clone()];
         let mut public = Vec::new();
-        let sess = crate::ws_quotes::session(&app);
-        quote_by_source(&app, f, &ctx, &listings, sess.as_ref(), |l| {
+        quote_by_source(&app, f, &ctx, &listings, |l| {
             public.push(l.id);
             Ok(())
         })
         .unwrap();
         assert_eq!(public, [index.id], "the index alone, Wealthsimple's read failed");
         assert!(cache.quotes_of(carried(1).id).unwrap().is_empty(), "nothing kept from another source in between");
+        // signed out, as once Wealthsimple has ended the sign-in: no session
+        app.state.lock().unwrap().connected = false;
+        assert!(crate::ws_quotes::session(&app).is_none());
         let mut public = Vec::new();
-        quote_by_source(&app, f, &ctx, &listings, None, |l| {
+        quote_by_source(&app, f, &ctx, &listings, |l| {
             public.push(l.id);
             Ok(())
         })
         .unwrap();
         assert_eq!(public, listings.iter().map(|l| l.id).collect::<Vec<_>>(), "signed out: the public feeds quote every one");
-        // no session while Wealthsimple has ended the sign-in
-        app.state.lock().unwrap().connected = false;
-        assert!(crate::ws_quotes::session(&app).is_none());
     }
 }
