@@ -155,7 +155,7 @@ fn a_run_stores_each_payers_record_under_its_source_and_its_schedule_where_state
         common::Recorded::new()
             .with("https://www.ninepoint.com/api/funds/getallfundswithpriceandperformance/en?showAllSeries=true", 200, NP, "funds-trimmed.json")
             .with("https://www.ninepoint.com/funds/ninepoint-cameco-highshares-etf/?series=ETF", 200, NP, "page-cchi.html")
-            .with_body(TMX, "getQuoteBySymbol", 200, "tmx", "quote-QCN.json")
+            .with_tmx_quote("*", "quote-QCN.json")
             .with_body(TMX, "getDividendsForSymbol", 200, "tmx", "dividends-QCN.json")
             .with("https://query1.finance.yahoo.com/v8/finance/chart/WQTM?period1=946857600&period2=1790294400&interval=1d&events=div%7Csplit", 200, "yahoo", "WQTM-2025-10-01-2026-09-24.json"),
     );
@@ -207,7 +207,7 @@ fn a_payer_its_companys_publication_does_not_carry_has_the_markets_record() {
     let recorded = Arc::new(
         common::Recorded::new()
             .with("https://www.ninepoint.com/api/funds/getallfundswithpriceandperformance/en?showAllSeries=true", 200, NP, "funds-trimmed.json")
-            .with_body(TMX, "getQuoteBySymbol", 200, "tmx", "quote-QCN.json")
+            .with_tmx_quote("*", "quote-QCN.json")
             .with_body(TMX, "getDividendsForSymbol", 200, "tmx", "dividends-QCN.json"),
     );
     let net = common::net(&recorded, "2026-09-24T04:00:00Z");

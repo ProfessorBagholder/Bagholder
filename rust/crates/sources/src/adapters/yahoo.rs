@@ -1,8 +1,10 @@
 //! Yahoo's chart (`query1.finance.yahoo.com/v8/finance/chart/<symbol>`): daily
 //! closes of listings, the closes, dividends and splits of each benchmark's
-//! tracker, the dividend events of a US fund whose company's publication cannot
-//! be read, and a US listing's quote (`docs/plans/stage-3a-sources.md`, research
-//! 1; `docs/plans/stage-3a-brief-06.md`).
+//! tracker, and the dividend events of a US fund whose company's publication
+//! cannot be read (`docs/plans/stage-3a-sources.md`, research 1;
+//! `docs/plans/stage-3a-brief-06.md`). Quotes are read from its spark
+//! (`/v7/finance/spark?symbols=<a>,<b>,…`), up to twenty symbols a request: each
+//! symbol's result carries the one-day chart's `meta`, read as the chart's is.
 //!
 //! Its closes are adjusted for later splits, and the same reply states those
 //! splits when asked with `events=split`, so each close is stored as traded:
@@ -16,6 +18,10 @@
 //! its day's change against the previous close the chart states
 //! (`chartPreviousClose`, else `previousClose`), in percent as stated, else
 //! worked out from that close.
+//!
+//! The spark answers in an order of its own, each result named by the symbol
+//! asked, and leaves out a symbol it does not carry: that symbol is not carried
+//! by that form, and the others still answer.
 
 use bagholder_core::jiff::civil::Date;
 use bagholder_core::jiff::tz::TimeZone;
@@ -31,6 +37,10 @@ use crate::reply::{Keyed, Mismatch, Node, RecordedShape};
 pub const SOURCE: &str = "yahoo";
 pub const HOST: &str = "query1.finance.yahoo.com";
 const CHART: &str = "https://query1.finance.yahoo.com/v8/finance/chart/";
+const SPARK: &str = "https://query1.finance.yahoo.com/v7/finance/spark?symbols=";
+/// The most symbols one spark request may name: Yahoo answers more with a 400,
+/// "Number of symbols needs to be less than or equal to 20".
+pub const SPARK_MOST: usize = 20;
 const HEADERS: [(&str, &str); 2] = [("User-Agent", "Mozilla/5.0"), ("Accept", "application/json")];
 /// Yahoo refuses bursts: one request every two seconds, and after a refusal
 /// nothing for ten minutes.
@@ -44,6 +54,10 @@ pub fn source() -> SourceName {
 
 pub fn shape() -> RecordedShape {
     ask::recorded_shape(include_str!("../../shapes/yahoo-chart.paths"))
+}
+
+pub fn spark_shape() -> RecordedShape {
+    ask::recorded_shape(include_str!("../../shapes/yahoo-spark.paths"))
 }
 
 /// The chart's events are keyed by their instants.
@@ -64,6 +78,18 @@ pub struct YahooQuote {
     pub at: Timestamp,
     /// The day's change in percent, as stated, else from the previous close.
     pub change_pct: Option<Dec>,
+}
+
+/// A listing's quote as a chart's `meta` states it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Quoted {
+    /// The symbol Yahoo answered under.
+    pub symbol: String,
+    pub currency: Currency,
+    pub quote: YahooQuote,
+    /// The close the day's change is measured from, as stated
+    /// (`chartPreviousClose`, else `previousClose`).
+    pub previous_close: Option<Dec>,
 }
 
 /// What one chart reply states, read strictly.
@@ -137,13 +163,9 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
         return Ok(Err(format!("the chart holds {} results, not one", results.len())));
     };
     let meta = r.obj("meta")?;
-    let answered = meta.text("symbol")?;
-    if !same_symbol(answered, symbol) {
-        return Ok(Err(format!("the chart is {answered}'s, not {symbol}'s")));
-    }
-    let currency = match Currency::parse(meta.text("currency")?) {
-        Ok(c) => c,
-        Err(e) => return Ok(Err(format!("{symbol}'s currency: {e}"))),
+    let Quoted { symbol: answered, currency, quote, previous_close } = match quote_of(&meta, symbol)? {
+        Ok(q) => q,
+        Err(why) => return Ok(Err(why)),
     };
     let zone_name = meta.text("exchangeTimezoneName")?;
     let Ok(zone) = TimeZone::get(zone_name) else {
@@ -156,31 +178,7 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
     let period_day = day_of(period_start);
     let closed = |d: Date| d < period_day || (d == period_day && now >= period_end);
 
-    let price = meta.dec("regularMarketPrice")?;
-    let at = instant(meta.int("regularMarketTime")?, "meta.regularMarketTime")?;
-    let stated_pct = match meta.field("regularMarketChangePercent") {
-        Ok(n) => Some(n.as_dec()?),
-        Err(_) => None,
-    };
-    let previous_close = match meta.field("chartPreviousClose").or_else(|_| meta.field("previousClose")) {
-        Ok(n) => Some(n.as_dec()?),
-        Err(_) => None,
-    };
-    if previous_close.is_some_and(|p| p <= Dec::ZERO) {
-        return Ok(Err(format!("{symbol}'s previous close is {}", previous_close.unwrap_or(Dec::ZERO))));
-    }
-    if price <= Dec::ZERO {
-        return Ok(Err(format!("{symbol}'s price is {price}")));
-    }
-    // A coin trades around the clock, and its day is the UTC day (`SPEC.md` §2,
-    // Coinbase: the day's change is against the close of the last completed UTC
-    // day). Yahoo's `chartPreviousClose` for a coin is that close, where today's UTC
-    // day began, while its stated percent runs over a rolling 24 hours: the change
-    // and its percent are both taken from the close.
-    let coin = meta.text("instrumentType").is_ok_and(|t| t == "CRYPTOCURRENCY");
-    let stated_pct = if coin { None } else { stated_pct };
-    // a chart that states no percent: the change over the previous close
-    let change_pct = stated_pct.or_else(|| previous_close.and_then(|p| crate::quotes::percent_of(price.checked_sub(p).ok()?, p)));
+    let at = quote.at;
 
     // the events: splits first, since they undo the rest
     let mut splits = Vec::new();
@@ -261,7 +259,91 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
             }
         }
     }
-    Ok(Ok(Chart { symbol: answered.to_string(), currency, closes, dividends: declared, splits, quote: YahooQuote { price, at, change_pct }, previous_close }))
+    Ok(Ok(Chart { symbol: answered, currency, closes, dividends: declared, splits, quote, previous_close }))
+}
+
+/// The quote a chart's `meta` states for `symbol`: its regular market price at its
+/// time, in its currency, with the close the day's change is measured from.
+fn quote_of(meta: &Node, symbol: &str) -> Result<Result<Quoted, String>, Mismatch> {
+    let answered = meta.text("symbol")?;
+    if !same_symbol(answered, symbol) {
+        return Ok(Err(format!("the chart is {answered}'s, not {symbol}'s")));
+    }
+    let currency = match Currency::parse(meta.text("currency")?) {
+        Ok(c) => c,
+        Err(e) => return Ok(Err(format!("{symbol}'s currency: {e}"))),
+    };
+    let price = meta.dec("regularMarketPrice")?;
+    let at = instant(meta.int("regularMarketTime")?, "meta.regularMarketTime")?;
+    let stated_pct = match meta.field("regularMarketChangePercent") {
+        Ok(n) => Some(n.as_dec()?),
+        Err(_) => None,
+    };
+    let previous_close = match meta.field("chartPreviousClose").or_else(|_| meta.field("previousClose")) {
+        Ok(n) => Some(n.as_dec()?),
+        Err(_) => None,
+    };
+    if previous_close.is_some_and(|p| p <= Dec::ZERO) {
+        return Ok(Err(format!("{symbol}'s previous close is {}", previous_close.unwrap_or(Dec::ZERO))));
+    }
+    if price <= Dec::ZERO {
+        return Ok(Err(format!("{symbol}'s price is {price}")));
+    }
+    // A coin trades around the clock, and its day is the UTC day (`SPEC.md` §2,
+    // Coinbase: the day's change is against the close of the last completed UTC
+    // day). Yahoo's `chartPreviousClose` for a coin is that close, where today's UTC
+    // day began, while its stated percent runs over a rolling 24 hours: the change
+    // and its percent are both taken from the close.
+    let coin = meta.text("instrumentType").is_ok_and(|t| t == "CRYPTOCURRENCY");
+    let stated_pct = if coin { None } else { stated_pct };
+    // a chart that states no percent: the change over the previous close
+    let change_pct = stated_pct.or_else(|| previous_close.and_then(|p| crate::quotes::percent_of(price.checked_sub(p).ok()?, p)));
+    Ok(Ok(Quoted { symbol: answered.to_string(), currency, quote: YahooQuote { price, at, change_pct }, previous_close }))
+}
+
+/// Read one spark reply for the symbols `asked`: what came of each, in the order
+/// asked. Each result is found by the symbol it names, never by its place; a
+/// symbol the reply leaves out is one Yahoo does not carry under that form; a
+/// result this reader cannot read fails that symbol alone.
+pub fn parse_spark(v: &Value, asked: &[String]) -> Outcome<Vec<Outcome<Quoted>>> {
+    let results = match Node::root(v).obj("spark").and_then(|s| s.list("result")) {
+        Ok(r) => r,
+        Err(m) => return Outcome::Mismatch(m),
+    };
+    let mut named = Vec::with_capacity(results.len());
+    for r in &results {
+        match r.text("symbol") {
+            Ok(s) => named.push((s, r)),
+            Err(m) => return Outcome::Mismatch(m),
+        }
+    }
+    let each = asked
+        .iter()
+        .map(|symbol| {
+            let Some((_, r)) = named.iter().find(|(s, _)| same_symbol(s, symbol)) else {
+                return Outcome::NotCarried(format!("Yahoo's spark leaves {symbol} out"));
+            };
+            let read = || -> Result<Result<Quoted, String>, Mismatch> {
+                let response = r.list("response")?;
+                let [chart] = response.as_slice() else {
+                    return Ok(Err(format!("the spark holds {} charts for {symbol}, not one", response.len())));
+                };
+                quote_of(&chart.obj("meta")?, symbol)
+            };
+            match read() {
+                Ok(Ok(q)) => Outcome::Answered(q),
+                Ok(Err(why)) => Outcome::Meaning(why),
+                Err(m) => Outcome::Mismatch(m),
+            }
+        })
+        .collect();
+    Outcome::Answered(each)
+}
+
+/// The spark's address for `symbols`, each written as a query value.
+pub fn spark_url(symbols: &[String]) -> String {
+    let named: Vec<String> = symbols.iter().map(|s| percent_encode(s)).collect();
+    format!("{SPARK}{}&range=1d&interval=1d", named.join(","))
 }
 
 /// Epoch seconds at the start of `d` in UTC: the chart's `period1`/`period2`.
@@ -294,10 +376,22 @@ pub fn ask_span(net: &Net, symbol: &str, from: Date, to: Date, now: Timestamp) -
     ask_url_after(net, &url, symbol, now, &later)
 }
 
-/// Ask for `symbol`'s quote: the chart of its latest session.
-pub fn ask_quote(net: &Net, symbol: &str, now: Timestamp) -> Noted<Chart> {
-    let url = format!("{CHART}{}?range=1d&interval=1d", percent_encode(symbol));
-    ask_url(net, &url, symbol, now)
+/// Ask the spark for the quotes of `symbols`, at most `SPARK_MOST` of them, in one
+/// request: what came of each, in the order asked. A failure of the request is
+/// the outcome itself.
+pub fn ask_spark(net: &Net, symbols: &[String]) -> Noted<Vec<Outcome<Quoted>>> {
+    if symbols.len() > SPARK_MOST {
+        return Noted { outcome: Outcome::Meaning(format!("{} symbols asked of the spark at once, more than its {SPARK_MOST}", symbols.len())), shape_change: None };
+    }
+    let reply = match ask::send(net, &Ask::get(&spark_url(symbols), &HEADERS), &[]) {
+        Outcome::Answered(r) => r,
+        other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
+    };
+    let v = match ask::json(&reply.body) {
+        Ok(v) => v,
+        Err(m) => return Noted { outcome: Outcome::Mismatch(m), shape_change: None },
+    };
+    Noted { outcome: parse_spark(&v, symbols), shape_change: ask::noticed(&v, &spark_shape(), &[]) }
 }
 
 fn ask_url(net: &Net, url: &str, symbol: &str, now: Timestamp) -> Noted<Chart> {

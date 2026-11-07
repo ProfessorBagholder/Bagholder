@@ -17,10 +17,17 @@
 //!   quote states is kept with it (a halted listing's too), and removed where
 //!   it states none: the Ex-Div of a payer no declared record serves.
 //! - **Cboe Canada listings:** Cboe Canada's own quote.
-//! - **US listings:** Yahoo's chart, its forms in order, the winner first, the
+//! - **US listings:** Yahoo's spark, its forms in order, the winner first, the
 //!   day's change in points from the previous close the chart states.
 //! - **Indices, futures, rates and currency pairs** (the app's directory): Yahoo's
-//!   chart under the code the directory gives each (its `yahoo` route).
+//!   spark under the code the directory gives each (its `yahoo` route).
+//!
+//! Yahoo's and TMX's listings are asked twenty to a request
+//! (`yahoo::SPARK_MOST`, `tmx::QUOTES_MOST`), every listing's form at once, so a
+//! pass costs each of them one request for every twenty listings, never one a
+//! listing: a listing a request leaves not carried under one form is asked under
+//! its next in the next request. Cboe Canada and Coinbase state no such request,
+//! and are asked one listing at a time.
 //! - **Coins:** Coinbase in the holding's own currency: the Exchange's ticker,
 //!   which states its time, for a USD pair; otherwise the spot price, stamped with
 //!   its reply's date less the age its origin allows. The day's change is against
@@ -81,27 +88,72 @@ pub(crate) fn same_currency_as<A>(outcome: &mut Outcome<A>, currency: impl Fn(&A
     }
 }
 
-/// Ask Yahoo for a listing's quote under each of its forms in turn, the one that
-/// answered last first; the first answer is kept, with the day's change in points
-/// from the previous close the chart states.
-fn ask_yahoo(ctx: &Ctx, l: &Listing, mut forms: Vec<String>) -> Result<()> {
-    let id = l.id;
-    if let Some((_, won)) = ctx.cache.winner(id, DataKind::Quote)? {
-        forms.sort_by_key(|f| *f != won);
+/// What one batched request came to for each form asked: its own outcome, or the
+/// request's failure as each one's.
+fn each_form<A: Clone>(asked: &[String], outcome: Outcome<Vec<Outcome<A>>>) -> Vec<Outcome<A>> {
+    match outcome {
+        Outcome::Answered(each) => each,
+        other => {
+            let failed: Outcome<A> = other.failed().expect("not answered");
+            asked.iter().map(|_| failed.clone()).collect()
+        }
     }
-    for form in forms {
-        let mut noted = yahoo::ask_quote(ctx.net, &form, ctx.now);
-        same_currency(&mut noted.outcome, |c| c.currency, l);
-        ctx.record_detail(&yahoo::source(), yahoo::HOST, DataKind::Quote, Some(id), &noted, &form)?;
-        match noted.outcome {
-            Outcome::Answered(c) => {
-                let change = c.previous_close.and_then(|p| c.quote.price.checked_sub(p).ok());
-                keep(ctx, id, yahoo::source(), Money::new(c.quote.price, c.currency), change, c.quote.change_pct, c.quote.at, std::time::Duration::ZERO)?;
-                ctx.cache.won(id, DataKind::Quote, &yahoo::source(), &form, ctx.now)?;
-                break;
+}
+
+/// Each form once, in the order first named.
+fn distinct(forms: impl Iterator<Item = String>) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for f in forms {
+        if !out.contains(&f) {
+            out.push(f);
+        }
+    }
+    out
+}
+
+/// Ask Yahoo's spark for the listings `asks` names, each under its forms in turn,
+/// the one that answered last first: every listing's next form in one round of
+/// requests, twenty to a request, and a listing its form is not carried under
+/// asked under its next in the round after. The first answer is kept, with the
+/// day's change in points from the previous close the chart states; `kept` is told
+/// each request's listings as soon as theirs are.
+fn ask_yahoo(ctx: &Ctx, asks: Vec<(&Listing, Vec<String>)>, kept: &mut dyn FnMut(&[InstrumentId])) -> Result<()> {
+    let mut pending: Vec<(&Listing, std::collections::VecDeque<String>)> = Vec::new();
+    for (l, mut forms) in asks {
+        if let Some((_, won)) = ctx.cache.winner(l.id, DataKind::Quote)? {
+            forms.sort_by_key(|f| *f != won);
+        }
+        pending.push((l, forms.into()));
+    }
+    while !pending.is_empty() {
+        let round: Vec<(&Listing, String, std::collections::VecDeque<String>)> = pending.drain(..).filter_map(|(l, mut forms)| forms.pop_front().map(|f| (l, f, forms))).collect();
+        let symbols = distinct(round.iter().map(|(_, f, _)| f.clone()));
+        let mut answered: Vec<Outcome<yahoo::Quoted>> = Vec::with_capacity(symbols.len());
+        let mut changed = Vec::with_capacity(symbols.len());
+        for chunk in symbols.chunks(yahoo::SPARK_MOST) {
+            let noted = yahoo::ask_spark(ctx.net, chunk);
+            changed.extend(chunk.iter().map(|_| noted.shape_change.clone()));
+            answered.extend(each_form(chunk, noted.outcome));
+            let mut moved = Vec::new();
+            for (l, form, rest) in round.iter().filter(|(_, f, _)| chunk.contains(f)) {
+                let at = symbols.iter().position(|s| s == form).expect("asked");
+                let mut outcome = answered[at].clone();
+                same_currency(&mut outcome, |c| c.currency, l);
+                ctx.record_detail(&yahoo::source(), yahoo::HOST, DataKind::Quote, Some(l.id), &Noted { outcome: outcome.clone(), shape_change: changed[at].clone() }, form)?;
+                match outcome {
+                    Outcome::Answered(c) => {
+                        let change = c.previous_close.and_then(|p| c.quote.price.checked_sub(p).ok());
+                        keep(ctx, l.id, yahoo::source(), Money::new(c.quote.price, c.currency), change, c.quote.change_pct, c.quote.at, std::time::Duration::ZERO)?;
+                        ctx.cache.won(l.id, DataKind::Quote, &yahoo::source(), form, ctx.now)?;
+                        moved.push(l.id);
+                    }
+                    // the next form, in the next round
+                    Outcome::NotCarried(_) if !rest.is_empty() => pending.push((*l, rest.clone())),
+                    // a failure stops the chain: nothing is learned from no answer
+                    _ => {}
+                }
             }
-            Outcome::NotCarried(_) => continue,
-            _ => break,
+            kept(&moved);
         }
     }
     Ok(())
@@ -109,6 +161,14 @@ fn ask_yahoo(ctx: &Ctx, l: &Listing, mut forms: Vec<String>) -> Result<()> {
 
 /// Read each listing's quote once.
 pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
+    read_quotes_then(ctx, listings, &mut |_| {})
+}
+
+/// Read each listing's quote once, `kept` told the listings each request answered
+/// as soon as their quotes are kept.
+pub fn read_quotes_then(ctx: &Ctx, listings: &[Listing], kept: &mut dyn FnMut(&[InstrumentId])) -> Result<()> {
+    let mut at_yahoo: Vec<(&Listing, Vec<String>)> = Vec::new();
+    let mut at_tmx: Vec<&Listing> = Vec::new();
     for l in listings {
         let id = l.id;
         // an index, a future, a rate or a pair: Yahoo, under the code the app's
@@ -119,13 +179,11 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
                 not_carried(ctx, &yahoo::source(), yahoo::HOST, id, format!("{} has no code Yahoo quotes it under", l.symbol))?;
                 continue;
             }
-            ask_yahoo(ctx, l, forms)?;
+            at_yahoo.push((l, forms));
             continue;
         }
         match l.market() {
-            Some(Market::Canada) => {
-                read_tmx(ctx, l, true)?;
-            }
+            Some(Market::Canada) => at_tmx.push(l),
             Some(Market::CboeCanada) => {
                 let symbol = venue::root(&l.symbol);
                 let noted = cboe_ca::ask(ctx.net, &symbol);
@@ -139,6 +197,7 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
                     Outcome::Answered(cboe_ca::CboeAnswer::NoTradeYet { prev_close }) => keep(ctx, id, cboe_ca::source(), Money::new(prev_close, l.currency), Some(Dec::ZERO), Some(Dec::ZERO), ctx.now, std::time::Duration::ZERO)?,
                     _ => {}
                 }
+                kept(&[id]);
             }
             Some(Market::UnitedStates | Market::Otc) => {
                 let forms = yahoo_forms(l);
@@ -146,7 +205,7 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
                     not_carried(ctx, &yahoo::source(), yahoo::HOST, id, format!("{} names no venue Yahoo carries", l.symbol))?;
                     continue;
                 }
-                ask_yahoo(ctx, l, forms)?;
+                at_yahoo.push((l, forms));
             }
             Some(Market::Crypto) => {
                 let base = l.symbol.trim().to_ascii_uppercase();
@@ -169,102 +228,126 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
                         keep(ctx, id, coinbase::spot_source(), price, change, pct, s.at, s.allowance)?;
                     }
                 }
+                kept(&[id]);
             }
             // option contracts: from their chains, with the option closes
             Some(Market::UsOptions) | None => {}
         }
     }
+    ask_yahoo(ctx, at_yahoo, kept)?;
+    read_tmx(ctx, &at_tmx, true, kept)?;
     Ok(())
 }
 
-/// Read a Canadian listing's quote from TMX: the book's form for it first, then its
-/// venue's own. No other venue's form is asked, and a form another venue answered
-/// before is not asked again: either reads another listing's quote as this one's.
 /// The ex-dividend date TMX's quote states, for each Canadian listing another
 /// source quotes (Wealthsimple, while the person is signed in): asked once a day,
 /// its price never kept, so the listing's price has one source.
 pub fn read_ex_dividends(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
     let today = ctx.today();
+    // its own record of the day it was asked, apart from the quote's
+    let subject = |l: &Listing| format!("ex-dividend:{}", l.id);
+    let mut due: Vec<&Listing> = Vec::new();
     for l in listings.iter().filter(|l| l.market() == Some(Market::Canada)) {
-        // its own record of the day it was asked, apart from the quote's
-        let subject = format!("ex-dividend:{}", l.id);
-        if ctx.cache.reads(&subject, DataKind::Quote)?.iter().any(|r| r.last == today) {
-            continue;
+        if !ctx.cache.reads(&subject(l), DataKind::Quote)?.iter().any(|r| r.last == today) {
+            due.push(l);
         }
-        let outcome = read_tmx(ctx, l, false)?;
+    }
+    for (l, outcome) in due.iter().zip(read_tmx(ctx, &due, false, &mut |_| {})?) {
         // a request the offline switch kept from going asked no one
         if outcome != crate::outcome::OutcomeKind::Offline {
-            ctx.cache.store_read(&subject, DataKind::Quote, &crate::cache::ReadRow { source: tmx::source(), first: today, last: today, outcome, at: ctx.now })?;
+            ctx.cache.store_read(&subject(l), DataKind::Quote, &crate::cache::ReadRow { source: tmx::source(), first: today, last: today, outcome, at: ctx.now })?;
         }
     }
     Ok(())
 }
 
-/// A Canadian listing asked of TMX, under the forms in turn; the price it states
-/// kept where `price` says so, its ex-dividend date always: what came of it.
-fn read_tmx(ctx: &Ctx, l: &Listing, price: bool) -> Result<crate::outcome::OutcomeKind> {
+/// Canadian listings asked of TMX, each under its forms in turn: every listing's
+/// next form in one round of requests, twenty to a request, and a listing its form
+/// is not carried under asked under its next in the round after. The price each
+/// states kept where `price` says so, its ex-dividend date always; `kept` is told
+/// each request's listings as soon as theirs are. What came of each, in order.
+fn read_tmx(ctx: &Ctx, listings: &[&Listing], price: bool, kept: &mut dyn FnMut(&[InstrumentId])) -> Result<Vec<crate::outcome::OutcomeKind>> {
     use crate::outcome::OutcomeKind;
-    let id = l.id;
     let source = tmx::source();
-    let routed = l.route(&RefScheme::TmxForm).map(str::to_string);
-    // the venue's own form, where the book names a venue TMX does
-    let own = l.venue_mic.as_deref().and_then(|mic| venue::tmx_form(&l.symbol, mic));
-    let mut forms: Vec<String> = Vec::new();
-    for f in routed.clone().into_iter().chain(venue::tmx_forms(&l.symbol, l.venue_mic.as_deref())) {
-        if !forms.contains(&f) {
-            forms.push(f);
-        }
-    }
-    if forms.is_empty() {
-        not_carried(ctx, &source, tmx::HOST, id, format!("{} names no venue TMX quotes", l.symbol))?;
-        return Ok(OutcomeKind::NotCarried);
-    }
-    // no form answered earlier today: only the first is asked until tomorrow
-    let subject = id.to_string();
     let today = ctx.today();
-    let missed = ctx.cache.reads(&subject, DataKind::Quote)?.iter().any(|r| r.source == source && r.outcome == crate::outcome::OutcomeKind::NotCarried && r.first == today);
-    if missed {
-        forms.truncate(1);
-    }
-    for form in forms {
-        let mut noted = tmx::ask_quote(ctx.net, &form);
-        same_currency(&mut noted.outcome, |q| q.currency, l);
-        // an ex-dividend date this reader cannot read is the reply's mismatch,
-        // recorded as the request's outcome; the price it states still stands
-        let ex_mismatch = match &noted.outcome {
-            Outcome::Answered(q) => q.ex_dividend.as_ref().err().cloned(),
-            _ => None,
-        };
-        match &ex_mismatch {
-            Some(m) => ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &Noted::<()> { outcome: Outcome::Mismatch(m.clone()), shape_change: noted.shape_change.clone() }, &form)?,
-            None => ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &noted, &form)?,
+    let mut came: Vec<OutcomeKind> = vec![OutcomeKind::NotCarried; listings.len()];
+    // each listing's forms: the book's for it first, then its venue's own. No other
+    // venue's form is asked, and a form another venue answered before is not asked
+    // again: either reads another listing's quote as this one's
+    let mut missed_today = vec![false; listings.len()];
+    let mut pending: Vec<(usize, std::collections::VecDeque<String>)> = Vec::new();
+    for (i, l) in listings.iter().enumerate() {
+        let routed = l.route(&RefScheme::TmxForm).map(str::to_string);
+        let mut forms = distinct(routed.into_iter().chain(venue::tmx_forms(&l.symbol, l.venue_mic.as_deref())));
+        if forms.is_empty() {
+            not_carried(ctx, &source, tmx::HOST, l.id, format!("{} names no venue TMX quotes", l.symbol))?;
+            continue;
         }
-        match noted.outcome {
-            Outcome::Answered(q) => {
-                // a null price: TMX has none now, and the price read last stands
-                if let Some(p) = q.price.filter(|_| price) {
-                    keep(ctx, id, source.clone(), Money::new(p, q.currency), q.change, q.change_pct, q.datetime, std::time::Duration::ZERO)?;
+        // no form answered earlier today: only the first is asked until tomorrow
+        missed_today[i] = ctx.cache.reads(&l.id.to_string(), DataKind::Quote)?.iter().any(|r| r.source == source && r.outcome == OutcomeKind::NotCarried && r.first == today);
+        if missed_today[i] {
+            forms.truncate(1);
+        }
+        pending.push((i, forms.into()));
+    }
+    while !pending.is_empty() {
+        let round: Vec<(usize, String, std::collections::VecDeque<String>)> = pending.drain(..).filter_map(|(i, mut forms)| forms.pop_front().map(|f| (i, f, forms))).collect();
+        let asked = distinct(round.iter().map(|(_, f, _)| f.clone()));
+        for chunk in asked.chunks(tmx::QUOTES_MOST) {
+            let noted = tmx::ask_quotes(ctx.net, chunk);
+            let shape_change = noted.shape_change.clone();
+            let each = each_form(chunk, noted.outcome);
+            let mut moved = Vec::new();
+            for (i, form, rest) in round.iter().filter(|(_, f, _)| chunk.contains(f)) {
+                let l = listings[*i];
+                let id = l.id;
+                let mut outcome = each[chunk.iter().position(|c| c == form).expect("asked")].clone();
+                same_currency(&mut outcome, |q| q.currency, l);
+                // an ex-dividend date this reader cannot read is the reply's mismatch,
+                // recorded as the request's outcome; the price it states still stands
+                let ex_mismatch = match &outcome {
+                    Outcome::Answered(q) => q.ex_dividend.as_ref().err().cloned(),
+                    _ => None,
+                };
+                match &ex_mismatch {
+                    Some(m) => ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &Noted::<()> { outcome: Outcome::Mismatch(m.clone()), shape_change: shape_change.clone() }, form)?,
+                    None => ctx.record_detail(&source, tmx::HOST, DataKind::Quote, Some(id), &Noted { outcome: outcome.clone(), shape_change: shape_change.clone() }, form)?,
                 }
-                // the ex-dividend date the quote states, kept with it; none where it
-                // states none or where it could not be read
-                ctx.cache.store_ex_dividend(id, &source, q.ex_dividend.unwrap_or(None), ctx.now)?;
-                ctx.cache.won(id, DataKind::Quote, &source, &form, ctx.now)?;
-                // the reply is for the venue the form asks: where that is the venue
-                // the book names, the form is this listing's
-                if routed.is_none() && own.as_deref() == Some(form.as_str()) {
-                    ctx.book.add_instrument_ref(id, &Reference { scheme: RefScheme::TmxForm, value: form })?;
+                came[*i] = outcome.kind();
+                match outcome {
+                    Outcome::Answered(q) => {
+                        // a null price: TMX has none now, and the price read last stands
+                        if let Some(p) = q.price.filter(|_| price) {
+                            keep(ctx, id, source.clone(), Money::new(p, q.currency), q.change, q.change_pct, q.datetime, std::time::Duration::ZERO)?;
+                            moved.push(id);
+                        }
+                        // the ex-dividend date the quote states, kept with it; none where it
+                        // states none or where it could not be read
+                        ctx.cache.store_ex_dividend(id, &source, q.ex_dividend.unwrap_or(None), ctx.now)?;
+                        ctx.cache.won(id, DataKind::Quote, &source, form, ctx.now)?;
+                        // the reply is for the venue the form asks: where that is the venue
+                        // the book names, the form is this listing's
+                        let own = l.venue_mic.as_deref().and_then(|mic| venue::tmx_form(&l.symbol, mic));
+                        if l.route(&RefScheme::TmxForm).is_none() && own.as_deref() == Some(form.as_str()) {
+                            ctx.book.add_instrument_ref(id, &Reference { scheme: RefScheme::TmxForm, value: form.clone() })?;
+                        }
+                    }
+                    // the next form, in the next round
+                    Outcome::NotCarried(_) if !rest.is_empty() => pending.push((*i, rest.clone())),
+                    // no form answers: asked again under its first form only, until tomorrow
+                    Outcome::NotCarried(_) => {
+                        if !missed_today[*i] {
+                            ctx.cache.store_read(&id.to_string(), DataKind::Quote, &crate::cache::ReadRow { source: source.clone(), first: today, last: today, outcome: OutcomeKind::NotCarried, at: ctx.now })?;
+                        }
+                    }
+                    // a failure stops the chain: nothing is learned from no answer
+                    _ => {}
                 }
-                return Ok(OutcomeKind::Answered);
             }
-            Outcome::NotCarried(_) => continue,
-            // a failure stops the chain: nothing is learned from no answer
-            other => return Ok(other.kind()),
+            kept(&moved);
         }
     }
-    if !missed {
-        ctx.cache.store_read(&subject, DataKind::Quote, &crate::cache::ReadRow { source, first: today, last: today, outcome: OutcomeKind::NotCarried, at: ctx.now })?;
-    }
-    Ok(OutcomeKind::NotCarried)
+    Ok(came)
 }
 
 /// A coin's day change at `price`, in points and in percent: against the close of
@@ -373,6 +456,11 @@ fn glance_closes(net: &bagholder_net::Net, now: Timestamp, symbol: &str, currenc
     vec![]
 }
 
+/// What a batched request asked for one form came to for it.
+fn one<A: Clone>(outcome: Outcome<Vec<Outcome<A>>>) -> Outcome<A> {
+    each_form(&[String::new()], outcome).pop().expect("one form asked, one answered")
+}
+
 /// The glance's quote, or why there is none: the first source's answer, else its
 /// failure. `rates` are the Bank's, for a coin's close kept in another currency
 /// than the one it is glanced in.
@@ -381,9 +469,9 @@ pub fn glance(net: &bagholder_net::Net, now: Timestamp, g: &GlanceOf, rates: &BT
     let yahoo_first = |forms: Vec<String>| -> Outcome<Glance> {
         let mut last = not_carried(format!("{} names no venue Yahoo carries", g.symbol));
         for form in forms {
-            let mut noted = yahoo::ask_quote(net, &form, now);
-            same_currency_as(&mut noted.outcome, |c| c.currency, &g.symbol, g.currency);
-            match noted.outcome {
+            let mut outcome = one(yahoo::ask_spark(net, std::slice::from_ref(&form)).outcome);
+            same_currency_as(&mut outcome, |c| c.currency, &g.symbol, g.currency);
+            match outcome {
                 Outcome::Answered(c) => {
                     let change = c.previous_close.and_then(|p| c.quote.price.checked_sub(p).ok());
                     return Outcome::Answered(Glance { price: Money::new(c.quote.price, c.currency), change, change_pct: c.quote.change_pct });
@@ -414,9 +502,9 @@ pub fn glance(net: &bagholder_net::Net, now: Timestamp, g: &GlanceOf, rates: &BT
         Some(Market::Canada) => {
             let mut last = not_carried(format!("{} names no venue TMX quotes", g.symbol));
             for form in venue::tmx_forms(&g.symbol, g.venue_mic.as_deref()) {
-                let mut noted = tmx::ask_quote(net, &form);
-                same_currency_as(&mut noted.outcome, |q| q.currency, &g.symbol, g.currency);
-                match noted.outcome {
+                let mut outcome = one(tmx::ask_quotes(net, std::slice::from_ref(&form)).outcome);
+                same_currency_as(&mut outcome, |q| q.currency, &g.symbol, g.currency);
+                match outcome {
                     Outcome::Answered(q) => {
                         return match q.price {
                             Some(price) => Outcome::Answered(Glance { price: Money::new(price, q.currency), change: q.change, change_pct: q.change_pct }),

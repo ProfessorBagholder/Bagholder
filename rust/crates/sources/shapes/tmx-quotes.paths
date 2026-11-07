@@ -1,0 +1,25 @@
+.
+data
+data.*
+data.*.currency
+data.*.datetime
+data.*.dividendFrequency
+data.*.exDividendDate
+data.*.exchangeCode
+data.*.exchangeName
+data.*.name
+data.*.percentChange
+data.*.prevClose
+data.*.price
+data.*.priceChange
+data.*.symbol
+errors ?
+errors[]
+errors[].code
+errors[].locations
+errors[].locations[]
+errors[].locations[].column
+errors[].locations[].line
+errors[].message
+errors[].path
+errors[].path[]

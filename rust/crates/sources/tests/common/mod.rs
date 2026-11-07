@@ -78,6 +78,12 @@ pub struct Recorded {
     /// status, the reply and its headers (from `<name>.headers` beside it, where
     /// the capture kept them).
     pub answers: Vec<(String, String, u16, Vec<u8>, Vec<(String, String)>)>,
+    /// Yahoo's one-day chart of each symbol the spark is asked for, with its
+    /// status (`with_spark`).
+    pub spark: Vec<(String, u16, Value)>,
+    /// TMX's answer to one listing's quote, for each form a quote request asks
+    /// (`with_tmx_quote`); `*` for any form not named.
+    pub tmx_quotes: Vec<(String, Value)>,
     pub asked: std::sync::Mutex<Vec<String>>,
     /// Each request's headers, in the order asked.
     pub headers: std::sync::Mutex<Vec<Vec<(String, String)>>>,
@@ -85,7 +91,7 @@ pub struct Recorded {
 
 impl Recorded {
     pub fn new() -> Recorded {
-        Recorded { answers: Vec::new(), asked: std::sync::Mutex::new(Vec::new()), headers: std::sync::Mutex::new(Vec::new()) }
+        Recorded { answers: Vec::new(), spark: Vec::new(), tmx_quotes: Vec::new(), asked: std::sync::Mutex::new(Vec::new()), headers: std::sync::Mutex::new(Vec::new()) }
     }
 
     /// Answer `url` with the recorded reply `source/name`, captured with `status`.
@@ -106,11 +112,29 @@ impl Recorded {
         self
     }
 
+    /// Answer the spark's result for `symbol` with Yahoo's recorded one-day chart
+    /// of it (`source/name`), captured with `status`: the spark carries each
+    /// symbol's one-day chart as its `response[0]` (`yahoo/spark-*.json`), and
+    /// leaves out a symbol whose chart is a 404.
+    pub fn with_spark(mut self, symbol: &str, status: u16, source: &str, name: &str) -> Recorded {
+        self.spark.push((symbol.to_string(), status, json(source, name)));
+        self
+    }
+
+    /// Answer `form` in a TMX quote request with the recorded reply to its own
+    /// quote (`tmx/name`): the aliased request carries each listing's
+    /// `getQuoteBySymbol` answer under its alias, an error naming that alias
+    /// (`tmx/quotes-*.json`). `*` answers any form not named.
+    pub fn with_tmx_quote(mut self, form: &str, name: &str) -> Recorded {
+        self.tmx_quotes.push((form.to_string(), json("tmx", name)));
+        self
+    }
+
     /// The market's record knows no listing: TMX has no quote for it, Yahoo no
     /// chart. For a payer whose company's reader does not carry it, which is then
     /// asked of its market's record (`payers::run`).
     pub fn with_market_record_unknown(self) -> Recorded {
-        self.with_body("https://app-money.tmx.com/graphql", "getQuoteBySymbol", 200, "tmx", "quote-ZZZQX-unknown.json").with_prefix("https://query1.finance.yahoo.com/v8/finance/chart/", 404, "yahoo", "ZZZQX-status-404.json")
+        self.with_tmx_quote("*", "quote-ZZZQX-unknown.json").with_prefix("https://query1.finance.yahoo.com/v8/finance/chart/", 404, "yahoo", "ZZZQX-status-404.json")
     }
 
     /// Answer TMX's quote and distributions for `symbol` with its recorded
@@ -118,8 +142,7 @@ impl Recorded {
     /// market's record a company's is read beside.
     pub fn with_market_record(self, symbol: &str) -> Recorded {
         let url = "https://app-money.tmx.com/graphql";
-        self.with_body(url, &format!("getQuoteBySymbol\",\"variables\":{{\"symbol\":\"{symbol}\""), 200, "tmx", &format!("quote-{symbol}.json"))
-            .with_body(url, &format!("getDividendsForSymbol\",\"variables\":{{\"symbol\":\"{symbol}\""), 200, "tmx", &format!("dividends-{symbol}.json"))
+        self.with_tmx_quote(symbol, &format!("quote-{symbol}.json")).with_body(url, &format!("getDividendsForSymbol\",\"variables\":{{\"symbol\":\"{symbol}\""), 200, "tmx", &format!("dividends-{symbol}.json"))
     }
 
     /// Answer a request to `url` whose body contains `needle`.
@@ -138,6 +161,12 @@ impl bagholder_net::Transport for Shared {
         self.0.asked.lock().unwrap().push(ask.url.to_string());
         self.0.headers.lock().unwrap().push(ask.headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
         let sent = ask.body.map(|b| String::from_utf8_lossy(b).into_owned()).unwrap_or_default();
+        if let Some(symbols) = ask.url.strip_prefix(SPARK).filter(|_| !self.0.spark.is_empty()) {
+            return Ok((200, ask.url.to_string(), vec![], spark_of(&self.0.spark, symbols).canonical().into_bytes()));
+        }
+        if ask.url == TMX && sent.contains("\"operationName\":\"getQuotes\"") && !self.0.tmx_quotes.is_empty() {
+            return Ok((200, ask.url.to_string(), vec![], tmx_quotes_of(&self.0.tmx_quotes, &sent).canonical().into_bytes()));
+        }
         let hit = |u: &String| match u.strip_prefix(PREFIX) {
             Some(prefix) => ask.url.starts_with(prefix),
             None => u == ask.url,
@@ -147,6 +176,99 @@ impl bagholder_net::Transport for Shared {
             None => panic!("a request no recorded reply answers: {}", ask.url),
         }
     }
+}
+
+const SPARK: &str = "https://query1.finance.yahoo.com/v7/finance/spark?symbols=";
+const TMX: &str = "https://app-money.tmx.com/graphql";
+
+fn object(fields: Vec<(&str, Value)>) -> Value {
+    Value::Object(fields.into_iter().map(|(k, v)| (k.to_string(), v)).collect())
+}
+
+fn field<'a>(v: &'a Value, k: &str) -> &'a Value {
+    match v {
+        Value::Object(m) => m.get(k).unwrap_or(&Value::Null),
+        _ => &Value::Null,
+    }
+}
+
+fn decoded(s: &str) -> String {
+    let b = s.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] == b'%' && i + 2 < b.len() {
+            out.push(u8::from_str_radix(&s[i + 1..i + 3], 16).unwrap());
+            i += 3;
+        } else {
+            out.push(b[i]);
+            i += 1;
+        }
+    }
+    String::from_utf8(out).unwrap()
+}
+
+/// The spark's reply to the symbols asked (`a,b,…&range=…`): each one's recorded
+/// chart as its result, a 404's left out. A symbol no chart is recorded for fails
+/// the test.
+fn spark_of(charts: &[(String, u16, Value)], query: &str) -> Value {
+    let named = query.split('&').next().unwrap();
+    let mut results = Vec::new();
+    for symbol in named.split(',').map(decoded) {
+        let Some((_, status, chart)) = charts.iter().find(|(s, _, _)| *s == symbol) else { panic!("a spark symbol no recorded chart answers: {symbol}") };
+        if *status != 200 {
+            continue;
+        }
+        let Value::Array(r) = field(field(chart, "chart"), "result") else { panic!("{symbol}'s chart holds no result") };
+        results.push(object(vec![("symbol", Value::String(symbol.clone())), ("response", Value::Array(vec![r[0].clone()]))]));
+    }
+    object(vec![("spark", object(vec![("result", Value::Array(results)), ("error", Value::Null)]))])
+}
+
+/// The forms a TMX quote request asks, each with its alias, in order.
+pub fn tmx_asked(body: &str) -> Vec<(String, String)> {
+    let query = match field(&reply::parse(body).unwrap(), "query") {
+        Value::String(q) => q.clone(),
+        _ => panic!("a quote request with no query"),
+    };
+    let mut out = Vec::new();
+    for part in query.split(": getQuoteBySymbol(symbol: \"").skip(1).zip(query.split(": getQuoteBySymbol(symbol: \"")) {
+        let (after, before) = part;
+        let alias = before.rsplit(|c: char| c == ' ' || c == '{').next().unwrap().to_string();
+        out.push((alias, after.split('"').next().unwrap().to_string()));
+    }
+    out
+}
+
+/// TMX's reply to a quote request: each form's recorded answer under its alias,
+/// its errors naming that alias. A form no answer is recorded for fails the test.
+fn tmx_quotes_of(answers: &[(String, Value)], body: &str) -> Value {
+    let mut data = Vec::new();
+    let mut errors = Vec::new();
+    for (alias, form) in tmx_asked(body) {
+        let Some((_, v)) = answers.iter().find(|(f, _)| *f == form).or_else(|| answers.iter().find(|(f, _)| f == "*")) else { panic!("a TMX quote no recorded reply answers: {form}") };
+        data.push((alias.clone(), field(field(v, "data"), "getQuoteBySymbol").clone()));
+        if let Value::Array(es) = field(v, "errors") {
+            for e in es {
+                let Value::Object(mut m) = e.clone() else { continue };
+                m.insert("path".into(), Value::Array(vec![Value::String(alias.clone())]));
+                errors.push(Value::Object(m));
+            }
+        }
+    }
+    let data = Value::Object(data.into_iter().collect());
+    if errors.is_empty() {
+        object(vec![("data", data)])
+    } else {
+        object(vec![("errors", Value::Array(errors)), ("data", data)])
+    }
+}
+
+/// The reply TMX gives a quote request for `form` alone, from the recorded reply
+/// to its own quote (`tmx/name`), as `with_tmx_quote` answers it.
+pub fn tmx_quote_alone(form: &str, name: &str) -> Value {
+    let body = format!("{{\"operationName\":\"getQuotes\",\"variables\":{{}},\"query\":\"query getQuotes {{ q0: getQuoteBySymbol(symbol: \\\"{form}\\\", locale: \\\"en\\\") {{ symbol }} }}\"}}");
+    tmx_quotes_of(&[(form.to_string(), json("tmx", name))], &body)
 }
 
 /// A network answered by `recorded`, on a clock set to `at`.
