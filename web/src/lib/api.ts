@@ -12,6 +12,7 @@
 // stream (live.ts); this is for what the person does, and for the few things looked
 // up on demand.
 
+import { signInExpired } from './signin'
 import type { Routes } from './generated/routes'
 
 /** A request that failed: the server's reason, or why it was never answered. Never empty. */
@@ -74,7 +75,33 @@ export function request<T = Record<string, unknown>>(method: 'GET' | 'POST', pat
   }
   return fetch(path, opts)
     .then((r) => answered<T>(r))
-    .catch((e: unknown) => failure(String(e)))
+    .catch((e: unknown) => unanswered(e, method))
+}
+
+/** What the page shows while the sign-in in front of Bagholder renews. */
+export const RENEWING = 'Signing in again…'
+/** What a write the renewing sign-in turned away says: it was not saved, and is sent again by the person. */
+export const NOT_SAVED = 'Not saved: signing in again. Send it again once the page has loaded.'
+/** What a request no one answered says. */
+export const UNREACHABLE = 'Could not reach Bagholder.'
+
+/**
+ * A request that had no answer, in words, never the browser's own text ("Failed to
+ * fetch"). An expired sign-in in front of Bagholder refuses every new request with
+ * a redirect to its login page while the stream, opened before, still runs, so the
+ * page asks which it is: an expired sign-in is renewed as a refused stream's is
+ * (docs/plans/sign-in-renews-itself.md), and anything else is said as Bagholder out
+ * of reach. A request the page itself stopped says so as before.
+ */
+function unanswered<T>(e: unknown, method: 'GET' | 'POST'): Promise<Answer<T>> {
+  if (e instanceof DOMException && e.name === 'AbortError') return Promise.resolve(failure(String(e)))
+  return signInState().then((at) => {
+    if (at !== 'expired') return failure(UNREACHABLE)
+    signInExpired()
+    // a write never reads as under way: the page loads itself again, and what was
+    // sent is not there
+    return failure(method === 'POST' ? NOT_SAVED : RENEWING)
+  })
 }
 
 /**
