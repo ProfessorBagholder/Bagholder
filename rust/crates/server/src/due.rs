@@ -819,6 +819,30 @@ mod tests {
         assert_eq!(pass(), (vec![2, 1], vec![carried(1).id, carried(3).id]), "the answering ones batched again");
     }
 
+    /// A null entry, or one that states no quote, among Wealthsimple's answers fails
+    /// its own listing alone: the list is read entry by entry (`lenient::list`), and
+    /// the rest of the batch is priced.
+    #[test]
+    fn an_entry_wealthsimple_cannot_quote_fails_its_own_listing_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let app = signed_in(home.path(), Arc::new(|_, _| {
+            let good = |id: &str| serde_json::json!({"id": id, "currency": "USD", "quoteV2": {"price": 10.5, "currency": "USD"}});
+            Ok(serde_json::json!({"securities": [good("sec-s-1"), null, {"id": "sec-s-3", "currency": "USD"}, good("sec-s-4")]}))
+        }));
+        let f = app.figures.get().unwrap();
+        let (book, cache, bank) = (f.book().unwrap(), f.cache().unwrap(), bank_zone().unwrap());
+        let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now: t("2025-11-19T21:00:00Z"), bank: &bank };
+        let listings: Vec<_> = (1..=4).map(carried).collect();
+        let sess = crate::ws_quotes::session(&app).expect("signed in");
+        let kept: Vec<InstrumentId> = crate::ws_quotes::read(&app, &ctx, &sess, &listings).unwrap().iter().map(|l| l.id).collect();
+        assert_eq!(kept, [carried(1).id, carried(4).id]);
+        assert!(app.ws_alone.lock().unwrap().is_empty(), "an answered batch is not split");
+        let outcomes = cache.outcomes(&crate::ws_quotes::source()).unwrap();
+        let of = |n: usize| outcomes.iter().find(|o| o.instrument == Some(carried(n).id)).map(|o| o.outcome);
+        assert_eq!(of(2), Some(bagholder_sources::outcome::OutcomeKind::NotCarried), "the null entry: no security stated");
+        assert_eq!(of(3), Some(bagholder_sources::outcome::OutcomeKind::Meaning), "no quote stated");
+    }
+
     /// Signed in, a listing Wealthsimple carries never reaches Yahoo or TMX, its read
     /// failed or not: it is asked of Wealthsimple again at its turn. What Wealthsimple
     /// does not carry (a tile's index) goes to the public feeds; signed out, every
