@@ -13,6 +13,7 @@
 // Nothing here polls. There is no timer in this file.
 
 import { post, signInState } from './api'
+import { onSignInExpired } from './signin'
 import { PROTOCOL } from './protocol'
 import { ROW_KEYS } from './generated/keys'
 import { bookIs, kept, keptLatest, keptRead, lastBook, readKept, save } from './kept'
@@ -595,6 +596,9 @@ function watchConnection(): void {
  * the person shows its own page instead of the page loading itself again.
  */
 const RENEWED = 'bh2.signInRenewed'
+// a request of the page's that found the sign-in expired renews it too, the stream
+// still open or not
+onSignInExpired(() => renew())
 const RENEW_ONCE_IN_MS = 60_000
 // a renewal waiting for a field or dialog to be done with: asked again by the next
 // check, it is the same renewal, never a second load

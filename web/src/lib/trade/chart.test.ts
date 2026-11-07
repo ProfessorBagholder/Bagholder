@@ -12,7 +12,7 @@ describe("a trade's bars", () => {
     vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('Failed to fetch') }))
     const h = await loadHistory(trade(), '1d')
     expect(h.bars).toEqual([])
-    expect(h.reason).toContain('Failed to fetch')
+    expect(h.reason).toContain('Could not reach Bagholder.')
   })
 
   it('that the server refused say its refusal, in its words', async () => {
