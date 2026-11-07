@@ -465,7 +465,7 @@
         {#if showing()}<span class={showing()!.kind === 'err' ? 'status-err' : ''}>{showing()!.msg}</span>
         {:else if status?.updating}<span class="spin"></span>{status.updating}
         <!-- the stream down, on every screen: what is shown stands, said as not current (docs/plans/sign-in-renews-itself.md) -->
-        {:else if !conn.open && conn.renewing}<span class="spin"></span>Signing in again…
+        {:else if conn.renewing}<span class="spin"></span>Signing in again…
         {:else if !conn.open && conn.lost && conn.retrying}<span class="spin"></span>Reconnecting to Bagholder… <button class="pill" style="padding:1px 8px;font-size:11px;width:auto;margin-left:6px" onclick={reconnect}>Retry</button>
         <!-- a page with nothing drawn says it in its own body -->
         {:else if !conn.open && conn.lost && book.data}<span class="status-err">{conn.error || 'Could not reach Bagholder.'}</span> <button class="pill" style="padding:1px 8px;font-size:11px;width:auto;margin-left:6px" onclick={reconnect}>Retry</button>
