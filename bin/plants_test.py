@@ -95,6 +95,10 @@ class Run(unittest.TestCase):
         self.assertIn("src/lib/a.test.ts > the page > doubles", r.detail)
         r = self.judged("x * 2", "x + 2", "print('No test files found, exiting with code 1'); raise SystemExit(1)")
         self.assertEqual(r.verdict, "did not run")
+        # in colour, as vitest writes where it takes the log for a terminal (GitHub's runners)
+        r = self.judged("x * 2", "x + 2", "print('\\x1b[41m FAIL \\x1b[49m src/lib/a.test.ts\\x1b[2m > \\x1b[22mthe page\\x1b[2m > \\x1b[22mdoubles'); raise SystemExit(1)")
+        self.assertEqual(r.verdict, "caught")
+        self.assertIn("src/lib/a.test.ts > the page > doubles", r.detail)
 
     def test_a_spec_failing_is_caught_by_the_test_it_names(self) -> None:
         r = self.judged("x * 2", "x + 2", "print('  ✘  1 [app] › e2e/a.spec.ts:3:1 › doubles (1.2s)'); print('  1 failed'); raise SystemExit(1)")

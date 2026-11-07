@@ -51,6 +51,9 @@ CARGO_FAILED = re.compile(r"^test (\S+) \.\.\. FAILED$")
 SPEC_FAILED = re.compile(r"^(✘.*|\d+\) \[.*› .*|[1-9]\d* failed\b.*)$")
 # and vitest's `FAIL  <file> > <describe> > <test>` heading or its `×` line
 VITEST_FAILED = re.compile(r"^(FAIL\s+\S+\s+>\s.*|×\s.*)$")
+# a terminal's colours, which a test runner sends where it takes the job's log for
+# one (vitest on GitHub's runners): never part of what a line says
+COLOUR = re.compile(r"\x1b\[[0-9;]*m")
 
 BLOCK = re.compile(r"^```plants[ \t]*\r?\n(.*?)^```[ \t]*$", re.MULTILINE | re.DOTALL)
 
@@ -168,11 +171,11 @@ def ran(argv: tuple[str, ...], cwd: Path, limit: float) -> tuple[int | None, str
     proc = subprocess.Popen(argv, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, start_new_session=True)
     try:
         out, _ = proc.communicate(timeout=limit)
-        return proc.returncode, out
+        return proc.returncode, COLOUR.sub("", out)
     except subprocess.TimeoutExpired:
         os.killpg(proc.pid, signal.SIGKILL)
         out, _ = proc.communicate()
-        return None, out
+        return None, COLOUR.sub("", out)
 
 
 def failures(out: str) -> list[str]:
