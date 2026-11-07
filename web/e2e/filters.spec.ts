@@ -22,6 +22,29 @@ test('Tab runs box, Done, Clear all, box; Shift+Tab runs it backwards', async ({
   await expect(page.getByRole('button', { name: 'Clear all' })).toBeFocused()
 })
 
+// SPEC filters-18: a held symbol chosen before the holdings are read waits for them,
+// and opens its holding, never the listing's page under Markets (the owner, 2026-11-06)
+test('a held symbol chosen before the holdings are read opens its holding once they are', async ({ page, request }) => {
+  const model = await figures(request)
+  const held = model.positions.find((p: { kind: string }) => p.kind === 'Shares')
+  // the holdings' watch held back until the symbol is chosen
+  let release = () => {}
+  const released = new Promise<void>((r) => (release = r))
+  await page.route('**/api/events/watch', async (route) => {
+    if ((route.request().postData() ?? '').includes('"positions"')) await released
+    await route.fallback()
+  })
+  await open(page)
+  await page.keyboard.type(held.symbol)
+  await page.keyboard.press('Enter')
+  await expect(page.locator('.pop')).toContainText('Reading your holdings…')
+  await page.waitForTimeout(500)
+  await expect(page).not.toHaveURL(/#markets/)
+  release()
+  await expect(page).toHaveURL(new RegExp('#portfolio/'))
+  await expect(page.locator('.pop')).toHaveCount(0)
+})
+
 test('Enter on a held symbol opens its holding; Shift+Enter narrows the book by it; Backspace in the empty box deselects it', async ({ page, request }) => {
   const model = await figures(request)
   const held = model.positions.find((p: { kind: string }) => p.kind === 'Shares')
