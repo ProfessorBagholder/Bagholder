@@ -207,6 +207,8 @@ impl Net {
         let named = reply.header("retry-after").and_then(|v| retry_after(v, received_at));
         if status == 429 || (status == 503 && named.is_some()) {
             self.limiter.refused(&host, received_at, named);
+        } else {
+            self.limiter.answered(&host);
         }
         Ok(reply)
     }

@@ -135,7 +135,7 @@ pub fn settle(app: &App, passed: Result<Option<Timestamp>, String>) -> Option<Ti
 
 /// One pass: the clock, every due read, what each stored applied. The next
 /// instant a read can be due, if any.
-pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>, String> {
+pub fn pass(app: &Arc<App>, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>, String> {
     // figures a start could not build are built here, or the reason is the pass's
     f.ensure_built(now)?;
     let book = f.book()?;
@@ -162,8 +162,8 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
         read_all(f, &ctx, &needs).map_err(|e| e.to_string())?;
         last = Some(n);
     }
-    let (quoting, quiet_until) = demand(app, &ctx, &needs.held)?;
-    quote_each(app, f, &quoting, |l| quotes::read_quotes(&ctx, std::slice::from_ref(l)).map_err(|e| e.to_string()))?;
+    let (quoting, quiet_until) = demand(&ctx, &needs.held, app.events.watchers() > 0)?;
+    quote_by_source(app, f, &ctx, &quoting, |l| quotes::read_quotes(&ctx, std::slice::from_ref(l)).map_err(|e| e.to_string()))?;
     // the option contracts held: their chains are asked when Cboe's copy has moved on
     // (`options::chain_due`), a contract shown for the first time at once
     bagholder_sources::options::read(&ctx, &needs.contracts).map_err(|e| e.to_string())?;
@@ -171,6 +171,29 @@ pub fn pass(app: &App, f: &Figures, now: Timestamp) -> Result<Option<Timestamp>,
         f.price_changed(c.id)?;
     }
     next_due(&ctx, &needs, &zone, !quoting.is_empty(), quiet_until, now).map(Some)
+}
+
+/// The listings owed a quote, each from its one source (`ws_quotes`): while signed
+/// in, Wealthsimple the shares and funds it carries, twenty to a request, and the
+/// ex-dividend dates TMX's quote states for the Canadian ones once a day; the
+/// public feeds (`read_public`) the rest, and every one while signed out. A
+/// listing Wealthsimple carries never reaches a public feed while signed in, its
+/// read failed or not.
+fn quote_by_source(app: &Arc<App>, f: &Figures, ctx: &Ctx, listings: &[bagholder_sources::contract::Listing], read_public: impl FnMut(&bagholder_sources::contract::Listing) -> Result<(), String>) -> Result<(), String> {
+    let sess = crate::ws_quotes::session(app);
+    let (broker, public) = crate::ws_quotes::split(listings, sess.is_some());
+    if let Some(sess) = sess.as_ref().filter(|_| !broker.is_empty()) {
+        let kept = crate::ws_quotes::read(app, ctx, sess, &broker)?;
+        let mut moved = false;
+        for l in &kept {
+            moved |= !f.price_changed(l.id)?.is_empty();
+        }
+        if moved {
+            app.events.signal();
+        }
+        quotes::read_ex_dividends(ctx, &broker).map_err(|e| e.to_string())?;
+    }
+    quote_each(app, f, &public, read_public)
 }
 
 /// Each listing read in turn, and its price taken into the figures and said to the
@@ -186,25 +209,28 @@ fn quote_each(app: &App, f: &Figures, listings: &[bagholder_sources::contract::L
     Ok(())
 }
 
-/// What is quoted now: what is held and what is followed, while the app runs; with no
-/// page open, less each quiet one (`quiet`), and the earliest instant one of those is
-/// owed again. A failing quote is owed like any other: a refused source is left alone
-/// through its rest by the limiter, and `next_due` wakes at the rest's end.
-fn demand(app: &App, ctx: &Ctx, held: &[bagholder_sources::contract::Listing]) -> Result<(Vec<bagholder_sources::contract::Listing>, Option<Timestamp>), String> {
+/// What is quoted now: what is held and what is followed, while the app runs, page
+/// or none, less each quiet one (`quiet`), and the earliest instant one of those is
+/// owed again. A listing on a venue whose calendar the app holds is quiet from its
+/// settled close to its next open, page or none: nothing it shows changes, and the
+/// pass wakes at the open, so someone watching still sees it at once. One with no
+/// calendar (a tile's index, future, rate or pair) is quiet by its stated time only
+/// while no page is open: with one, it is asked every pass, so the S&P 500 tile
+/// moves at 9:30 for someone watching, never fifteen minutes later (#670). A failing
+/// quote is owed like any other: a refused source is left alone through its rest by
+/// the limiter, and `next_due` wakes at the rest's end.
+fn demand(ctx: &Ctx, held: &[bagholder_sources::contract::Listing], page_open: bool) -> Result<(Vec<bagholder_sources::contract::Listing>, Option<Timestamp>), String> {
     let mut all: Vec<bagholder_sources::contract::Listing> = Vec::new();
     for l in held.iter().cloned().chain(crate::following::listings(ctx.book)?) {
         if !all.iter().any(|q| q.id == l.id) {
             all.push(l);
         }
     }
-    // a page open: every quote, every minute, so someone watching sees the open at once
-    if app.events.watchers() > 0 {
-        return Ok((all, None));
-    }
     let (mut owed, mut quiet_until) = (Vec::new(), None::<Timestamp>);
     for l in all {
         let kept = ctx.cache.quotes_of(l.id).map_err(|e| e.to_string())?.into_iter().max_by_key(|q| q.received_at);
-        match quiet(&l, kept.as_ref(), ctx.now, ctx.bank) {
+        let calendar = l.venue_mic.as_deref().and_then(|mic| bagholder_core::sessions::venue_of(mic, false)).is_some();
+        match quiet(&l, kept.as_ref(), ctx.now, ctx.bank).filter(|_| calendar || !page_open) {
             Some(at) => quiet_until = Some(quiet_until.map_or(at, |u| u.min(at))),
             None => owed.push(l),
         }
@@ -374,7 +400,8 @@ mod tests {
 
     /// The holdings, the watched listings and the tiles are quoted while the app runs,
     /// page or none, so a tab opened shows prices already read (the owner,
-    /// 2026-11-04); with no page, a quiet one waits (`quiet`), and with a page none do.
+    /// 2026-11-04); a quiet one waits (`quiet`), page or none (the owner, 2026-11-06:
+    /// the providers' limits kept).
     #[test]
     fn what_is_held_and_followed_is_quoted_while_the_app_runs_page_or_none() {
         use crate::events::{Feed, Want};
@@ -400,7 +427,7 @@ mod tests {
         let bank = bank_zone().unwrap();
         let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now, bank: &bank };
         let want: BTreeSet<InstrumentId> = ids(&held).union(&ids(&followed)).copied().collect();
-        let (owed, quiet_until) = demand(&app, &ctx, &held).unwrap();
+        let (owed, quiet_until) = demand(&ctx, &held, false).unwrap();
         assert_eq!(ids(&owed), want, "no page: the holdings and what is followed, none read yet");
         assert_eq!(quiet_until, None);
         // a watched listing read after its market closed and settled is quiet with no
@@ -411,17 +438,27 @@ mod tests {
         let ctx = Ctx { now: evening, ..ctx };
         let read = |at: Timestamp| cache.store_quote(&bagholder_sources::cache::StoredQuote { instrument: watched.id, source: bagholder_core::SourceName::named("tmx"), price: bagholder_core::Money::new(bagholder_core::Dec::parse("10").unwrap(), bagholder_core::Currency::CAD), change: None, change_pct: None, quoted_at: at, allowance: std::time::Duration::ZERO, received_at: at }).unwrap();
         read(t("2025-11-19T21:00:00Z"));
-        let (owed, _) = demand(&app, &ctx, &held).unwrap();
+        let (owed, _) = demand(&ctx, &held, false).unwrap();
         assert!(owed.iter().any(|l| l.id == watched.id), "read at the close, before it settled: owed, for the final price");
         read(evening);
-        let (owed, quiet_until) = demand(&app, &ctx, &held).unwrap();
+        let (owed, quiet_until) = demand(&ctx, &held, false).unwrap();
         assert!(!owed.iter().any(|l| l.id == watched.id), "no page: the quiet listing waits");
         assert_eq!(quiet_until, Some(t("2025-11-20T14:30:00Z")), "until its next open, 9:30 Toronto time");
+        // a page open, the same: nothing it shows changes before the open, and the pass
+        // wakes at the open, so the page sees it at once
         let feed = Feed::open(app.clone());
         assert!(app.events.watch(&app, feed.id(), [("markets".to_string(), Want { params: serde_json::json!({}), have: None })].into_iter().collect()));
-        let (owed, quiet_until) = demand(&app, &ctx, &held).unwrap();
-        assert_eq!(ids(&owed), want, "a page open: every one, every minute");
-        assert_eq!(quiet_until, None);
+        let (owed, quiet_until) = demand(&ctx, &held, true).unwrap();
+        assert!(!owed.iter().any(|l| l.id == watched.id), "a page open: the quiet listing still waits");
+        assert_eq!(quiet_until, Some(t("2025-11-20T14:30:00Z")), "and is owed at its open");
+        // a tile with no calendar, its last trade an hour old when read: quiet for the
+        // recheck with no page open, and asked every pass with one (#670)
+        let tile = followed.iter().find(|l| l.venue_mic.is_none()).unwrap().clone();
+        cache.store_quote(&bagholder_sources::cache::StoredQuote { instrument: tile.id, source: bagholder_core::SourceName::named("yahoo"), price: bagholder_core::Money::new(bagholder_core::Dec::parse("10").unwrap(), tile.currency), change: None, change_pct: None, quoted_at: t("2025-11-20T02:00:00Z"), allowance: std::time::Duration::ZERO, received_at: evening }).unwrap();
+        let (owed, _) = demand(&ctx, &held, false).unwrap();
+        assert!(!owed.iter().any(|l| l.id == tile.id), "no page: the stale tile waits for the recheck");
+        let (owed, _) = demand(&ctx, &held, true).unwrap();
+        assert!(owed.iter().any(|l| l.id == tile.id), "a page open: the tile is asked every pass");
     }
 
     fn listing(kind: bagholder_core::instrument::InstrumentKind, currency: bagholder_core::Currency, mic: Option<&str>) -> bagholder_sources::contract::Listing {
@@ -691,5 +728,172 @@ mod tests {
             assert!(f.read(|_| ()).is_some(), "the figures are built");
             assert!(app.state.lock().unwrap().figures_error.is_empty(), "the pass that built them cleared the header (through_zone {through_zone})");
         }
+    }
+
+    /// A share or fund Wealthsimple carries, on a US venue (no TMX read of its
+    /// ex-dividend date), with its id.
+    fn carried(n: usize) -> bagholder_sources::contract::Listing {
+        bagholder_sources::contract::Listing {
+            id: InstrumentId::parse(&format!("00000000-0000-4000-8000-{n:012}")).unwrap(),
+            kind: bagholder_core::instrument::InstrumentKind::Security,
+            currency: bagholder_core::Currency::USD,
+            symbol: format!("ZQ{n}"),
+            venue_mic: Some("XNAS".into()),
+            routes: [(bagholder_core::instrument::RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), vec![format!("sec-s-{n}")])].into(),
+        }
+    }
+
+    /// An app on the pulled book, signed in, its Wealthsimple answering with `gql`.
+    fn signed_in(home: &std::path::Path, gql: crate::orders::seam::Gql) -> Arc<App> {
+        crate::tests_common::pulled_book(home);
+        let app = App::new(home.to_path_buf(), std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../.."), "127.0.0.1".into());
+        let now = t("2025-11-19T21:00:00Z");
+        let f = crate::figures::Figures::open(home, now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        app.set_figures(f);
+        *app.orders.seam.session.lock().unwrap() = Some(bagholder_ws::session::Session { access_token: "tok".into(), ..Default::default() });
+        *app.orders.seam.gql.lock().unwrap() = Some(gql);
+        app.state.lock().unwrap().connected = true;
+        app
+    }
+
+    /// Signed in, the shares and funds Wealthsimple carries are quoted by it, twenty
+    /// to a request: 45 listings, 3 requests, each quote kept as Wealthsimple states
+    /// it, its day change against the close it states (the owner, 2026-11-06;
+    /// `SPEC.md` market-data-37).
+    #[test]
+    fn signed_in_wealthsimple_quotes_what_it_carries_twenty_to_a_request() {
+        let home = tempfile::tempdir().unwrap();
+        let asked: Arc<std::sync::Mutex<Vec<usize>>> = Arc::default();
+        let seen = asked.clone();
+        let app = signed_in(home.path(), Arc::new(move |op, vars| {
+            assert_eq!(op, "FetchSecuritiesSummary");
+            let ids = vars["ids"].as_array().unwrap().clone();
+            seen.lock().unwrap().push(ids.len());
+            Ok(serde_json::json!({"securities": ids.iter().map(|id| serde_json::json!({"id": id, "currency": "USD", "quoteV2": {"price": 10.5, "previousBaseline": 10, "currency": "USD", "quotedAsOf": "2025-11-19T20:59:00Z"}})).collect::<Vec<_>>()}))
+        }));
+        let f = app.figures.get().unwrap();
+        let (book, cache, bank) = (f.book().unwrap(), f.cache().unwrap(), bank_zone().unwrap());
+        let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now: t("2025-11-19T21:00:00Z"), bank: &bank };
+        let listings: Vec<_> = (1..=45).map(carried).collect();
+        let sess = crate::ws_quotes::session(&app).expect("signed in");
+        let kept = crate::ws_quotes::read(&app, &ctx, &sess, &listings).unwrap();
+        assert_eq!(*asked.lock().unwrap(), [20, 20, 5], "three requests for 45");
+        assert_eq!(kept.len(), 45);
+        let q = cache.quotes_of(listings[44].id).unwrap().into_iter().max_by_key(|q| q.received_at).unwrap();
+        assert_eq!(q.source, crate::ws_quotes::source());
+        assert_eq!(q.price, bagholder_core::Money::new(bagholder_core::Dec::parse("10.5").unwrap(), bagholder_core::Currency::USD));
+        assert_eq!(q.change, Some(bagholder_core::Dec::parse("0.5").unwrap()));
+        assert_eq!(q.change_pct, Some(bagholder_core::Dec::parse("5").unwrap()));
+        assert_eq!(q.quoted_at, t("2025-11-19T20:59:00Z"));
+    }
+
+    /// A holding the book's records name by its Wealthsimple id is a listing
+    /// Wealthsimple quotes: the listing the figure path asks for carries that id,
+    /// though it identifies the holding rather than routes it.
+    #[test]
+    fn a_holding_read_from_wealthsimple_is_one_it_quotes() {
+        let home = tempfile::tempdir().unwrap();
+        crate::tests_common::pulled_book(home.path());
+        let now = t("2025-11-19T21:00:00Z");
+        let f = crate::figures::Figures::open(home.path(), now).unwrap();
+        f.state_zone("America/Toronto", now).unwrap();
+        let book = f.book().unwrap();
+        let n = f.read(|e| e.needs()).unwrap();
+        let held = crate::read_sources::needs_of(&book, &n, now.to_zoned(TimeZone::get("America/Toronto").unwrap()).date()).unwrap().held;
+        let shares: Vec<_> = held.iter().filter(|l| l.kind == bagholder_core::instrument::InstrumentKind::Security && l.venue_mic.is_some()).collect();
+        assert!(!shares.is_empty());
+        for l in shares {
+            assert!(crate::ws_quotes::carried(l).is_some_and(|id| !id.is_empty()), "{} carries no Wealthsimple id", l.symbol);
+        }
+    }
+
+    /// A batch Wealthsimple refuses whole for one security it rejects (one delisted or
+    /// merged, still in the book) is asked one security at a time from the next pass:
+    /// the one it rejects fails alone and the rest are priced, and those back in
+    /// batches once they answer.
+    #[test]
+    fn one_security_wealthsimple_rejects_never_holds_up_its_batch() {
+        let home = tempfile::tempdir().unwrap();
+        let asked: Arc<std::sync::Mutex<Vec<usize>>> = Arc::default();
+        let seen = asked.clone();
+        let app = signed_in(home.path(), Arc::new(move |_, vars| {
+            let ids = vars["ids"].as_array().unwrap().clone();
+            seen.lock().unwrap().push(ids.len());
+            if ids.iter().any(|id| id == "sec-s-2") {
+                return Err(bagholder_ws::session::CallError::Graphql("FetchSecuritiesSummary: security sec-s-2 not found".into()));
+            }
+            Ok(serde_json::json!({"securities": ids.iter().map(|id| serde_json::json!({"id": id, "currency": "USD", "quoteV2": {"price": 10.5, "currency": "USD"}})).collect::<Vec<_>>()}))
+        }));
+        let f = app.figures.get().unwrap();
+        let (book, cache, bank) = (f.book().unwrap(), f.cache().unwrap(), bank_zone().unwrap());
+        let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now: t("2025-11-19T21:00:00Z"), bank: &bank };
+        let listings = vec![carried(1), carried(2), carried(3)];
+        let sess = crate::ws_quotes::session(&app).expect("signed in");
+        let pass = || {
+            asked.lock().unwrap().clear();
+            let kept: Vec<InstrumentId> = crate::ws_quotes::read(&app, &ctx, &sess, &listings).unwrap().iter().map(|l| l.id).collect();
+            (asked.lock().unwrap().clone(), kept)
+        };
+        assert_eq!(pass(), (vec![3], vec![]), "refused whole");
+        assert_eq!(pass(), (vec![1, 1, 1], vec![carried(1).id, carried(3).id]), "each alone: the rejected one fails alone");
+        assert_eq!(pass(), (vec![2, 1], vec![carried(1).id, carried(3).id]), "the answering ones batched again");
+    }
+
+    /// A null entry, or one that states no quote, among Wealthsimple's answers fails
+    /// its own listing alone: the list is read entry by entry (`lenient::list`), and
+    /// the rest of the batch is priced.
+    #[test]
+    fn an_entry_wealthsimple_cannot_quote_fails_its_own_listing_alone() {
+        let home = tempfile::tempdir().unwrap();
+        let app = signed_in(home.path(), Arc::new(|_, _| {
+            let good = |id: &str| serde_json::json!({"id": id, "currency": "USD", "quoteV2": {"price": 10.5, "currency": "USD"}});
+            Ok(serde_json::json!({"securities": [good("sec-s-1"), null, {"id": "sec-s-3", "currency": "USD"}, good("sec-s-4")]}))
+        }));
+        let f = app.figures.get().unwrap();
+        let (book, cache, bank) = (f.book().unwrap(), f.cache().unwrap(), bank_zone().unwrap());
+        let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now: t("2025-11-19T21:00:00Z"), bank: &bank };
+        let listings: Vec<_> = (1..=4).map(carried).collect();
+        let sess = crate::ws_quotes::session(&app).expect("signed in");
+        let kept: Vec<InstrumentId> = crate::ws_quotes::read(&app, &ctx, &sess, &listings).unwrap().iter().map(|l| l.id).collect();
+        assert_eq!(kept, [carried(1).id, carried(4).id]);
+        assert!(app.ws_alone.lock().unwrap().is_empty(), "an answered batch is not split");
+        let outcomes = cache.outcomes(&crate::ws_quotes::source()).unwrap();
+        let of = |n: usize| outcomes.iter().find(|o| o.instrument == Some(carried(n).id)).map(|o| o.outcome);
+        assert_eq!(of(2), Some(bagholder_sources::outcome::OutcomeKind::NotCarried), "the null entry: no security stated");
+        assert_eq!(of(3), Some(bagholder_sources::outcome::OutcomeKind::Meaning), "no quote stated");
+    }
+
+    /// Signed in, a listing Wealthsimple carries never reaches Yahoo or TMX, its read
+    /// failed or not: it is asked of Wealthsimple again at its turn. What Wealthsimple
+    /// does not carry (a tile's index) goes to the public feeds; signed out, every
+    /// listing does.
+    #[test]
+    fn a_listing_wealthsimple_carries_reaches_no_public_feed_while_signed_in() {
+        let home = tempfile::tempdir().unwrap();
+        let app = signed_in(home.path(), Arc::new(|_, _| Err(bagholder_ws::session::CallError::Failed("unreachable".into()))));
+        let f = app.figures.get().unwrap();
+        let (book, cache, bank) = (f.book().unwrap(), f.cache().unwrap(), bank_zone().unwrap());
+        let ctx = Ctx { book: &book, cache: &cache, net: &app.net, now: t("2025-11-19T21:00:00Z"), bank: &bank };
+        let index = bagholder_sources::contract::Listing { kind: bagholder_core::instrument::InstrumentKind::Index, routes: Default::default(), ..carried(99) };
+        let listings = vec![carried(1), carried(2), index.clone()];
+        let mut public = Vec::new();
+        quote_by_source(&app, f, &ctx, &listings, |l| {
+            public.push(l.id);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(public, [index.id], "the index alone, Wealthsimple's read failed");
+        assert!(cache.quotes_of(carried(1).id).unwrap().is_empty(), "nothing kept from another source in between");
+        // signed out, as once Wealthsimple has ended the sign-in: no session
+        app.state.lock().unwrap().connected = false;
+        assert!(crate::ws_quotes::session(&app).is_none());
+        let mut public = Vec::new();
+        quote_by_source(&app, f, &ctx, &listings, |l| {
+            public.push(l.id);
+            Ok(())
+        })
+        .unwrap();
+        assert_eq!(public, listings.iter().map(|l| l.id).collect::<Vec<_>>(), "signed out: the public feeds quote every one");
     }
 }

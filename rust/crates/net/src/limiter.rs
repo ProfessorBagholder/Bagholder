@@ -5,8 +5,9 @@
 //! free moment, moves it on by the gap, and waits for its own turn with no lock
 //! held: callers side by side wait side by side, each for its own turn, and a
 //! host is never asked faster than its gap however many ask. After a refusal the
-//! host rests for as long as its `Retry-After` says, or its pace's rest when it
-//! says nothing, and a request in that time is not sent at all.
+//! host rests for as long as its `Retry-After` says, or, when it says nothing, for
+//! its pace's rest, doubled for each refusal since it last answered, up to
+//! [`MOST_REST`]; a request in that time is not sent at all.
 //!
 //! This replaced a pacing function per module and Yahoo's and SEDAR+'s own gates.
 
@@ -30,6 +31,10 @@ impl Pace {
     pub const DEFAULT: Pace = Pace { gap: Duration::ZERO, rest: Duration::from_secs(60) };
 }
 
+/// The longest a host is left after refusals that named no time: a host still
+/// refusing is asked again half an hour on, never left for good.
+pub const MOST_REST: Duration = Duration::from_secs(30 * 60);
+
 /// A host resting after a refusal, until the time it may be asked again.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Resting {
@@ -41,6 +46,8 @@ struct Host {
     pace: Option<Pace>,
     next_free: Option<Timestamp>,
     resting_until: Option<Timestamp>,
+    /// Refusals since it last answered.
+    refusals: u32,
 }
 
 #[derive(Default)]
@@ -84,14 +91,24 @@ impl Limiter {
     }
 
     /// `host` refused a request at `now`: it rests for `retry_after` when it said
-    /// how long, else for its pace's rest. A later, longer rest is never cut
-    /// short by an earlier refusal's.
+    /// how long, else for its pace's rest, doubled for each refusal since it last
+    /// answered, up to `MOST_REST`. A later, longer rest is never cut short by an
+    /// earlier refusal's.
     pub fn refused(&self, host: &str, now: Timestamp, retry_after: Option<Duration>) {
         let mut hosts = self.hosts.lock().unwrap_or_else(|e| e.into_inner());
         let h = hosts.entry(host.to_string()).or_default();
-        let rest = retry_after.unwrap_or(h.pace.unwrap_or(Pace::DEFAULT).rest);
-        let until = plus(now, rest);
+        let grown = h.pace.unwrap_or(Pace::DEFAULT).rest.saturating_mul(1 << h.refusals.min(16)).min(MOST_REST);
+        h.refusals = h.refusals.saturating_add(1);
+        let until = plus(now, retry_after.unwrap_or(grown));
         h.resting_until = Some(h.resting_until.map_or(until, |u| u.max(until)));
+    }
+
+    /// `host` answered a request: its next refusal rests it for its pace's rest
+    /// again.
+    pub fn answered(&self, host: &str) {
+        if let Some(h) = self.hosts.lock().unwrap_or_else(|e| e.into_inner()).get_mut(host) {
+            h.refusals = 0;
+        }
     }
 
     /// Wait for this caller's turn at `host` on `clock`, or say the host is resting.
@@ -160,6 +177,40 @@ mod tests {
         l.refused("z.example", now, Some(Duration::from_secs(300)));
         l.refused("z.example", now, Some(Duration::from_secs(5)));
         assert!(l.reserve("z.example", plus(now, Duration::from_secs(100))).is_err());
+    }
+
+    /// Refusals that name no time rest the host twice as long each time, up to half
+    /// an hour, and an answer brings it back to its pace's rest; one that names a
+    /// time rests it for that time.
+    #[test]
+    fn a_host_refusing_again_rests_twice_as_long_each_time_up_to_half_an_hour() {
+        let l = Limiter::new();
+        l.configure("y.example", Pace { gap: Duration::from_secs(2), rest: Duration::from_secs(600) });
+        let mut now = t0();
+        let mut rests = Vec::new();
+        for _ in 0..5 {
+            l.refused("y.example", now, None);
+            let Err(Resting { until }) = l.reserve("y.example", now) else { panic!("resting") };
+            rests.push(now.duration_until(until).as_secs());
+            now = until;
+        }
+        assert_eq!(rests, [600, 1200, 1800, 1800, 1800]);
+        l.answered("y.example");
+        l.refused("y.example", now, None);
+        assert_eq!(l.reserve("y.example", now), Err(Resting { until: plus(now, Duration::from_secs(600)) }), "an answer, then a refusal: its rest again");
+        let later = plus(now, Duration::from_secs(600));
+        l.refused("y.example", later, Some(Duration::from_secs(45)));
+        assert_eq!(l.reserve("y.example", later), Err(Resting { until: plus(later, Duration::from_secs(45)) }), "the time it names");
+        // a host with no pace of its own: a minute, doubled up to half an hour
+        let free = Limiter::new();
+        let mut rests = Vec::new();
+        for _ in 0..7 {
+            free.refused("free.example", now, None);
+            let Err(Resting { until }) = free.reserve("free.example", now) else { panic!("resting") };
+            rests.push(now.duration_until(until).as_secs());
+            now = until;
+        }
+        assert_eq!(rests, [60, 120, 240, 480, 960, 1800, 1800]);
     }
 
     #[test]

@@ -272,6 +272,32 @@ fn a_halted_listing_keeps_the_price_read_last() {
     assert!(tmx_rows.iter().all(|o| o.outcome == OutcomeKind::Answered), "{tmx_rows:?}");
 }
 
+/// A Canadian listing Wealthsimple quotes (while the person is signed in) is asked
+/// of TMX once a day for the ex-dividend date its quote states, which Wealthsimple
+/// does not state; the price that quote states is never kept, so the listing's price
+/// has one source (the owner, 2026-11-06; `SPEC.md` market-data-4, market-data-37).
+#[test]
+fn a_listing_quoted_elsewhere_is_asked_of_tmx_once_a_day_for_its_ex_dividend_date_alone() {
+    let at = "2026-09-27T06:20:00Z";
+    let (_dir, book, cache) = tmx_world(at);
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let recorded = Arc::new(common::Recorded::new().with(TMX, 200, "tmx", "quote-ENB.json"));
+    let enb = [listing(1, InstrumentKind::Security, Currency::CAD, "ENB", Some("XTSE"))];
+    let run = |now: &str| {
+        let net = common::net(&recorded, now);
+        let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(now), bank: &zone };
+        let before = recorded.asked.lock().unwrap().len();
+        quotes::read_ex_dividends(&ctx, &enb).unwrap();
+        recorded.asked.lock().unwrap().len() - before
+    };
+    assert_eq!(run(at), 1);
+    assert_eq!(cache.ex_dividends().unwrap(), BTreeMap::from([(id(1), "2026-08-14".parse().unwrap())]));
+    assert!(cache.quotes().unwrap().is_empty(), "its price is never kept");
+    assert_eq!(run("2026-09-27T15:00:00Z"), 0, "not again the same day");
+    assert_eq!(run("2026-09-28T15:00:00Z"), 1, "once the next");
+    assert!(cache.quotes().unwrap().is_empty());
+}
+
 /// The ex-dividend date a TMX quote states is kept with the quote, one per
 /// listing: replaced by the next read that states one, removed by one that
 /// states none. One in a form the reader does not know is the request's

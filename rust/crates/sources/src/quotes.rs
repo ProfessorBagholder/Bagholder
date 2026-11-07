@@ -123,7 +123,9 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
             continue;
         }
         match l.market() {
-            Some(Market::Canada) => read_tmx(ctx, l)?,
+            Some(Market::Canada) => {
+                read_tmx(ctx, l, true)?;
+            }
             Some(Market::CboeCanada) => {
                 let symbol = venue::root(&l.symbol);
                 let noted = cboe_ca::ask(ctx.net, &symbol);
@@ -178,7 +180,30 @@ pub fn read_quotes(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
 /// Read a Canadian listing's quote from TMX: the book's form for it first, then its
 /// venue's own. No other venue's form is asked, and a form another venue answered
 /// before is not asked again: either reads another listing's quote as this one's.
-fn read_tmx(ctx: &Ctx, l: &Listing) -> Result<()> {
+/// The ex-dividend date TMX's quote states, for each Canadian listing another
+/// source quotes (Wealthsimple, while the person is signed in): asked once a day,
+/// its price never kept, so the listing's price has one source.
+pub fn read_ex_dividends(ctx: &Ctx, listings: &[Listing]) -> Result<()> {
+    let today = ctx.today();
+    for l in listings.iter().filter(|l| l.market() == Some(Market::Canada)) {
+        // its own record of the day it was asked, apart from the quote's
+        let subject = format!("ex-dividend:{}", l.id);
+        if ctx.cache.reads(&subject, DataKind::Quote)?.iter().any(|r| r.last == today) {
+            continue;
+        }
+        let outcome = read_tmx(ctx, l, false)?;
+        // a request the offline switch kept from going asked no one
+        if outcome != crate::outcome::OutcomeKind::Offline {
+            ctx.cache.store_read(&subject, DataKind::Quote, &crate::cache::ReadRow { source: tmx::source(), first: today, last: today, outcome, at: ctx.now })?;
+        }
+    }
+    Ok(())
+}
+
+/// A Canadian listing asked of TMX, under the forms in turn; the price it states
+/// kept where `price` says so, its ex-dividend date always: what came of it.
+fn read_tmx(ctx: &Ctx, l: &Listing, price: bool) -> Result<crate::outcome::OutcomeKind> {
+    use crate::outcome::OutcomeKind;
     let id = l.id;
     let source = tmx::source();
     let routed = l.route(&RefScheme::TmxForm).map(str::to_string);
@@ -191,7 +216,8 @@ fn read_tmx(ctx: &Ctx, l: &Listing) -> Result<()> {
         }
     }
     if forms.is_empty() {
-        return not_carried(ctx, &source, tmx::HOST, id, format!("{} names no venue TMX quotes", l.symbol));
+        not_carried(ctx, &source, tmx::HOST, id, format!("{} names no venue TMX quotes", l.symbol))?;
+        return Ok(OutcomeKind::NotCarried);
     }
     // no form answered earlier today: only the first is asked until tomorrow
     let subject = id.to_string();
@@ -216,8 +242,8 @@ fn read_tmx(ctx: &Ctx, l: &Listing) -> Result<()> {
         match noted.outcome {
             Outcome::Answered(q) => {
                 // a null price: TMX has none now, and the price read last stands
-                if let Some(price) = q.price {
-                    keep(ctx, id, source.clone(), Money::new(price, q.currency), q.change, q.change_pct, q.datetime, std::time::Duration::ZERO)?;
+                if let Some(p) = q.price.filter(|_| price) {
+                    keep(ctx, id, source.clone(), Money::new(p, q.currency), q.change, q.change_pct, q.datetime, std::time::Duration::ZERO)?;
                 }
                 // the ex-dividend date the quote states, kept with it; none where it
                 // states none or where it could not be read
@@ -228,17 +254,17 @@ fn read_tmx(ctx: &Ctx, l: &Listing) -> Result<()> {
                 if routed.is_none() && own.as_deref() == Some(form.as_str()) {
                     ctx.book.add_instrument_ref(id, &Reference { scheme: RefScheme::TmxForm, value: form })?;
                 }
-                return Ok(());
+                return Ok(OutcomeKind::Answered);
             }
             Outcome::NotCarried(_) => continue,
             // a failure stops the chain: nothing is learned from no answer
-            _ => return Ok(()),
+            other => return Ok(other.kind()),
         }
     }
     if !missed {
-        ctx.cache.store_read(&subject, DataKind::Quote, &crate::cache::ReadRow { source, first: today, last: today, outcome: crate::outcome::OutcomeKind::NotCarried, at: ctx.now })?;
+        ctx.cache.store_read(&subject, DataKind::Quote, &crate::cache::ReadRow { source, first: today, last: today, outcome: OutcomeKind::NotCarried, at: ctx.now })?;
     }
-    Ok(())
+    Ok(OutcomeKind::NotCarried)
 }
 
 /// A coin's day change at `price`, in points and in percent: against the close of
