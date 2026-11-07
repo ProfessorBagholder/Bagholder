@@ -5,6 +5,8 @@
 // rest the figure is ordinary text, so it can be read and copied as before; the strips
 // exist only while the roll takes place, and go when the last of them has stopped.
 
+import { still } from '../motion'
+
 const STAGGER_MS = 18
 const LINE_EM = 1.15
 
@@ -27,7 +29,6 @@ export function comparable(a: string, b: string): boolean {
   return digits > 0
 }
 
-const still = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
 function wheel(from: string, delay: number): HTMLElement {
   const w = document.createElement('span')

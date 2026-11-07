@@ -4,6 +4,7 @@
   import { THEMES, theme, applyTheme } from './theme.svelte'
   import { ui, syncNow, refreshSession, connect, disconnect, openTradeModal, importCsv, openFolder, exportCsv, openData, openAgents, openRemote } from './ui.svelte'
   import { channel, notifyDead, notifyOn, notifySubscribed, notifyTest, notifyToggle, turnOn } from './notes/channel.svelte'
+  import { drop, lift } from './motion'
 
   const status = $derived(statusSlot.data)
   // A row's list opens under the pointer and on a tap (a touch has no hover); it closes when the
@@ -33,7 +34,7 @@
   const themeWord = $derived((THEMES.find((t) => t[0] === theme.name) || THEMES[0])[1])
 </script>
 
-<div class="menu elev-md">
+<div class="menu elev-md" in:drop out:lift>
   {#if status?.connected}
     <button class="primary" onclick={syncNow}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:1"><path d={ICONS.sync} /></svg>Sync now</button>
     <button onclick={refreshSession}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.key} /></svg>Refresh session</button>
@@ -53,7 +54,7 @@
   <div style="position:relative" role="presentation" onmouseenter={() => (themeOpen = true)} onmouseleave={() => (themeOpen = false)}>
     <button class:open={themeOpen} onclick={() => { themeOpen = true; notifyOpen = false }}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.palette} /></svg>Theme<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">{themeWord}</span><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.5"><path d={ICONS.caret} /></svg></button>
     {#if themeOpen}
-      <div class="menu sub">
+      <div class="menu sub" in:drop>
         {#each THEMES as t (t[0])}
           <button class:primary={theme.name === t[0]} onclick={() => { applyTheme(t[0]); themeOpen = false }}>
             <span class="swatch" style="background:{t[2]}"></span>{t[1]}{#if theme.name === t[0]}<span style="margin-left:auto;padding-left:24px"><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:1"><path d={ICONS.check} /></svg></span>{/if}
@@ -65,7 +66,7 @@
   <div style="position:relative" role="presentation" onmouseenter={() => (notifyOpen = true)} onmouseleave={() => (notifyOpen = false)}>
     <button class:open={notifyOpen} onclick={() => { notifyOpen = true; themeOpen = false }}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.bell} /></svg>Notifications<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">{notifyWord}</span><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.5"><path d={ICONS.caret} /></svg></button>
     {#if notifyOpen}
-      <div class="menu sub">
+      <div class="menu sub" in:drop>
         {#if channel() === 'denied'}
           <div class="menu-h" style="white-space:normal;max-width:240px">Blocked in this browser. Allow notifications for this page in the browser's site settings.</div>
           <div class="sep"></div>
