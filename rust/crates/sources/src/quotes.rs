@@ -142,8 +142,7 @@ fn ask_yahoo(ctx: &Ctx, asks: Vec<(&Listing, Vec<String>)>, kept: &mut dyn FnMut
                 ctx.record_detail(&yahoo::source(), yahoo::HOST, DataKind::Quote, Some(l.id), &Noted { outcome: outcome.clone(), shape_change: changed[at].clone() }, form)?;
                 match outcome {
                     Outcome::Answered(c) => {
-                        let change = c.previous_close.and_then(|p| c.quote.price.checked_sub(p).ok());
-                        keep(ctx, l.id, yahoo::source(), Money::new(c.quote.price, c.currency), change, c.quote.change_pct, c.quote.at, std::time::Duration::ZERO)?;
+                        keep(ctx, l.id, yahoo::source(), Money::new(c.quote.price, c.currency), c.quote.change, c.quote.change_pct, c.quote.at, std::time::Duration::ZERO)?;
                         ctx.cache.won(l.id, DataKind::Quote, &yahoo::source(), form, ctx.now)?;
                         moved.push(l.id);
                     }
@@ -449,8 +448,7 @@ pub fn glance(net: &bagholder_net::Net, now: Timestamp, g: &GlanceOf, rates: &BT
             same_currency_as(&mut outcome, |c| c.currency, &g.symbol, g.currency);
             match outcome {
                 Outcome::Answered(c) => {
-                    let change = c.previous_close.and_then(|p| c.quote.price.checked_sub(p).ok());
-                    return Outcome::Answered(Glance { price: Money::new(c.quote.price, c.currency), change, change_pct: c.quote.change_pct });
+                    return Outcome::Answered(Glance { price: Money::new(c.quote.price, c.currency), change: c.quote.change, change_pct: c.quote.change_pct });
                 }
                 Outcome::NotCarried(why) => last = not_carried(why),
                 other => return other.failed().unwrap_or(last),

@@ -17,7 +17,10 @@
 //! The quote is the reply's regular market price at its `regularMarketTime`,
 //! its day's change against the previous close the chart states
 //! (`chartPreviousClose`, else `previousClose`), in percent as stated, else
-//! worked out from that close.
+//! worked out from that close. A reply whose previous close is its last trade itself
+//! while it states a move (a future's, from Yahoo's turn of the day until the new
+//! session's first trade reaches the reply) has no such close: its change is the move
+//! as stated (`fulldayChange`), or none where none is.
 //!
 //! The spark answers in an order of its own, each result named by the symbol
 //! asked, and leaves out a symbol it does not carry: that symbol is not carried
@@ -77,6 +80,9 @@ pub struct Split {
 pub struct YahooQuote {
     pub price: Dec,
     pub at: Timestamp,
+    /// The day's change in points: from the previous close the reply states, or as
+    /// stated where that close is the last trade itself.
+    pub change: Option<Dec>,
     /// The day's change in percent, as stated, else from the previous close.
     pub change_pct: Option<Dec>,
 }
@@ -88,9 +94,6 @@ pub struct Quoted {
     pub symbol: String,
     pub currency: Currency,
     pub quote: YahooQuote,
-    /// The close the day's change is measured from, as stated
-    /// (`chartPreviousClose`, else `previousClose`).
-    pub previous_close: Option<Dec>,
 }
 
 /// What one chart reply states, read strictly.
@@ -104,10 +107,6 @@ pub struct Chart {
     pub dividends: Vec<(Date, Dec)>,
     pub splits: Vec<Split>,
     pub quote: YahooQuote,
-    /// The close before the chart's span, as stated (`chartPreviousClose`, else
-    /// `previousClose`): for the one-day chart a quote is read from, the previous
-    /// session's close, which the day's change is measured from.
-    pub previous_close: Option<Dec>,
 }
 
 /// Whether Yahoo's `answered` symbol is the `asked` one. Yahoo names a pair against
@@ -164,7 +163,7 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
         return Ok(Err(format!("the chart holds {} results, not one", results.len())));
     };
     let meta = r.obj("meta")?;
-    let Quoted { symbol: answered, currency, quote, previous_close } = match quote_of(&meta, symbol)? {
+    let Quoted { symbol: answered, currency, quote } = match quote_of(&meta, symbol)? {
         Ok(q) => q,
         Err(why) => return Ok(Err(why)),
     };
@@ -260,7 +259,7 @@ fn read(v: &Value, symbol: &str, now: Timestamp, later: &[Split]) -> Result<Resu
             }
         }
     }
-    Ok(Ok(Chart { symbol: answered, currency, closes, dividends: declared, splits, quote, previous_close }))
+    Ok(Ok(Chart { symbol: answered, currency, closes, dividends: declared, splits, quote }))
 }
 
 /// The quote a chart's `meta` states for `symbol`: its regular market price at its
@@ -297,9 +296,25 @@ fn quote_of(meta: &Node, symbol: &str) -> Result<Result<Quoted, String>, Mismatc
     // and its percent are both taken from the close.
     let coin = meta.text("instrumentType").is_ok_and(|t| t == "CRYPTOCURRENCY");
     let stated_pct = if coin { None } else { stated_pct };
-    // a chart that states no percent: the change over the previous close
-    let change_pct = stated_pct.or_else(|| previous_close.and_then(|p| crate::quotes::percent_of(price.checked_sub(p).ok()?, p)));
-    Ok(Ok(Quoted { symbol: answered.to_string(), currency, quote: YahooQuote { price, at, change_pct }, previous_close }))
+    // A previous close that is the last trade itself, beside a stated move: the reply
+    // has turned to a new period with no trade in it yet, so it has no close to measure
+    // from, and the move it states is of the session that last traded. Measured from its
+    // close it would read a zero beside a percent. A quote merely older than its period
+    // (a share's, overnight) still has its real close, and keeps it: its `fulldayChange`
+    // takes in the hours after the close.
+    let rolled = previous_close == Some(price) && stated_pct.is_some_and(|p| !p.is_zero());
+    let (change, change_pct) = if rolled {
+        let stated = match meta.field("fulldayChange") {
+            Ok(n) => Some(n.as_dec()?),
+            Err(_) => None,
+        };
+        (stated, stated_pct)
+    } else {
+        // a chart that states no percent: the change over the previous close
+        let change = previous_close.and_then(|p| price.checked_sub(p).ok());
+        (change, stated_pct.or_else(|| previous_close.and_then(|p| crate::quotes::percent_of(price.checked_sub(p).ok()?, p))))
+    };
+    Ok(Ok(Quoted { symbol: answered.to_string(), currency, quote: YahooQuote { price, at, change, change_pct } }))
 }
 
 /// Read one spark reply for the symbols `asked`: what came of each, in the order

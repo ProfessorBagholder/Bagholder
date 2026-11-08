@@ -91,12 +91,12 @@ fn the_quote_is_the_regular_price_at_its_own_time_and_a_session_counts_once_clos
     assert_eq!(spy.quote.price, dec("767.81"));
     assert_eq!(spy.quote.at, t("2026-09-23T20:00:00Z"));
     assert_eq!(spy.quote.change_pct, Some(dec("-0.72")));
-    assert_eq!(spy.previous_close, Some(dec("773.38")));
+    assert_eq!(spy.quote.change, Some(dec("-5.57")), "the price less the previous close the chart states");
     assert_eq!(spy.closes, vec![(date(2026, 9, 23), dec("767.8099975585938"))]);
     // a chart that states its previous close as `previousClose` and no percent:
     // the change is measured from that close, and its percent worked out from it
     let bare = chart("wrong-shape-SPY-range-1d-previous-close-only.json", "SPY", "2026-09-24T04:00:00Z");
-    assert_eq!(bare.previous_close, Some(dec("773.38")));
+    assert_eq!(bare.quote.change, Some(dec("-5.57")));
     // (767.81 − 773.38) × 100 ÷ 773.38, to four places
     assert_eq!(bare.quote.change_pct, Some(dec("-0.7202")));
 }
@@ -133,7 +133,7 @@ fn the_spark_answers_each_symbol_by_its_name_and_leaves_out_one_it_does_not_carr
     let asked = strings(&["AAPL", "ZZQXNOTREAL", "RY.TO"]);
     let Outcome::Answered(each) = yahoo::parse_spark(&common::json("yahoo-spark", "spark-AAPL-ZZQXNOTREAL-RY.TO.json"), &asked) else { panic!() };
     let Outcome::Answered(aapl) = &each[0] else { panic!("{:?}", each[0]) };
-    assert_eq!((aapl.symbol.as_str(), aapl.currency, aapl.quote.price, aapl.previous_close, aapl.quote.change_pct), ("AAPL", Currency::USD, dec("212.5"), Some(dec("215")), Some(dec("-1.1628"))), "AAPL's own result, the second the spark lists");
+    assert_eq!((aapl.symbol.as_str(), aapl.currency, aapl.quote.price, aapl.quote.change, aapl.quote.change_pct), ("AAPL", Currency::USD, dec("212.5"), Some(dec("-2.5")), Some(dec("-1.1628"))), "AAPL's own result, the second the spark lists");
     assert_eq!(aapl.quote.at, Timestamp::from_second(1770411601).unwrap());
     assert!(matches!(&each[1], Outcome::NotCarried(w) if w.contains("ZZQXNOTREAL")));
     let Outcome::Answered(ry) = &each[2] else { panic!() };
