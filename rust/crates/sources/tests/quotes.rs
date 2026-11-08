@@ -214,6 +214,54 @@ fn tmx_world(at: &str) -> (tempfile::TempDir, Book, MarketCache) {
     (dir, book, cache)
 }
 
+/// A reply whose previous close is its last trade itself while it states a move (a
+/// future's, from Yahoo's turn of the day until the new session's first trade reaches
+/// the reply) has no close to measure from. Its change is the move as stated, with its
+/// stated percent; none where the reply states none, never a zero beside a percent. The
+/// next read replaces a change stored wrong though the price has not moved. A share
+/// overnight, older than its period too, keeps its real close (`market.rs`, SPY).
+#[test]
+fn a_previous_close_that_is_the_last_trade_itself_gives_the_move_yahoo_states() {
+    const NAME: &str = "spark-ES=F-NQ=F-YM=F-RTY=F-ZQ=F-before-its-period.json";
+    let at = "2026-02-08T23:00:00Z";
+    let dir = tempfile::tempdir().unwrap();
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", t(at)).unwrap();
+    let codes = ["ES=F", "NQ=F", "YM=F", "RTY=F", "ZQ=F"];
+    let mut listings = Vec::new();
+    for (n, code) in (1u8..).zip(codes) {
+        common::instrument_in_book(&dir.path().join("book.db"), id(n), InstrumentKind::Future.as_str(), "USD");
+        let mut l = listing(n, InstrumentKind::Future, Currency::USD, code, None);
+        l.routes.insert(RefScheme::Yahoo, vec![code.to_string()]);
+        listings.push(l);
+    }
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", t(at)).unwrap();
+    let zone = TimeZone::get("America/Toronto").unwrap();
+    let asked: Vec<String> = codes.iter().map(|c| c.to_string()).collect();
+    let url = bagholder_sources::adapters::yahoo::spark_url(&asked);
+    let read = |body: String| {
+        let recorded = Arc::new(common::Recorded::new().with_text(&url, 200, body));
+        let net = common::net(&recorded, at);
+        let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t(at), bank: &zone };
+        quotes::read_quotes(&ctx, &listings).unwrap();
+    };
+    let got = |n: u8| cache.quotes().unwrap().into_iter().find(|q| q.instrument == id(n)).map(|q| (q.price.amount, q.change, q.change_pct)).unwrap();
+    let real = common::read("yahoo-spark", NAME);
+    // the zero an earlier build stored, beside the percent: the price has not moved
+    cache.store_quote(&bagholder_sources::cache::StoredQuote { instrument: id(1), source: bagholder_core::SourceName::named("yahoo"), price: Money::new(dec("5120.5"), Currency::USD), change: Some(Dec::ZERO), change_pct: Some(dec("0.5")), quoted_at: t(at), allowance: std::time::Duration::ZERO, received_at: t(at) }).unwrap();
+    // the same price read again from the reply as Yahoo states it: repaired by the read
+    read(real.clone());
+    assert_eq!(got(1), (dec("5120.5"), Some(dec("25.5")), Some(dec("0.5"))), "the move as stated");
+    assert_eq!(got(3), (dec("39000"), Some(dec("-175")), Some(dec("-0.447"))), "down as stated");
+    assert_eq!(got(5), (dec("95.5"), Some(dec("-0.025")), Some(dec("-0.026"))));
+    // no move stated: no change at all, the percent as stated
+    read(real.replace("\"fulldayChange\"", "\"noFulldayChange\""));
+    assert_eq!(got(1), (dec("5120.5"), None, Some(dec("0.5"))), "none rather than a zero");
+    // the chart reads the same rule
+    let chart = bagholder_sources::adapters::yahoo::parse(&common::json("yahoo", "ES=F-range-1d-before-its-period.json"), "ES=F", t(at));
+    let Outcome::Answered(c) = chart else { panic!("{chart:?}") };
+    assert_eq!((c.quote.change, c.quote.change_pct), (Some(dec("25.5")), Some(dec("0.5"))));
+}
+
 /// A spark request naming no symbol Yahoo carries is answered 404, which is each
 /// one's miss, never a failure of Yahoo's: a listing alone in its request (the last
 /// of a pass's, a glance's) that Yahoo does not carry is not carried, and nothing

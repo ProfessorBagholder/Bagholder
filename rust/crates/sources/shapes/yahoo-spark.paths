@@ -8,7 +8,7 @@ spark.result[].response[]
 spark.result[].response[].indicators
 spark.result[].response[].indicators.quote
 spark.result[].response[].indicators.quote[]
-spark.result[].response[].indicators.quote[].close
+spark.result[].response[].indicators.quote[].close ?
 spark.result[].response[].indicators.quote[].close[]
 spark.result[].response[].meta
 spark.result[].response[].meta.chartPreviousClose
@@ -42,7 +42,7 @@ spark.result[].response[].meta.fulldayPrice
 spark.result[].response[].meta.gmtoffset
 spark.result[].response[].meta.hasPrePostMarketData
 spark.result[].response[].meta.instrumentType
-spark.result[].response[].meta.longName
+spark.result[].response[].meta.longName ?
 spark.result[].response[].meta.priceHint
 spark.result[].response[].meta.range
 spark.result[].response[].meta.regularMarketChangePercent
@@ -56,6 +56,6 @@ spark.result[].response[].meta.symbol
 spark.result[].response[].meta.timezone
 spark.result[].response[].meta.validRanges
 spark.result[].response[].meta.validRanges[]
-spark.result[].response[].timestamp
+spark.result[].response[].timestamp ?
 spark.result[].response[].timestamp[]
 spark.result[].symbol
