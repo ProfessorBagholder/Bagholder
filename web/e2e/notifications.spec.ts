@@ -86,7 +86,15 @@ test('Turn on notifications subscribes this browser; with the page open the page
     await expect(page.locator('.menu.sub button', { hasText: 'Turn on notifications' })).toHaveCount(0)
     console.log('diag', new Date().toISOString(), 'step 8 done: await expect(page.locator(.menu.sub button, { hasText: Tu')
     // open: the page shows it, once, and the push service hears nothing
-    await page.locator('.menu.sub button', { hasText: 'Send a test notification' }).click()
+    console.log('diag', new Date().toISOString(), 'menus', await page.locator('.menu.elev-md').count(), 'sub lists', await page.locator('.menu.sub').count(), 'test buttons', await page.locator('.menu.sub button', { hasText: 'Send a test notification' }).count(), 'viewport', JSON.stringify(page.viewportSize()))
+    for (const sel of ['.menu.elev-md', '.menu.sub']) console.log('diag box', sel, JSON.stringify(await page.locator(sel).first().boundingBox().catch(() => null)))
+    try {
+      await page.locator('.menu.sub button', { hasText: 'Send a test notification' }).click({ timeout: 5000 })
+    } catch (e) {
+      console.log('diag click failed', String(e).slice(0, 3000))
+      console.log('diag after', 'menus', await page.locator('.menu.elev-md').count(), 'sub lists', await page.locator('.menu.sub').count())
+      throw e
+    }
     console.log('diag', new Date().toISOString(), 'step 9 done: await page.locator(.menu.sub button, { hasText: Send a te')
     await expect.poll(() => page.evaluate(() => (window as unknown as { __banners: unknown[] }).__banners.length)).toBe(1)
     console.log('diag', new Date().toISOString(), 'step 10 done: await expect.poll(() => page.evaluate(() => (window as unkno')
