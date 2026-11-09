@@ -33,6 +33,11 @@ pub const PACE: Duration = Duration::from_millis(600);
 pub const MAX_DEPTH: usize = 3;
 /// A breakdown older than this is fetched again.
 pub const FRESH_DAYS: i64 = 7;
+/// A record with no sector or no country fetched before this instant is read once
+/// more: an earlier build could not read a holding its issuer names only by ticker
+/// and company. The next read stamps it, it stands the week like any other, and this
+/// rule goes quiet by itself.
+pub const REPAIRED_FROM: &str = "2026-11-10T00:00:00Z";
 pub use bagholder_model::venues::{FUND_KEY, SHARE_KEY};
 
 /// What one pass of classification works in: the database, and the pool it came
@@ -787,16 +792,24 @@ pub fn parse_harvest_tables(tables: &[Vec<Vec<String>>]) -> (Vec<Holding>, Strin
     (holdings, reference)
 }
 
-fn harvest(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
-    let html = get(&HARVEST_PAGE.replace("{}", &bagholder_model::venues::tmx_symbol(symbol).to_lowercase()), &[])?;
-    let (mut holdings, reference) = parse_harvest_tables(&bagholder_sources::html::html_tables(&html));
+/// A Harvest page's holdings. A single-stock fund's page names its stock twice: by
+/// ticker as its reference asset, and by company name in its holdings table. Neither
+/// says the exchange, so the row carries both, for the look-through to find the one
+/// listing that is that company under that ticker.
+pub fn harvest_holdings(html: &str) -> Vec<Holding> {
+    let (mut holdings, reference) = parse_harvest_tables(&bagholder_sources::html::html_tables(html));
     static TICKER: OnceLock<Regex> = OnceLock::new();
     let ticker = TICKER.get_or_init(|| Regex::new(r"^[A-Z0-9][A-Z0-9.:-]{0,9}$").unwrap());
     if !reference.is_empty() && ticker.is_match(&reference) && !holdings.iter().any(|h| !h.ticker.is_empty()) {
-        // a single-stock fund names its reference asset as a ticker: that is
-        // the whole exposure
-        holdings = vec![Holding { ticker: reference.clone(), name: reference.clone(), weight: 100.0, sector: String::new(), country: String::new(), exchange: String::new(), currency: String::new(), fund: false }];
+        let name = holdings.first().map_or_else(|| reference.clone(), |h| h.name.clone());
+        holdings = vec![Holding { ticker: reference.clone(), name, weight: 100.0, sector: String::new(), country: String::new(), exchange: String::new(), currency: String::new(), fund: false }];
     }
+    holdings
+}
+
+fn harvest(symbol: &str) -> Result<Option<Breakdown>, FetchError> {
+    let html = get(&HARVEST_PAGE.replace("{}", &bagholder_model::venues::tmx_symbol(symbol).to_lowercase()), &[])?;
+    let holdings = harvest_holdings(&html);
     if holdings.is_empty() {
         return Ok(None);
     }
@@ -1116,10 +1129,16 @@ pub fn name_queries(name: &str) -> Vec<String> {
 /// A holding named without a ticker: the one listing the directories find for its
 /// name, searched as `name_queries` gives it (`resolve_name_with`).
 pub fn resolve_name(name: &str) -> Result<Option<Listed>, Failure> {
+    resolve_name_of(name, "")
+}
+
+/// `resolve_name`, for a holding that also states its ticker but not its exchange:
+/// the one listing its name finds under that ticker.
+pub fn resolve_name_of(name: &str, ticker: &str) -> Result<Option<Listed>, Failure> {
     if let Some(v) = hooks::RESOLVE.with(|h| h.borrow().as_ref().map(|f| f(name))) {
         return Ok(v);
     }
-    resolve_name_with(name, &crate::search::symbol_search)
+    resolve_named(name, ticker, &crate::search::symbol_search)
 }
 
 /// `resolve_name` with the directories' search handed in. A name is a listing
@@ -1127,12 +1146,18 @@ pub fn resolve_name(name: &str) -> Result<Option<Listed>, Failure> {
 /// answered; one found beside a directory unread is that failure, and two or more
 /// are none, never the first of them.
 pub fn resolve_name_with(name: &str, search: &dyn Fn(&str) -> crate::search::Searched) -> Result<Option<Listed>, Failure> {
+    resolve_named(name, "", search)
+}
+
+/// `resolve_name_with`, the rows narrowed to `ticker` where one is stated.
+pub fn resolve_named(name: &str, ticker: &str, search: &dyn Fn(&str) -> crate::search::Searched) -> Result<Option<Listed>, Failure> {
     for q in name_queries(name) {
         let found = search(&q);
         if !found.unread.is_empty() {
             return Err(Failure::Said(found.unread.join(" ")));
         }
-        match found.rows.as_slice() {
+        let rows: Vec<_> = found.rows.iter().filter(|m| ticker.is_empty() || m.symbol.eq_ignore_ascii_case(ticker)).collect();
+        match rows.as_slice() {
             [m] => return Ok(Some(Listed { symbol: m.symbol.clone(), exchange: m.exchange.clone(), currency: m.currency.clone() })),
             [] => continue,
             _ => return Ok(None),
@@ -1167,8 +1192,15 @@ fn fresh(rec: crate::stored::feeds::StoredExposure) -> Option<ExposureRecord> {
         p[0] * 3600 + p[1] * 60 + p[2]
     };
     let (_, now, _) = crate::clock_now();
-    let age_days = ((now as i64) - then).div_euclid(86400);
-    if age_days < FRESH_DAYS { Some(rec.record) } else { None }
+    if stands(&rec.record, &fetched, (now as i64) - then) { Some(rec.record) } else { None }
+}
+
+/// Whether a stored record, fetched at that stamp and that many seconds old, stands.
+pub fn stands(record: &ExposureRecord, fetched_at: &str, age_secs: i64) -> bool {
+    if (record.sectors.is_empty() || record.countries.is_empty()) && fetched_at < REPAIRED_FROM {
+        return false;
+    }
+    age_secs.div_euclid(86400) < FRESH_DAYS
 }
 
 fn store_exposure(ctx: &Ctx, key: &str, rec: &ExposureRecord) -> Result<(), String> {
@@ -1223,8 +1255,11 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
             continue;
         }
         let name = h.name.clone();
-        if tk.is_empty() && !name.is_empty() {
-            if let Some(m) = resolve_name(&name)? {
+        // a row that states no exchange, with its ticker or without: the one listing
+        // its name finds, under that ticker where it states one. A row that states an
+        // exchange names its listing, whether or not that venue is keyed here.
+        if (tk.is_empty() || ex.trim().is_empty()) && !name.is_empty() {
+            if let Some(m) = resolve_name_of(&name, &tk)? {
                 tk = m.symbol;
                 ex = m.exchange;
                 ccy = m.currency;
