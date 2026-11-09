@@ -86,3 +86,14 @@ Each person's copy reading the per-record-date form only for funds that person h
 
 ## How it is checked
 Done means the owner's job works end to end on the scratch copy with a made-up book: notification, panel, numbers, ledger, apply against the stand-in. Report real elapsed times.
+
+## Addendum after step 0 (2026-11-09)
+
+The survey found no issuer determines return of capital per distribution (Hamilton: "only for the entire year and not with each distribution"; Brompton's identical ratios). Rulings, replacing what they touch above:
+
+- **Return of capital placement.** Each distribution's share is the person's box 42 × (that distribution's cash ÷ the year's cash), from their own rows: exact under one annual ratio. A published annual per-unit figure is the check: its ratio must equal the slip's to rounding. Beyond rounding in a year units changed: flagged, the year not complete, reported to the Architect, nothing more built until a real case.
+- **Non-cash.** Net ACB change = T3 allocated income (actual amounts, less foreign tax boxes) minus cash on that year's record dates. Non-cash = net + return of capital. Dated by the fund's per-distribution field, else its year-end non-cash release, else its last record date of the year. Cash is matched to a year by record date.
+- **PR 2** is only the annual check figures and the year-end non-cash dates. Read each site's terms first, and leave out any that bar it.
+- **Box 20 to enter** = the slip's box 21 − the ledger's gain; a USD slip's box 21 is the ledger's CAD proceeds.
+- **PR 5:** `save_profile` replaces the whole return. Byte-for-byte check that only the target fields change; honour `save_stamp`, stop on LOCK; keep the pre-write JSON with one restore; on a blank profile prove the page recomputes Schedule 3. If it doesn't, PR 5 doesn't happen and the copy list stands.
+- **PR 6** stays held and probably adds nothing.
