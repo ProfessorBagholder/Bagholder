@@ -19,7 +19,7 @@ bagholder-diff = { path = "../diff" }
 bagholder-diff-derive = { path = "../diff-derive" }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 # SHA digests (a cached model file, a document's key, a headline's key)
 openssl = "0.10"
 # the filing sources' page patterns

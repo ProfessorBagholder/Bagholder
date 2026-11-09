@@ -83,9 +83,17 @@ fn traced(sql: &str) {
 }
 
 /// A connection just opened, counted where counting is on.
-pub(crate) fn watch(conn: &mut rusqlite::Connection) {
+pub(crate) fn watch(conn: &mut rusqlite::Connection) -> rusqlite::Result<()> {
     if COUNTING.load(Ordering::Relaxed) {
-        conn.trace(Some(traced));
+        use rusqlite::trace::{TraceEvent, TraceEventCodes};
+        conn.trace_v2(
+            TraceEventCodes::SQLITE_TRACE_STMT,
+            Some(|e: TraceEvent<'_>| {
+                if let TraceEvent::Stmt(_, sql) = e {
+                    traced(sql);
+                }
+            }),
+        )?;
         conn.authorizer(Some(|ctx: rusqlite::hooks::AuthContext<'_>| {
             if let rusqlite::hooks::AuthAction::Read { table_name, .. } = ctx.action {
                 READING.with(|r| {
@@ -95,7 +103,7 @@ pub(crate) fn watch(conn: &mut rusqlite::Connection) {
                 });
             }
             rusqlite::hooks::Authorization::Allow
-        }));
+        }))?;
         // the handler is called once per virtual-machine instruction, and never interrupts
         conn.progress_handler(
             1,
@@ -103,8 +111,9 @@ pub(crate) fn watch(conn: &mut rusqlite::Connection) {
                 STEPS.with(|s| s.set(s.get() + 1));
                 false
             }),
-        );
+        )?;
     }
+    Ok(())
 }
 
 #[cfg(test)]

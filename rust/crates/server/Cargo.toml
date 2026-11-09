@@ -6,7 +6,7 @@ edition.workspace = true
 [dependencies]
 # the official MCP SDK, which tracks the specification's revisions: `bagholder mcp` over stdio (its archive cost measured in #535),
 # and the agents' address over Streamable HTTP, served as a tower service inside axum (docs/plans/agents-from-anywhere.md)
-rmcp = { version = "=3.5.1", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+rmcp = { version = "=3.9.0", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 # the diff `#[derive(Diff)]` implements
 bagholder-diff = { path = "../diff" }
 # the page's order types are generated from these (web/src/lib/generated/orders.ts), as the
@@ -41,7 +41,7 @@ serde = { version = "1", features = ["derive"] }
 # raw_value: a price or quantity goes to Wealthsimple as its exact decimal digits in
 # the number position (`orders/gate.rs`, `Exact`), never as a float (brief 19, change 5).
 serde_json = { version = "1", features = ["preserve_order", "float_roundtrip", "raw_value"] }
-rusqlite = { version = "0.32", features = ["bundled"] }
+rusqlite = { version = "0.41", features = ["bundled"] }
 # The HTTP server (docs/architecture.md, "Process and HTTP"). axum on tokio and
 # hyper: typed extractors and responses per route, tower middleware for the gate,
 # the limits and the panic catcher, streamed bodies for the event stream, and a

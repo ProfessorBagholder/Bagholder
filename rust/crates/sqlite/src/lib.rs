@@ -43,7 +43,7 @@ pub fn open_db_hooked(path: &std::path::Path, hook: Option<std::sync::Arc<dyn Fn
         }
     }
     conn.pragma_update(None, "synchronous", "FULL")?;
-    work::watch(&mut conn);
+    work::watch(&mut conn)?;
     // every connection is made here, so every commit in the process is heard: no
     // writer has to remember to say it wrote
     if let Some(heard) = hook {
@@ -72,13 +72,6 @@ static HEARD: std::sync::Mutex<Vec<std::sync::Arc<dyn Fn() + Send + Sync>>> = st
 pub fn on_commit(conn: &rusqlite::Connection, heard: std::sync::Arc<dyn Fn() + Send + Sync>) -> rusqlite::Result<()> {
     use rusqlite::ffi;
     let mode: String = conn.query_row("PRAGMA journal_mode", [], |r| r.get(0))?;
-    if !mode.eq_ignore_ascii_case("wal") {
-        conn.commit_hook(Some(move || {
-            heard();
-            false // never veto the commit
-        }));
-        return Ok(());
-    }
     unsafe extern "C" fn landed(arg: *mut std::ffi::c_void, db: *mut ffi::sqlite3, name: *const std::ffi::c_char, pages: std::ffi::c_int) -> std::ffi::c_int {
         // `arg` is the signal's place in the registry, never a pointer
         let heard = HEARD.lock().unwrap_or_else(|e| e.into_inner()).get(arg as usize).cloned();
@@ -106,6 +99,18 @@ pub fn on_commit(conn: &rusqlite::Connection, heard: std::sync::Arc<dyn Fn() + S
             }
         }
     };
+    if !mode.eq_ignore_ascii_case("wal") {
+        unsafe extern "C" fn committed(arg: *mut std::ffi::c_void) -> std::ffi::c_int {
+            let heard = HEARD.lock().unwrap_or_else(|e| e.into_inner()).get(arg as usize).cloned();
+            if let Some(h) = heard {
+                h();
+            }
+            0 // never veto the commit
+        }
+        // SAFETY: `conn.handle()` is this open connection; the argument is an index, not a pointer
+        unsafe { ffi::sqlite3_commit_hook(conn.handle(), Some(committed), place as *mut std::ffi::c_void) };
+        return Ok(());
+    }
     // SAFETY: `conn.handle()` is this open connection; the argument is an index, not a pointer
     unsafe { ffi::sqlite3_wal_hook(conn.handle(), Some(landed), place as *mut std::ffi::c_void) };
     Ok(())
@@ -132,6 +137,29 @@ pub fn atomically<T>(conn: &rusqlite::Connection, work: impl FnOnce() -> rusqlit
 #[cfg(test)]
 mod commit_tests {
     use std::sync::{Arc, Mutex};
+
+    /// A file still in rollback mode has no log to hear: its commits are heard from
+    /// SQLite's commit hook, each one once, and a rolled-back write is not heard.
+    #[test]
+    fn a_file_in_rollback_mode_is_heard_from_its_commits() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let dir = tempfile::tempdir().unwrap();
+        let c = rusqlite::Connection::open(dir.path().join("r.db")).unwrap();
+        let mode: String = c.query_row("PRAGMA journal_mode", [], |r| r.get(0)).unwrap();
+        assert!(mode.eq_ignore_ascii_case("delete"), "{mode}");
+        let heard = std::sync::Arc::new(AtomicUsize::new(0));
+        let count = heard.clone();
+        crate::on_commit(&c, std::sync::Arc::new(move || {
+            count.fetch_add(1, Ordering::SeqCst);
+        }))
+        .unwrap();
+        c.execute_batch("CREATE TABLE t (x INTEGER)").unwrap();
+        assert_eq!(heard.load(Ordering::SeqCst), 1);
+        c.execute("INSERT INTO t VALUES (1)", []).unwrap();
+        assert_eq!(heard.load(Ordering::SeqCst), 2);
+        c.execute_batch("BEGIN; INSERT INTO t VALUES (2); ROLLBACK;").unwrap();
+        assert_eq!(heard.load(Ordering::SeqCst), 2, "a rollback commits nothing");
+    }
 
     /// What the signal is for: a reader it wakes, on another connection, reads the
     /// rows the commit wrote. A commit hook runs before the commit completes, and a
