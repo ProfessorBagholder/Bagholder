@@ -302,6 +302,71 @@ fn test_a_holding_stated_with_sector_and_country_is_taken_as_stated() {
     assert_eq!(agg.coverage, 1.0);
 }
 
+/// A single-stock fund's page states its stock by ticker and by company, and neither
+/// says the exchange: the fund is classified by the one listing that is that company
+/// under that ticker. Before: not classified, sector or country, since 2026-10-16,
+/// when a ticker alone stopped being looked up. A fund of those funds follows.
+#[test]
+fn test_a_single_stock_fund_and_a_fund_of_them_are_classified_by_the_stock_their_page_names() {
+    let conn = db();
+    let asked = Rc::new(RefCell::new(Vec::<String>::new()));
+    let a2 = asked.clone();
+    hooks::RESOLVE.with(|h| *h.borrow_mut() = Some(Box::new(move |name| {
+        a2.borrow_mut().push(name.to_string());
+        match name {
+            "Palantir Technologies Inc." => Some(Listed { symbol: "PLTR".into(), exchange: "NASDAQ".into(), currency: "USD".into() }),
+            _ => Some(Listed { symbol: "PLTE".into(), exchange: "TSX".into(), currency: "CAD".into() }),
+        }
+    })));
+    // the fund's page, read as production reads it
+    hooks::ADAPTER.with(|h| *h.borrow_mut() = Some(Box::new(|family, _, _, _| {
+        assert_eq!(family, "harvest");
+        Some(Breakdown { sectors: Weights::default(), countries: Weights::default(), holdings: exposure::harvest_holdings(HARVEST_NAMES_HTML), source: "Harvest ETFs".into(), as_of: String::new() })
+    })));
+    set_classify(classified());
+    let single = exposure::harvest_holdings(HARVEST_NAMES_HTML);
+    assert_eq!(single.iter().map(|h| (h.ticker.as_str(), h.name.as_str(), h.exchange.as_str())).collect::<Vec<_>>(), vec![("PLTR", "Palantir Technologies Inc.", "")], "the page's ticker and company, no exchange");
+    let agg = lookthrough(&ctx(&conn), &single);
+    assert_eq!(asked.borrow()[0], "Palantir Technologies Inc.", "found by the company's name");
+    assert_eq!(agg.sectors.0, vec![("Information Technology".to_string(), 1.0)]);
+    assert_eq!(agg.countries.0, vec![("United States".to_string(), 1.0)]);
+    assert_eq!(agg.coverage, 1.0);
+    // a fund holding that fund is what the stock is, not the country its units list in
+    let of_funds = vec![holding("", "Harvest Palantir Enhanced High Income Shares ETF", 7.0, "", "", "", "", true)];
+    let agg = lookthrough(&ctx(&conn), &of_funds);
+    assert_eq!(agg.sectors.0, vec![("Information Technology".to_string(), 1.0)]);
+    assert_eq!(agg.countries.0, vec![("United States".to_string(), 1.0)]);
+}
+
+/// A name found on several listings is the one under the ticker the holding states;
+/// with no such listing, or two, it is none.
+#[test]
+fn test_a_name_is_narrowed_to_the_ticker_the_holding_states() {
+    let row = |symbol: &str, exchange: &str| bagholder_model::wire::SymbolMatch { symbol: symbol.into(), exchange: exchange.into(), currency: "USD".into(), ..Default::default() };
+    let rows = vec![row("RDDT", "NYSE"), row("RDDT.CDR", "NEO")];
+    let search = |_: &str| bagholder_market::search::Searched { rows: rows.clone(), unread: vec![] };
+    let got = exposure::resolve_named("Reddit, Inc.", "RDDT", &search).unwrap().unwrap();
+    assert_eq!((got.symbol.as_str(), got.exchange.as_str()), ("RDDT", "NYSE"));
+    assert!(exposure::resolve_named("Reddit, Inc.", "NOPE", &search).unwrap().is_none());
+    assert!(exposure::resolve_named("Reddit, Inc.", "", &search).unwrap().is_none(), "two listings and no ticker: none, never the first");
+}
+
+/// A record that states no sector or no country stands an hour, not a week, so what
+/// an earlier build could not read is repaired by the next read. A whole one stands.
+#[test]
+fn test_an_incomplete_record_is_read_again_within_the_hour_and_a_whole_one_stands() {
+    let conn = db();
+    let stamp = |secs_ago: i64| (bagholder_core::jiff::Timestamp::now() - bagholder_core::jiff::SignedDuration::from_secs(secs_ago)).strftime("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let whole = ExposureRecord { sectors: Weights(vec![("Energy".into(), 1.0)]), countries: Weights(vec![("Canada".into(), 1.0)]), coverage: 1.0, ..Default::default() };
+    let no_sector = ExposureRecord { countries: Weights(vec![("Canada".into(), 1.0)]), coverage: 1.0, ..Default::default() };
+    bagholder_market::stored::feeds::replace_exposure(&conn, "whole", &whole, &stamp(2 * 3600)).unwrap();
+    bagholder_market::stored::feeds::replace_exposure(&conn, "empty-old", &ExposureRecord::default(), &stamp(2 * 3600)).unwrap();
+    bagholder_market::stored::feeds::replace_exposure(&conn, "half-old", &no_sector, &stamp(2 * 3600)).unwrap();
+    bagholder_market::stored::feeds::replace_exposure(&conn, "empty-new", &ExposureRecord::default(), &stamp(60)).unwrap();
+    let ids = ["whole", "empty-old", "half-old", "empty-new"].map(String::from);
+    assert_eq!(exposure::stale(&ctx(&conn), &ids).unwrap(), vec!["empty-old".to_string(), "half-old".to_string()]);
+}
+
 #[test]
 fn test_a_fund_named_without_a_ticker_is_resolved_then_looked_through() {
     let conn = db();
