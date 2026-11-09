@@ -680,14 +680,16 @@ pub struct PageOpen(Arc<App>);
 
 impl PageOpen {
     pub fn new(app: &Arc<App>) -> PageOpen {
-        app.notify.pages.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        let n = app.notify.pages.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        eprintln!("diag {} page open, pages now {}", bagholder_core::jiff::Timestamp::now(), n + 1);
         PageOpen(app.clone())
     }
 }
 
 impl Drop for PageOpen {
     fn drop(&mut self) {
-        self.0.notify.pages.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        let n = self.0.notify.pages.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        eprintln!("diag {} page closed, pages now {}", bagholder_core::jiff::Timestamp::now(), n - 1);
     }
 }
 
@@ -695,6 +697,7 @@ impl Drop for PageOpen {
 /// its service worker; with no page open, to every subscribed browser by Web Push.
 pub fn announce(app: &Arc<App>, row: &bagholder_market::stored::feeds::Notification) {
     app.notify.wake_streams();
+    eprintln!("diag {} announce row {} kind {} pages {}", bagholder_core::jiff::Timestamp::now(), row.id, row.kind, app.notify.pages.load(std::sync::atomic::Ordering::SeqCst));
     if app.notify.pages.load(std::sync::atomic::Ordering::SeqCst) == 0 {
         enqueue(app.clone(), row.clone());
     }
@@ -835,7 +838,10 @@ pub fn push_one(app: &Arc<App>, key: &crate::webpush::Keys, endpoint: &str, p256
         let auth_header = crate::webpush::authorization(&app.notify.token(key, &origin), key);
         let headers = [("TTL", ttl.as_str()), ("Urgency", push_urgency(&row.kind)), ("Content-Encoding", "aes128gcm"), ("Content-Type", "application/octet-stream"), ("Authorization", auth_header.as_str())];
         // sent once, its answer read whatever it is: a push sent twice shows twice
+        let t0 = std::time::Instant::now();
+        eprintln!("diag {} push row {} to {endpoint}", bagholder_core::jiff::Timestamp::now(), row.id);
         let answer = bagholder_net::client::request_once("POST", endpoint, &headers, Some(&body), Duration::from_secs(30));
+        eprintln!("diag {} push row {} answered {:?} after {:?}", bagholder_core::jiff::Timestamp::now(), row.id, answer.as_ref().map(|r| r.status).map_err(|e| e.to_string()), t0.elapsed());
         let r = match answer {
             Ok(r) => r,
             Err(e) => return Pushed::Failed(format!("the push service did not answer: {e}")),
@@ -866,8 +872,9 @@ pub fn push_all(app: &Arc<App>, row: &bagholder_market::stored::feeds::Notificat
         Ok(b) => b,
         Err(e) => return crate::feeds::feed_failed(app, PUSHED, format!("A notification could not be sent: {e}")),
     };
+    eprintln!("diag {} push_all row {}", bagholder_core::jiff::Timestamp::now(), row.id);
     let subs = match b.push_subscriptions() {
-        Ok(s) => s,
+        Ok(s) => { eprintln!("diag push_all row {} subscriptions {}", row.id, s.len()); s }
         Err(e) => return crate::feeds::feed_failed(app, PUSHED, format!("A notification could not be sent: {}", sql(e))),
     };
     if subs.is_empty() {

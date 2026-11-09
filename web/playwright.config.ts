@@ -48,8 +48,8 @@ export default defineConfig({
       url: `http://127.0.0.1:${PORT}/api/status`,
       reuseExistingServer: false,
       timeout: 600_000, // a cold `cargo build` on a fresh machine
-      stdout: 'ignore',
-      stderr: 'ignore',
+      stdout: 'pipe',
+      stderr: 'pipe',
       // stopped as a person stops it, so it removes its home (a saved sign-in in the
       // signed-in one) once its server has exited, never left for the next run
       gracefulShutdown: { signal: 'SIGTERM', timeout: 10_000 },
