@@ -1302,5 +1302,76 @@
     }
    ]
   }
+ },
+ {
+  "name": "A row with no settlement, in a year no settlement calendar the app holds covers, leaves its year waiting",
+  "spec": "SPEC.md tax-cost-of-an-etf-2, tax-cost-of-an-etf-9",
+  "working": [
+   "Made up. 10 units bought on 2009-06-01, a year before the calendars the app holds (2010 on), the row stating no settlement: its day cannot be worked out, so 2009 is not complete, and 2025, carrying its cost, is not either. Nothing is guessed."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2009-06-01",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-100.00"
+   },
+   {
+    "id": "s",
+    "account": "A",
+    "day": "2025-06-02",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-10",
+    "cash": "120.00"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "X": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "X",
+     "units": "0",
+     "cost": "0",
+     "complete_through": "none",
+     "years": {
+      "2009": {
+       "missing": [
+        "calendar 2009"
+       ]
+      },
+      "2025": {
+       "missing": [
+        "earlier-year 2009"
+       ],
+       "gains": [
+        {
+         "day": "2025-06-03",
+         "gain": "20.00"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
  }
 ]

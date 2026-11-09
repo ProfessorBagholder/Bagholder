@@ -76,6 +76,7 @@ fn missing(m: &Missing) -> String {
         Missing::CorporateEvent(_) => "corporate-event".into(),
         Missing::Units(_) => "units".into(),
         Missing::EarlierYear(y) => format!("earlier-year {y}"),
+        Missing::Calendar(y) => format!("calendar {y}"),
         Missing::Arithmetic => "arithmetic".into(),
     }
 }
@@ -177,10 +178,12 @@ fn every_case_holds() {
     assert!(failures.is_empty(), "{} of {ran} cases failed:\n{}", failures.len(), failures.join("\n"));
 }
 
-/// Settlement: as the row states it, else T+2 before 2024-05-27 in Canada and
-/// 2024-05-28 in the US, T+1 from then, weekends and holidays skipped (`tax-cost-of-an-etf-2`).
+/// Settlement: as the row states it, else T+3 before 2017-09-05, T+2 from then to
+/// 2024-05-27 in Canada and 2024-05-28 in the US, T+1 from then, on each market's
+/// own settlement calendar; none in a year no calendar the app holds covers
+/// (`tax-cost-of-an-etf-2`).
 #[test]
-fn settlement_is_t_plus_two_then_t_plus_one() {
+fn settlement_follows_each_markets_cycle_and_calendar() {
     use bagholder_core::transaction::{Kind, Transaction};
     let t = |d: &str| Transaction {
         id: bagholder_core::TransactionId::new(bagholder_core::RecordId::parse("01900000-0000-7000-8000-0000000000f1").unwrap(), bagholder_core::Leg::parse("trade").unwrap()),
@@ -200,31 +203,43 @@ fn settlement_is_t_plus_two_then_t_plus_one() {
         paid_on: None,
         value: None,
     };
-    let none = std::collections::BTreeSet::new();
-    let ca = |d: &str| acb::settlement(&t(d), Listed::Canada, None, &none).to_string();
-    let us = |d: &str| acb::settlement(&t(d), Listed::UnitedStates, None, &none).to_string();
-    // Friday 2024-05-24: T+2 in both, over the weekend
+    let ca = |d: &str| acb::settlement(&t(d), Listed::Canada, None).map(|x| x.to_string()).unwrap_or_else(|| "none".into());
+    let us = |d: &str| acb::settlement(&t(d), Listed::UnitedStates, None).map(|x| x.to_string()).unwrap_or_else(|| "none".into());
+    // the move to T+2: Friday 2017-09-01 was T+3 over Labour Day, Tuesday 09-05 T+2,
+    // both settling Thursday 09-07
+    assert_eq!(ca("2017-09-01"), "2017-09-07");
+    assert_eq!(ca("2017-09-05"), "2017-09-07");
+    assert_eq!(us("2017-09-01"), "2017-09-07");
+    assert_eq!(us("2017-09-05"), "2017-09-07");
+    // Friday 2024-05-24: T+2 in both; the US's Memorial Day 05-27 skipped there
     assert_eq!(ca("2024-05-24"), "2024-05-28");
-    assert_eq!(us("2024-05-24"), "2024-05-28");
-    // Monday 2024-05-27: Canada's first T+1 day, the US still T+2
+    assert_eq!(us("2024-05-24"), "2024-05-29");
+    // Monday 2024-05-27: Canada's first T+1 day; the US's first, Tuesday 05-28
     assert_eq!(ca("2024-05-27"), "2024-05-28");
-    assert_eq!(us("2024-05-27"), "2024-05-29");
     assert_eq!(us("2024-05-28"), "2024-05-29");
-    // each listing's own exchange calendar: US Thanksgiving is not a business day for
-    // a US fund, and is for a Canadian one; Canada Day the other way round
+    // US Thanksgiving is no business day for a US fund and is one for a Canadian
+    // fund, 2025 as 2026; Canada Day the other way round
+    assert_eq!(us("2025-11-26"), "2025-11-28");
+    assert_eq!(ca("2025-11-26"), "2025-11-27");
     assert_eq!(us("2026-11-25"), "2026-11-27");
     assert_eq!(ca("2026-11-25"), "2026-11-26");
-    assert_eq!(ca("2026-06-30"), "2026-07-02");
-    assert_eq!(us("2026-06-30"), "2026-07-01");
+    assert_eq!(ca("2025-06-30"), "2025-07-02");
+    assert_eq!(us("2025-06-30"), "2025-07-01");
+    // days the exchange trades and its market does not settle are skipped: Columbus
+    // Day for a US fund, Remembrance Day for a Canadian one, also under T+3
+    assert_eq!(us("2025-10-10"), "2025-10-14");
+    assert_eq!(ca("2025-11-10"), "2025-11-12");
+    assert_eq!(ca("2015-11-10"), "2015-11-16");
+    // the NYSE's unscheduled closure for President Carter: DTC settled that day
+    assert_eq!(us("2025-01-08"), "2025-01-09");
     // the venue its listing names, where it names one
     use bagholder_core::sessions::Venue;
-    assert_eq!(acb::settlement(&t("2026-11-25"), Listed::Canada, Some(Venue::UsEquities), &none).to_string(), "2026-11-27");
-    // before the years the calendars hold, the Bank of Canada's holidays stand in
-    let holiday: std::collections::BTreeSet<_> = [day("2025-07-01")].into();
-    assert_eq!(acb::settlement(&t("2025-06-30"), Listed::Canada, None, &holiday).to_string(), "2025-07-02");
-    assert_eq!(ca("2025-06-30"), "2025-07-01");
-    // a stated settlement stands
-    let mut stated = t("2025-06-30");
-    stated.settle_date = Some(day("2025-07-04"));
-    assert_eq!(acb::settlement(&stated, Listed::Canada, None, &none).to_string(), "2025-07-04");
+    assert_eq!(acb::settlement(&t("2026-11-25"), Listed::Canada, Some(Venue::UsEquities)).unwrap().to_string(), "2026-11-27");
+    // a year no calendar the app holds covers: none, never a guess
+    assert_eq!(ca("2009-06-01"), "none");
+    assert_eq!(us("2009-06-01"), "none");
+    // a stated settlement stands, in any year
+    let mut stated = t("2009-06-01");
+    stated.settle_date = Some(day("2009-06-04"));
+    assert_eq!(acb::settlement(&stated, Listed::Canada, None).unwrap().to_string(), "2009-06-04");
 }
