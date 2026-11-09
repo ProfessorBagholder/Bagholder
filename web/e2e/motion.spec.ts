@@ -138,6 +138,40 @@ test('what the keyboard opens or closes shows or goes at once', async ({ page })
   await atOnce(page, MENU, () => page.keyboard.press('Escape'), false)
 })
 
+test("the menu's rows sliding under a still pointer open no list until it has arrived", async ({ page }) => {
+  await page.goto('/')
+  await ready(page)
+  // where the Theme row comes to rest, found first on the settled menu
+  await page.getByRole('button', { name: 'Menu' }).click()
+  await settled(page, MENU)
+  const box = (await row(page, 'Theme').boundingBox())!
+  const [x, y] = [box.x + box.width / 2, box.y + box.height / 2]
+  await outside(page)
+  await expect(page.locator(MENU)).toHaveCount(0)
+  // the pointer rests there, then the menu opens and slides under it; the Notifications
+  // row, just below, passes beneath it on the way
+  await page.mouse.move(x, y)
+  const most = mostAtOnce(page, SUB, 300) // within the 340 ms slide
+  await page.evaluate(() => (document.querySelector('button[aria-label="Menu"]') as HTMLButtonElement).click())
+  expect(await most, 'no list while the menu slides under a still pointer').toBe(0)
+  await expect(page.locator(MENU)).toHaveCount(1)
+  await settled(page, MENU)
+  // once it has arrived, the row the pointer rests on opens its own list, and no other
+  await page.mouse.move(x + 3, y)
+  await expect(page.locator(SUB)).toContainText('Midnight')
+  await expect(page.locator(SUB)).toHaveCount(1)
+})
+
+test("opened from the keyboard, the menu's lists still open under the pointer", async ({ page }) => {
+  await page.goto('/')
+  await ready(page)
+  await page.getByRole('button', { name: 'Menu' }).focus()
+  await page.keyboard.press('Enter')
+  await expect(page.locator(MENU)).toHaveCount(1)
+  await row(page, 'Theme').hover()
+  await expect(page.locator(SUB)).toContainText('Midnight')
+})
+
 test('with less motion asked for, the panels and the lists only fade', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
