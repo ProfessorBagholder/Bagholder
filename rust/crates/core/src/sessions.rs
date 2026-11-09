@@ -293,6 +293,32 @@ mod tests {
         s.parse().unwrap()
     }
 
+    /// Every calendar runs at least a year past the day this runs, so a calendar
+    /// is extended a year before a date in its last year is needed: from 2028 every
+    /// row of a year no calendar holds would wait, and nothing else would say so. The
+    /// CSE publishes one year at a time (through New Year's Day of the next, its page
+    /// read 2026-11-09), so it is held only to the day this runs.
+    #[test]
+    fn every_calendar_runs_a_year_ahead() {
+        let today = jiff::Zoned::now().date();
+        let ahead = today.checked_add(jiff::Span::new().months(12)).unwrap();
+        let to = |d: (i16, i8, i8)| day(d).unwrap();
+        let held = [
+            ("the NYSE's holidays (US equities and options)", to(calendar(Venue::UsEquities).published_to), "the NYSE's Markets, Hours & Calendars page", ahead),
+            ("TMX's holidays (the TSX, and every Canadian venue's settlement)", to(calendar(Venue::Tsx).published_to), "TMX's Calendars and Trading Hours page", ahead),
+            ("Cboe Canada's holidays", to(calendar(Venue::CboeCanada).published_to), "Cboe's Canadian Equities Hours & Holidays page", ahead),
+            ("the CSE's holidays", to(calendar(Venue::Cse).published_to), "the CSE's Trading Resources page, Holidays", today),
+            ("Canada's settlement-only days (CANADA_SETTLEMENT_TO, CANADA_SETTLEMENT_ONLY)", to(CANADA_SETTLEMENT_TO), "CDS's holiday processing schedule and TMX's settlement schedule notices", ahead),
+            ("the US's settlement-only days (US_SETTLEMENT_TO, US_SETTLEMENT_ONLY)", to(US_SETTLEMENT_TO), "the Federal Reserve's holiday schedule and DTCC's yearly holiday schedule", ahead),
+        ];
+        let short: Vec<String> = held
+            .iter()
+            .filter(|(_, ends, _, need)| ends < need)
+            .map(|(what, ends, source, need)| format!("{what} end {ends}, before {need}: extend them from {source}"))
+            .collect();
+        assert!(short.is_empty(), "a calendar runs out within the year:\n{}", short.join("\n"));
+    }
+
     /// Settlement days are the market's own: a day the exchange trades and the
     /// settlement system does not (Columbus Day, Remembrance Day) is none, an
     /// unscheduled NYSE closure DTC settled through is one, and a year the app holds no
