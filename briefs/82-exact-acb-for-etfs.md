@@ -97,3 +97,9 @@ The survey found no issuer determines return of capital per distribution (Hamilt
 - **Box 20 to enter** = the slip's box 21 − the ledger's gain; a USD slip's box 21 is the ledger's CAD proceeds.
 - **PR 5:** `save_profile` replaces the whole return. Byte-for-byte check that only the target fields change; honour `save_stamp`, stop on LOCK; keep the pre-write JSON with one restore; on a blank profile prove the page recomputes Schedule 3. If it doesn't, PR 5 doesn't happen and the copy list stands.
 - **PR 6** stays held and probably adds nothing.
+
+## The owner's ruling on personal use (2026-11-09)
+
+"this IS all for personal use. what are you talking about. the fact that the repository is public does not change that fact. this isn't a commercial product or us providing a service to anyone. personal."
+
+Replacing what it touches above: the hold on the CDS reader is lifted and it **replaces PR 2**: one reader of the CDS forms for the funds the person holds, paced, kept on their machine, no content in the repository. PR 6 goes away. Its per-record-date figures place return of capital and non-cash; the slip stays the to-the-cent check; the addendum's cash apportionment and T3 identity are the fallback for a fund or year with no form. Ninepoint's reader stays, and "leave out any site that bars it" is withdrawn.
