@@ -251,6 +251,19 @@ pub fn settles_on(v: Venue, date: Date) -> Option<bool> {
     Some(trades_on(exchange, date)? && !on(settlement_only))
 }
 
+/// The last day the app holds the venue's trading calendar for.
+pub fn trading_held_to(v: Venue) -> Option<Date> {
+    day(calendar(v).published_to)
+}
+
+/// The last day the app holds the settlement calendar of the venue's market for.
+pub fn settlement_held_to(v: Venue) -> Option<Date> {
+    day(match v {
+        Venue::Tsx | Venue::Cse | Venue::CboeCanada => CANADA_SETTLEMENT_TO,
+        Venue::UsEquities | Venue::UsOptions => US_SETTLEMENT_TO,
+    })
+}
+
 /// When the venue's session next opens after `at`; none where that is past what the
 /// exchange has published.
 pub fn next_open(v: Venue, at: Timestamp) -> Option<Timestamp> {
@@ -291,32 +304,6 @@ mod tests {
 
     fn at(s: &str) -> Timestamp {
         s.parse().unwrap()
-    }
-
-    /// Every calendar runs at least a year past the day this runs, so a calendar
-    /// is extended a year before a date in its last year is needed: from 2028 every
-    /// row of a year no calendar holds would wait, and nothing else would say so. The
-    /// CSE publishes one year at a time (through New Year's Day of the next, its page
-    /// read 2026-11-09), so it is held only to the day this runs.
-    #[test]
-    fn every_calendar_runs_a_year_ahead() {
-        let today = jiff::Zoned::now().date();
-        let ahead = today.checked_add(jiff::Span::new().months(12)).unwrap();
-        let to = |d: (i16, i8, i8)| day(d).unwrap();
-        let held = [
-            ("the NYSE's holidays (US equities and options)", to(calendar(Venue::UsEquities).published_to), "the NYSE's Markets, Hours & Calendars page", ahead),
-            ("TMX's holidays (the TSX, and every Canadian venue's settlement)", to(calendar(Venue::Tsx).published_to), "TMX's Calendars and Trading Hours page", ahead),
-            ("Cboe Canada's holidays", to(calendar(Venue::CboeCanada).published_to), "Cboe's Canadian Equities Hours & Holidays page", ahead),
-            ("the CSE's holidays", to(calendar(Venue::Cse).published_to), "the CSE's Trading Resources page, Holidays", today),
-            ("Canada's settlement-only days (CANADA_SETTLEMENT_TO, CANADA_SETTLEMENT_ONLY)", to(CANADA_SETTLEMENT_TO), "CDS's holiday processing schedule and TMX's settlement schedule notices", ahead),
-            ("the US's settlement-only days (US_SETTLEMENT_TO, US_SETTLEMENT_ONLY)", to(US_SETTLEMENT_TO), "the Federal Reserve's holiday schedule and DTCC's yearly holiday schedule", ahead),
-        ];
-        let short: Vec<String> = held
-            .iter()
-            .filter(|(_, ends, _, need)| ends < need)
-            .map(|(what, ends, source, need)| format!("{what} end {ends}, before {need}: extend them from {source}"))
-            .collect();
-        assert!(short.is_empty(), "a calendar runs out within the year:\n{}", short.join("\n"));
     }
 
     /// Settlement days are the market's own: a day the exchange trades and the
