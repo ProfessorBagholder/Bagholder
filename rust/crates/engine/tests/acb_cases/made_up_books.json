@@ -896,5 +896,411 @@
     }
    ]
   }
+ },
+ {
+  "name": "A loss replaced in a TFSA is gone, though the holding still holds units",
+  "spec": "SPEC.md tax-cost-of-an-etf-7",
+  "working": [
+   "Made up (the Architect's case). 200 units bought in A, non-registered, for 2,000.00 in 2024. 100 sold Monday 2025-03-03 for 800.00 (T+1, settled 03-04); 100 bought in the TFSA on 2025-03-10 for 850.00 (settled 03-11), held past the period.",
+   "Cost of the 100 = 2,000 x 100/200 = 1,000.00; loss = 800 - 1,000 = -200.00. S = 100, P = 100, B = 200: denied = 200 x 100/100 = 200.00, so the gain is 0.00.",
+   "The replacing units are those bought in an account in the period and held there at its end: A bought none, the TFSA 100. A's share is 0/100: nothing is added; A keeps 1,000.00 on 100 units."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   },
+   {
+    "id": "T",
+    "registration": "tfsa"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2024-06-03",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "200",
+    "cash": "-2000.00"
+   },
+   {
+    "id": "s",
+    "account": "A",
+    "day": "2025-03-03",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-100",
+    "cash": "800.00"
+   },
+   {
+    "id": "t",
+    "account": "T",
+    "day": "2025-03-10",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-850.00"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "X": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "X",
+     "units": "100",
+     "cost": "1000.00",
+     "complete_through": "2025",
+     "rows": [
+      "2024-06-04 bought 200 2000.00 2000.00",
+      "2025-03-04 sold -100 -1000.00 1000.00"
+     ],
+     "years": {
+      "2025": {
+       "gains": [
+        {
+         "day": "2025-03-04",
+         "units": "100",
+         "proceeds": "800.00",
+         "cost": "1000.00",
+         "gain": "0",
+         "denied": "200.00"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A consolidation changes the units and leaves the cost",
+  "spec": "SPEC.md tax-cost-of-an-etf-10; SPEC.md trade-27",
+  "working": [
+   "Made up. 100 units for 1,000.00. On 2025-05-01 the fund consolidates two units into one: the record states 50 units out, its anchor the ratio 0.5. 50 units, still 1,000.00 (20.00 each).",
+   "Sold the 50 on Monday 2025-06-02 for 1,100.00 (settled 06-03): gain 1,100 - 1,000 = 100.00."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2025-01-06",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-1000.00"
+   },
+   {
+    "id": "ce",
+    "account": "A",
+    "day": "2025-05-01",
+    "kind": "corporate-event",
+    "instrument": "X",
+    "qty": "-50"
+   },
+   {
+    "id": "s",
+    "account": "A",
+    "day": "2025-06-02",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-50",
+    "cash": "1100.00"
+   }
+  ],
+  "adjustments": [
+   {
+    "applies_to": "ce",
+    "legs": [
+     {
+      "from": "X",
+      "to": "X",
+      "units_per_unit": "0.5"
+     }
+    ]
+   }
+  ],
+  "tax": {
+   "funds": {
+    "X": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "X",
+     "units": "0",
+     "cost": "0",
+     "complete_through": "2025",
+     "rows": [
+      "2025-01-07 bought 100 1000.00 1000.00",
+      "2025-05-01 split -50 0 1000.00",
+      "2025-06-03 sold -50 -1000.00 0"
+     ],
+     "years": {
+      "2025": {
+       "gains": [
+        {
+         "day": "2025-06-03",
+         "units": "50",
+         "proceeds": "1100.00",
+         "cost": "1000.00",
+         "gain": "100.00"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A year whose slips are all in, with none for the fund, is complete from its per-unit figures",
+  "spec": "SPEC.md tax-cost-of-an-etf-5, tax-cost-of-an-etf-9",
+  "working": [
+   "Made up. 100 units for 1,000.00. 2025: one distribution, record 03-20 (stated as its ex-date only: since T+1 the two are the same day), 0.50 a unit return of capital per the fund's figure: 50.00, cost 950.00.",
+   "No slip came (a trust need not issue one under $100) and 2025's slips are all in: complete from the figure. 2026's distribution has a figure too but its slips are not all in: not complete."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2024-06-03",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-1000.00"
+   },
+   {
+    "id": "d",
+    "account": "A",
+    "day": "2025-03-28",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "60.00"
+   },
+   {
+    "id": "d2",
+    "account": "A",
+    "day": "2026-01-28",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "60.00"
+   }
+  ],
+  "declared": {
+   "X": [
+    {
+     "ex": "2025-03-20",
+     "pay": "2025-03-28",
+     "amount": "0.60"
+    },
+    {
+     "ex": "2026-01-20",
+     "pay": "2026-01-28",
+     "amount": "0.60"
+    }
+   ]
+  },
+  "tax": {
+   "funds": {
+    "X": "canada"
+   },
+   "per_unit": {
+    "X": {
+     "2025-03-20": {
+      "roc": "0.50"
+     },
+     "2026-01-20": {
+      "roc": "0.50"
+     }
+    }
+   },
+   "slips_final": [
+    "2025"
+   ]
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "X",
+     "units": "100",
+     "cost": "900.00",
+     "complete_through": "2025",
+     "rows": [
+      "2024-06-04 bought 100 1000.00 1000.00",
+      "2025-03-20 return-of-capital 0 -50.00 950.00",
+      "2026-01-20 return-of-capital 0 -50.00 900.00"
+     ],
+     "years": {
+      "2025": {
+       "missing": []
+      },
+      "2026": {
+       "missing": [
+        "slip"
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A return of capital entered beyond the slip's box is flagged, never taken from the others",
+  "spec": "SPEC.md tax-cost-of-an-etf-5",
+  "working": [
+   "Made up. 10 units for 100.00. 2025: two distributions, record dates 03-20 and 09-19. The person entered 0.80 a unit for the first: 8.00. The slip's box 42 is 6.00: 6.00 - 8.00 = -2.00 left for the second, beyond a cent: flagged, and the second takes 0.00.",
+   "Before T+1 a declared row with no record date leaves its distribution's record date unknown: 2023's distribution (ex 2023-06-20) is not read, and 2023 is not complete."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2023-01-09",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-100.00"
+   },
+   {
+    "id": "d0",
+    "account": "A",
+    "day": "2023-06-28",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "5.00"
+   },
+   {
+    "id": "d1",
+    "account": "A",
+    "day": "2025-03-28",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "5.00"
+   },
+   {
+    "id": "d2",
+    "account": "A",
+    "day": "2025-09-26",
+    "kind": "dividend",
+    "instrument": "X",
+    "cash": "5.00"
+   }
+  ],
+  "declared": {
+   "X": [
+    {
+     "ex": "2023-06-20",
+     "pay": "2023-06-28",
+     "amount": "0.50"
+    },
+    {
+     "ex": "2025-03-20",
+     "record": "2025-03-20",
+     "pay": "2025-03-28",
+     "amount": "0.50"
+    },
+    {
+     "ex": "2025-09-19",
+     "record": "2025-09-19",
+     "pay": "2025-09-26",
+     "amount": "0.50"
+    }
+   ]
+  },
+  "adjustments": [
+   {
+    "applies_to": "d1",
+    "source": "you",
+    "legs": [
+     {
+      "from": "X",
+      "cash_per_unit": "0.80"
+     }
+    ]
+   }
+  ],
+  "tax": {
+   "funds": {
+    "X": "canada"
+   },
+   "slips": {
+    "X": {
+     "2025": [
+      {
+       "box42": "6.00",
+       "income": "4.00"
+      }
+     ]
+    }
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "X",
+     "units": "10",
+     "cost": "92.00",
+     "complete_through": "none",
+     "years": {
+      "2023": {
+       "missing": [
+        "record-date"
+       ]
+      },
+      "2025": {
+       "missing": [
+        "slip-differs -2.00",
+        "earlier-year 2023"
+       ]
+      }
+     }
+    }
+   ]
+  }
  }
 ]

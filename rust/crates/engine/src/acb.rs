@@ -12,6 +12,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_core::account::{AccountType, Registration};
+use bagholder_core::sessions::Venue;
 use bagholder_core::jiff::civil::{Date, Weekday};
 use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, Currency, Dec, DecError, InstrumentId, Money, Rounding, TransactionId};
@@ -58,6 +59,9 @@ pub struct TaxInputs {
     /// The day a year's non-cash distribution is dated, where its fund states
     /// one (a per-distribution field, or its year-end release).
     pub non_cash_on: BTreeMap<(InstrumentId, i16), Date>,
+    /// The years whose slips are all in: a year here with no slip for a fund had
+    /// none issued (a trust need not issue one under $100).
+    pub slips_final: BTreeSet<i16>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -72,6 +76,8 @@ pub enum Event {
     BelowZero,
     /// A superficial loss added to the cost of the units that replaced them.
     LossAdded,
+    /// A split or consolidation: the units change, the cost does not.
+    Split,
 }
 
 /// Where a row's amount comes from.
@@ -156,7 +162,8 @@ pub enum Missing {
     PeriodOpen(Date),
     /// An account whose plan is not known holds the fund.
     AccountPlan(AccountId),
-    /// A corporate event on the fund, which this ledger does not read.
+    /// A corporate event on the fund other than a split or consolidation (a
+    /// merger, a spin-off), or one whose units are not stated.
     CorporateEvent(TransactionId),
     /// A sale of more units than the holding holds.
     Units(TransactionId),
@@ -206,12 +213,19 @@ fn t_plus_one_from(listed: Listed) -> Date {
 /// The superficial-loss period's reach each side of a sale's settlement (`tax-cost-of-an-etf-7`).
 const PERIOD_DAYS: i64 = 30;
 
-/// A day's settlement: as the row states it, else its trade date plus the
-/// business days of its time.
-pub fn settlement(t: &Transaction, listed: Listed, holidays: &BTreeSet<Date>) -> Date {
+/// A row's settlement: as the row states it, else its trade date plus the
+/// business days of its time, on its venue's calendar as the app holds it
+/// (`bagholder_core::sessions`); before the years that calendar holds, weekdays
+/// other than the Bank of Canada's holidays (`tax-cost-of-an-etf-2`).
+pub fn settlement(t: &Transaction, listed: Listed, venue: Option<Venue>, holidays: &BTreeSet<Date>) -> Date {
     if let Some(d) = t.settle_date {
         return d;
     }
+    let venue = venue.unwrap_or(match listed {
+        Listed::Canada => Venue::Tsx,
+        Listed::UnitedStates => Venue::UsEquities,
+    });
+    let business = |d: Date| bagholder_core::sessions::trades_on(venue, d).unwrap_or_else(|| !matches!(d.weekday(), Weekday::Saturday | Weekday::Sunday) && !holidays.contains(&d));
     let mut n = if t.trade_date >= t_plus_one_from(listed) { 1 } else { 2 };
     let mut d = t.trade_date;
     while n > 0 {
@@ -219,7 +233,7 @@ pub fn settlement(t: &Transaction, listed: Listed, holidays: &BTreeSet<Date>) ->
             Ok(x) => x,
             Err(_) => return d,
         };
-        if !matches!(d.weekday(), Weekday::Saturday | Weekday::Sunday) && !holidays.contains(&d) {
+        if business(d) {
             n -= 1;
         }
     }
@@ -263,12 +277,13 @@ enum Step {
     Roc { amount: Dec, source: Source },
     NonCash { amount: Dec, source: Source },
     Buy { t: TransactionId, units: Dec, cost: Dec, rate: Option<Dec>, entered: bool },
+    Split { t: TransactionId, units: Dec },
 }
 
 impl Step {
     fn rank(&self) -> u8 {
         match self {
-            Step::Sell { .. } => 0,
+            Step::Sell { .. } | Step::Split { .. } => 0,
             Step::Roc { .. } => 1,
             Step::NonCash { .. } => 2,
             Step::Buy { .. } => 3,
@@ -324,7 +339,8 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
     let holidays = &inputs.facts.rates.holidays;
     let cad = Cad { inputs };
     let mut missing: Vec<(i16, Missing)> = Vec::new();
-    let settle = |t: &Transaction| settlement(t, listed, holidays);
+    let venue = inputs.ledger.instruments.get(&fund).and_then(|i| i.current_name()).and_then(|n| n.venue_mic.as_deref()).and_then(|m| bagholder_core::sessions::venue_of(m, false));
+    let settle = |t: &Transaction| settlement(t, listed, venue, holidays);
     let in_holding = |a: AccountId| place(inputs, a) == Place::Holding;
     let links = &inputs.ledger.transfer_links;
     let other_side = |t: &Transaction| -> Option<AccountId> {
@@ -337,6 +353,12 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
     let mut all_units: Vec<(Date, Dec)> = Vec::new();
     // purchases in any account of theirs, by settlement
     let mut bought_any: Vec<(Date, Dec)> = Vec::new();
+    // the same, each account's own: the units that replace a loss are those
+    // bought in an account and still held there (`tax-cost-of-an-etf-7`)
+    let mut units_in: BTreeMap<AccountId, Vec<(Date, Dec)>> = BTreeMap::new();
+    let mut bought_in: BTreeMap<AccountId, Vec<(Date, Dec)>> = BTreeMap::new();
+    // each split's record and account, read once with all its legs
+    let mut events: BTreeMap<(bagholder_core::RecordId, AccountId), (Date, Dec, TransactionId)> = BTreeMap::new();
     // the holding's own units, by settlement, for each record date
     let mut held_units: Vec<(Date, Dec)> = Vec::new();
     let mut steps: Vec<(Date, Step, usize)> = Vec::new();
@@ -359,9 +381,27 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
         let moves_units = matches!(t.kind, Kind::Buy | Kind::Sell | Kind::TransferIn | Kind::TransferOut);
         if moves_units && !qty.is_zero() {
             all_units.push((day, qty));
+            units_in.entry(t.account).or_default().push((day, qty));
             if t.kind == Kind::Buy && qty.is_positive() {
                 bought_any.push((day, qty));
+                bought_in.entry(t.account).or_default().push((day, qty));
             }
+        }
+        if t.kind == Kind::CorporateEvent {
+            // a split or consolidation (`trade-27`): the record's anchor states it, and
+            // its units are the ones the record states for the account, else the
+            // anchor's ratio; read once per record and account. Any other event waits.
+            let is_split = |r: &&Transaction| inputs.facts.adjustments.get(&r.id).is_some_and(|a| a.legs.iter().any(|l| l.from == Some(fund) && l.to == Some(fund) && l.cash_per_unit.is_none() && l.cost.is_none()));
+            let anchor = inputs.ledger.transactions.of_record(t.id.record).find(is_split).map(|r| r.id.clone());
+            let ratio = anchor.as_ref().and_then(|a| inputs.facts.adjustments.get(a)).and_then(|a| a.legs.iter().find_map(|l| l.units_per_unit));
+            let stated = inputs.ledger.transactions.of_record(t.id.record).filter(|r| r.account == t.account && r.instrument == Some(fund)).try_fold(Dec::ZERO, |a, r| a.checked_add(r.quantity.unwrap_or(Dec::ZERO)))?;
+            match anchor {
+                Some(a) if !stated.is_zero() || ratio.is_some() => {
+                    events.entry((t.id.record, t.account)).or_insert((t.trade_date, stated, a));
+                }
+                _ => missing.push((year_of(t.trade_date), Missing::CorporateEvent(t.id.clone()))),
+            }
+            continue;
         }
         if p != Place::Holding {
             continue;
@@ -417,11 +457,10 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
                     }
                 }
             }
-            Kind::CorporateEvent => missing.push((year_of(t.trade_date), Missing::CorporateEvent(t.id.clone()))),
             // a US-listed fund's distributions never touch its cost (`tax-cost-of-an-etf-8`)
             Kind::Dividend if listed == Listed::Canada => {
                 let Some(cash) = t.cash.filter(|c| c.amount.is_positive()) else { continue };
-                match record_date(inputs, fund, t) {
+                match record_date(inputs, fund, listed, t) {
                     Some(rd) => {
                         let (c, _) = cad.of(cash, t.trade_date, &mut missing, year_of(rd))?;
                         paid.push((rd, c, t.id.clone()));
@@ -435,6 +474,31 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
     held_units.sort();
     all_units.sort();
     bought_any.sort();
+    // each split's change of units, from the units its account held before it
+    for ((_, account), (day, stated, t)) in &events {
+        let before = |list: &[(Date, Dec)]| -> Result<Dec, DecError> { list.iter().filter(|(s, _)| s < day).try_fold(Dec::ZERO, |a, (_, q)| a.checked_add(*q)) };
+        let held = before(units_in.get(account).map_or(&[][..], |v| &v[..]))?;
+        let change = if !stated.is_zero() {
+            *stated
+        } else {
+            let r = inputs.facts.adjustments.get(t).and_then(|a| a.legs.iter().find_map(|l| l.units_per_unit)).unwrap_or(Dec::ONE);
+            held.checked_mul(r)?.checked_sub(held)?
+        };
+        if change.is_zero() {
+            continue;
+        }
+        all_units.push((*day, change));
+        units_in.entry(*account).or_default().push((*day, change));
+        if in_holding(*account) {
+            held_units.push((*day, change));
+            steps.push((*day, Step::Split { t: t.clone(), units: change }, 0));
+        }
+    }
+    held_units.sort();
+    all_units.sort();
+    for v in units_in.values_mut() {
+        v.sort();
+    }
     let held_on = |d: Date| -> Result<Dec, DecError> { held_units.iter().take_while(|(s, _)| *s <= d).try_fold(Dec::ZERO, |a, (_, q)| a.checked_add(*q)) };
 
     // each year's return of capital and non-cash distribution (`tax-cost-of-an-etf-4`, `tax-cost-of-an-etf-5`)
@@ -482,7 +546,8 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
                     // a difference of rounding goes on the year's last distribution
                     last.1 = last.1.checked_add(differs)?;
                 }
-            } else {
+            } else if !tax.slips_final.contains(&year) {
+                // the figures alone, once the year's slips are all in and none came
                 missing.push((year, Missing::Slip));
             }
             for (rd, amount, source) in rocs {
@@ -504,6 +569,15 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
                     }
                     _ => open.push(row),
                 }
+            }
+            let entered = rows.len() - open.len();
+            if rest.is_negative() {
+                // what the person entered is more than the box: flagged, never taken
+                // from the others' cost
+                if rest.abs() > Dec::new(1, 2)?.checked_mul(Dec::from_int(entered as i64))? {
+                    missing.push((year, Missing::SlipDiffers(rest)));
+                }
+                rest = Dec::ZERO;
             }
             let cash = open.iter().try_fold(Dec::ZERO, |a, r| a.checked_add(r.1))?;
             let mut placed = Dec::ZERO;
@@ -543,6 +617,10 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
                 let source = if entered { Source::Entered(t) } else { Source::Book(t) };
                 out_rows.push(Row { day, event: if entered { Event::MovedIn } else { Event::Bought }, units: q, cad: c, units_after: units, cost_after: cost, rate, source });
             }
+            Step::Split { t, units: q } => {
+                units = units.checked_add(q)?;
+                out_rows.push(Row { day, event: Event::Split, units: q, cad: Dec::ZERO, units_after: units, cost_after: cost, rate: None, source: Source::Book(t) });
+            }
             Step::Sell { t, units: q, proceeds, outlays, rate } => {
                 if q > units {
                     missing.push((year, Missing::Units(t.clone())));
@@ -568,10 +646,19 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
                     if substitute.is_positive() {
                         denied = gain.neg().mul_div_rounded(substitute, q, 2, Rounding::HalfEven)?;
                         gain = gain.checked_add(denied)?;
-                        // what the holding's own accounts hold of it is added to its cost;
-                        // what a registered plan holds is gone for good
-                        let own_end = units_at(&held_units, last)?;
-                        let added = if own_end >= held_end { denied } else { denied.mul_div_rounded(own_end.max(Dec::ZERO), held_end, 2, Rounding::HalfEven)? };
+                        // the replacing units are those bought in an account in the period
+                        // and held there at its end: the holding's accounts' share of the
+                        // denied loss is added to its cost, a registered plan's is gone
+                        let (mut own, mut every) = (Dec::ZERO, Dec::ZERO);
+                        for (a, list) in &units_in {
+                            let bought = bought_in.get(a).map_or(Ok(Dec::ZERO), |b| b.iter().filter(|(s, _)| *s >= first && *s <= last).try_fold(Dec::ZERO, |x, (_, b)| x.checked_add(*b)))?;
+                            let replaced = bought.min(units_at(list, last)?).max(Dec::ZERO);
+                            every = every.checked_add(replaced)?;
+                            if in_holding(*a) {
+                                own = own.checked_add(replaced)?;
+                            }
+                        }
+                        let added = if every.is_zero() { Dec::ZERO } else if own == every { denied } else { denied.mul_div_rounded(own, every, 2, Rounding::HalfEven)? };
                         if !added.is_zero() {
                             cost = cost.checked_add(added)?;
                             out_rows.push(Row { day, event: Event::LossAdded, units: Dec::ZERO, cad: added, units_after: units, cost_after: cost, rate: None, source: Source::Book(t.clone()) });
@@ -613,8 +700,9 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
 }
 
 /// A distribution row's record date: the declared distribution it pays, matched
-/// by its pay date, where one states both.
-fn record_date(inputs: &Inputs, fund: InstrumentId, t: &Transaction) -> Option<Date> {
+/// by its pay date, where one states it; since T+1, its ex-date where it states
+/// none, the two being the same day.
+fn record_date(inputs: &Inputs, fund: InstrumentId, listed: Listed, t: &Transaction) -> Option<Date> {
     let declared = inputs.facts.declared.get(&fund)?;
-    declared.items.iter().filter(|d| d.pay_date == Some(t.trade_date)).find_map(|d| d.record_date)
+    declared.items.iter().filter(|d| d.pay_date == Some(t.trade_date)).find_map(|d| d.record_date.or_else(|| (d.ex_date >= t_plus_one_from(listed)).then_some(d.ex_date)))
 }

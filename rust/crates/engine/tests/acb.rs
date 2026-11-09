@@ -41,6 +41,7 @@ fn tax_inputs(case: &Value, ids: &mut Ids) -> TaxInputs {
         }
         out.per_unit.insert(ids.instrument(&f), m);
     }
+    out.slips_final = arr(&t, "slips_final").iter().map(|y| y.as_str().unwrap().parse().unwrap()).collect();
     for (f, years) in obj(&t, "non_cash_on") {
         for (y, d) in years.as_object().unwrap() {
             out.non_cash_on.insert((ids.instrument(&f), y.parse().unwrap()), day(d.as_str().unwrap()));
@@ -58,6 +59,7 @@ fn event(e: &Event) -> &'static str {
         Event::NonCash => "non-cash",
         Event::BelowZero => "below-zero",
         Event::LossAdded => "loss-added",
+        Event::Split => "split",
     }
 }
 
@@ -199,8 +201,8 @@ fn settlement_is_t_plus_two_then_t_plus_one() {
         value: None,
     };
     let none = std::collections::BTreeSet::new();
-    let ca = |d: &str| acb::settlement(&t(d), Listed::Canada, &none).to_string();
-    let us = |d: &str| acb::settlement(&t(d), Listed::UnitedStates, &none).to_string();
+    let ca = |d: &str| acb::settlement(&t(d), Listed::Canada, None, &none).to_string();
+    let us = |d: &str| acb::settlement(&t(d), Listed::UnitedStates, None, &none).to_string();
     // Friday 2024-05-24: T+2 in both, over the weekend
     assert_eq!(ca("2024-05-24"), "2024-05-28");
     assert_eq!(us("2024-05-24"), "2024-05-28");
@@ -208,11 +210,21 @@ fn settlement_is_t_plus_two_then_t_plus_one() {
     assert_eq!(ca("2024-05-27"), "2024-05-28");
     assert_eq!(us("2024-05-27"), "2024-05-29");
     assert_eq!(us("2024-05-28"), "2024-05-29");
-    // a holiday is skipped
+    // each listing's own exchange calendar: US Thanksgiving is not a business day for
+    // a US fund, and is for a Canadian one; Canada Day the other way round
+    assert_eq!(us("2026-11-25"), "2026-11-27");
+    assert_eq!(ca("2026-11-25"), "2026-11-26");
+    assert_eq!(ca("2026-06-30"), "2026-07-02");
+    assert_eq!(us("2026-06-30"), "2026-07-01");
+    // the venue its listing names, where it names one
+    use bagholder_core::sessions::Venue;
+    assert_eq!(acb::settlement(&t("2026-11-25"), Listed::Canada, Some(Venue::UsEquities), &none).to_string(), "2026-11-27");
+    // before the years the calendars hold, the Bank of Canada's holidays stand in
     let holiday: std::collections::BTreeSet<_> = [day("2025-07-01")].into();
-    assert_eq!(acb::settlement(&t("2025-06-30"), Listed::Canada, &holiday).to_string(), "2025-07-02");
+    assert_eq!(acb::settlement(&t("2025-06-30"), Listed::Canada, None, &holiday).to_string(), "2025-07-02");
+    assert_eq!(ca("2025-06-30"), "2025-07-01");
     // a stated settlement stands
     let mut stated = t("2025-06-30");
     stated.settle_date = Some(day("2025-07-04"));
-    assert_eq!(acb::settlement(&stated, Listed::Canada, &none).to_string(), "2025-07-04");
+    assert_eq!(acb::settlement(&stated, Listed::Canada, None, &none).to_string(), "2025-07-04");
 }
