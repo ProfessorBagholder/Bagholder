@@ -1123,8 +1123,8 @@
 
 ### Motion
 
-<a id="motion-1"></a>Two easings and three durations cover every transition, and the further a thing travels the longer it takes: movement and resizing use `cubic-bezier(.22,1,.36,1)`, colour and opacity use `ease` and are always quicker; the header's dropdowns fade on the travel curve, their fade and their growth one motion (motion-23).
-<a id="motion-2"></a>Hover, colour and opacity take .12–.2 s; the header's dropdowns .18 s in and .12 s out; entrances, dialogs and panels .22–.3 s; the tab indicator and the heatmap's re-tiling .36–.42 s.
+<a id="motion-1"></a>Two easings and three durations cover every transition, and the further a thing travels the longer it takes: movement and resizing use `cubic-bezier(.22,1,.36,1)`, colour and opacity use `ease` and are always quicker; the header's dropdowns have a slide of their own (motion-23).
+<a id="motion-2"></a>Hover, colour and opacity take .12–.2 s; the header's dropdowns .34 s in and .2 s out; entrances, dialogs and panels .22–.3 s; the tab indicator and the heatmap's re-tiling .36–.42 s.
 <a id="motion-3"></a>Colours are the theme's own tokens, so every transition reads correctly in all three themes.
 
 - <a id="motion-4"></a>**The heatmap re-tiles rather than snapping.** Changing the universe or the sizer moves each symbol's rectangle to its new slot over .42 s, with its sector frame travelling too; a rectangle that joins fades up from 94%, one that leaves is removed.
@@ -1145,8 +1145,8 @@
   <a id="motion-19"></a>At rest the figure is ordinary text, so it reads and copies as it always did; the strips exist only for the second the roll takes, are hidden from screen readers, and change nothing about the size of the value or its tile.
 - <a id="motion-20"></a>**A row just added to the watchlist** is tinted and the tint decays over .6 s.
   <a id="motion-21"></a>Row hover is instant and deliberately so.
-- <a id="motion-23"></a>**The filters panel, the header menu and the menu's two lists open as a quick dropdown.** Opened by a pointer (a click, a tap, a hover on a list's row), each fades in while growing from 95% out of its top right corner, where it hangs from its button or meets its row, over .18 s on the travel curve, which starts at once and settles.
-  <a id="motion-24"></a>The two panels go with a quicker fade alone, .12 s, and while they go take no click, key or focus and are not read out, so a press in those moments reaches what is under them; a list goes at once, so moving from one list's row to the other's never shows two lists.
+- <a id="motion-23"></a>**The filters panel, the header menu and the menu's two lists slide open.** Opened by a pointer (a click, a tap, a hover on a list's row), each slides 36 px down from its button into place over .34 s, fading in over the first part of the slide.
+  <a id="motion-24"></a>The two panels go by sliding 24 px back up as they fade, over .2 s, and while they go take no click, key or focus and are not read out, so a press in those moments reaches what is under them; a list goes at once, so moving from one list's row to the other's never shows two lists.
   <a id="motion-25"></a>What the keyboard opens or closes (⌘K, Escape, Enter on a button) shows or goes at once, as a command palette's does; ⌘K with the panel open returns it to its search in place, and a panel asked open again while it fades out comes back as it opens.
 - <a id="motion-22"></a>`prefers-reduced-motion` keeps the colour and opacity transitions and drops the rest: the heatmap's geometry, the entrances' movement, the skeleton's pulse, and the digit roll, which sets its figure directly.
 

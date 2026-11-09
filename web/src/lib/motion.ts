@@ -1,12 +1,8 @@
-// The page's motion in script: the app's one curve for anything that travels, the
-// person's reduced-motion setting, and how a panel hung from a header button opens
-// (`drop`) and goes (`lift`).
+// The page's motion in script: a CSS curve solved for a transition, the person's
+// reduced-motion setting, and how a panel hung from a header button opens (`drop`)
+// and goes (`lift`).
 
 import type { TransitionConfig } from 'svelte/transition'
-
-/** The four points of the app's curve for anything that travels: `--ease-travel` in
- * app.css is `cubic-bezier` of these (motion.test.ts holds the two together). */
-export const TRAVEL = [0.22, 1, 0.36, 1] as const
 
 /**
  * A CSS `cubic-bezier(x1, y1, x2, y2)` as a function of time: the curve's progress at
@@ -42,15 +38,15 @@ export function cubicBezier(x1: number, y1: number, x2: number, y2: number): (t:
   return (t: number) => (t <= 0 ? 0 : t >= 1 ? 1 : y(solve(t)))
 }
 
-/** The app's curve for anything that travels, for a transition in script. */
-export const travel = cubicBezier(...TRAVEL)
-
 /** Whether the person has asked their system for less motion. */
 export const still = () => typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches
 
-/** How long a panel takes to open, and to go. */
-export const DROP_MS = 180
-export const LIFT_MS = 120
+/** How long a panel takes to slide open, and to go. */
+export const DROP_MS = 340
+export const LIFT_MS = 200
+// slides in fast and settles; goes away gathering speed
+const slideIn = cubicBezier(0.2, 0, 0, 1)
+const slideAway = cubicBezier(0.4, 0, 1, 1)
 
 // Whether the person's last press was on the keyboard rather than a pointer: what the
 // keyboard opens or closes shows or goes at once, with no motion, since motion makes
@@ -64,28 +60,22 @@ if (typeof window !== 'undefined') {
 }
 
 /**
- * A panel hung from a header button, or one of the menu's lists, opening: it fades in,
- * growing from just short of its full size out of its top right corner (where it hangs
- * from its button, or meets its row), on the app's curve, which starts at once and
- * settles. With less motion asked for, it only fades. Opened from the keyboard, it is
- * there at once.
+ * A panel hung from a header button, or one of the menu's lists, opening: it slides
+ * down from its button into place. With less motion asked for, it only fades. Opened
+ * from the keyboard, it is there at once.
  */
 export function drop(node: Element): TransitionConfig {
   // asked open again while it was going: it is a live panel again
   node.removeAttribute('aria-hidden')
   ;(node as HTMLElement).inert = false
   if (keyed) return { duration: 0 }
-  const calm = still()
-  return {
-    duration: DROP_MS,
-    easing: travel,
-    css: (t, u) => (calm ? `opacity:${t}` : `opacity:${t};transform-origin:top right;transform:scale(${1 - 0.05 * u})`),
-  }
+  if (still()) return { duration: 200, css: (t) => `opacity:${t}` }
+  return { duration: DROP_MS, easing: slideIn, css: (t, u) => `opacity:${Math.min(1, t / 0.3)};transform:translateY(${-36 * u}px)` }
 }
 
 /**
- * The same panel going: it only fades, quicker than it came, and is no longer part of
- * the page while it does: it takes no clicks (one in those moments reaches what is under
+ * The same panel going: it slides back up as it fades, and is no longer part of the
+ * page while it does: it takes no clicks (one in those moments reaches what is under
  * it), no keys and no focus, and a screen reader no longer reads it. Closed from the
  * keyboard, it is gone at once.
  */
@@ -93,5 +83,6 @@ export function lift(node: Element): TransitionConfig {
   ;(node as HTMLElement).inert = true
   node.setAttribute('aria-hidden', 'true')
   if (keyed) return { duration: 0 }
-  return { duration: LIFT_MS, easing: travel, css: (t) => `pointer-events:none;opacity:${t}` }
+  if (still()) return { duration: 150, css: (t) => `pointer-events:none;opacity:${t}` }
+  return { duration: LIFT_MS, easing: slideAway, css: (t, u) => `pointer-events:none;opacity:${t};transform:translateY(${-24 * u}px)` }
 }
