@@ -11,6 +11,21 @@
   // pointer leaves it, when a choice is made, or with the menu.
   let themeOpen = $state(false)
   let notifyOpen = $state(false)
+  // While the menu slides in, its rows move under a pointer that is not moving, and the
+  // browser reads that as hovering row after row: hover opens and closes nothing until
+  // it has arrived. A real move over a row opens its list then, even one the pointer
+  // came to rest on meanwhile. A click opens a list at any time.
+  let arrived = false
+  function overRow(row: 'theme' | 'notify') {
+    if (!arrived) return
+    themeOpen = row === 'theme'
+    notifyOpen = row === 'notify'
+  }
+  function offRow(row: 'theme' | 'notify') {
+    if (!arrived) return
+    if (row === 'theme') themeOpen = false
+    else notifyOpen = false
+  }
 
   const NOTIFY_KINDS: [string, string][] = [
     ['fills', 'Fills'],
@@ -34,7 +49,7 @@
   const themeWord = $derived((THEMES.find((t) => t[0] === theme.name) || THEMES[0])[1])
 </script>
 
-<div class="menu elev-md" in:drop out:lift>
+<div class="menu elev-md" in:drop out:lift onintroend={() => (arrived = true)}>
   {#if status?.connected}
     <button class="primary" onclick={syncNow}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:1"><path d={ICONS.sync} /></svg>Sync now</button>
     <button onclick={refreshSession}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.key} /></svg>Refresh session</button>
@@ -51,7 +66,7 @@
   <button onclick={exportCsv}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.export} /></svg>Export trades CSV</button>
 
   <div class="sep"></div>
-  <div style="position:relative" role="presentation" onmouseenter={() => (themeOpen = true)} onmouseleave={() => (themeOpen = false)}>
+  <div style="position:relative" role="presentation" onmousemove={() => overRow('theme')} onmouseleave={() => offRow('theme')}>
     <button class:open={themeOpen} onclick={() => { themeOpen = true; notifyOpen = false }}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.palette} /></svg>Theme<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">{themeWord}</span><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.5"><path d={ICONS.caret} /></svg></button>
     {#if themeOpen}
       <div class="menu sub" in:drop>
@@ -63,7 +78,7 @@
       </div>
     {/if}
   </div>
-  <div style="position:relative" role="presentation" onmouseenter={() => (notifyOpen = true)} onmouseleave={() => (notifyOpen = false)}>
+  <div style="position:relative" role="presentation" onmousemove={() => overRow('notify')} onmouseleave={() => offRow('notify')}>
     <button class:open={notifyOpen} onclick={() => { notifyOpen = true; themeOpen = false }}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.bell} /></svg>Notifications<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">{notifyWord}</span><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.5"><path d={ICONS.caret} /></svg></button>
     {#if notifyOpen}
       <div class="menu sub" in:drop>
