@@ -584,7 +584,7 @@
 <a id="portfolio-20"></a>The positions and values are Allocation's own, every position worth something, so the three cards agree.
 <a id="portfolio-21"></a>A coin is its own sector, `Digital assets`, and no country's; an option contract counts as its underlying, under the record of the underlying's own listing, which the contract names.
 <a id="portfolio-22"></a>What no record covers, a family and fund neither read nor known to Yahoo, the uncovered remainder of a fund, or a coin's country, is one slice, `Not classified`, last and in the neutral grey, never spread over the others.
-<a id="portfolio-23"></a>Records are read by the app in the background, one request at a time with a pause between them, when a held security has none, or its record is older than seven days, or an hour where that record states no sector or no country, and kept in the database; the cards show what is known so far.
+<a id="portfolio-23"></a>Records are read by the app in the background, one request at a time with a pause between them, when a held security has none or its record is older than seven days, and kept in the database; the cards show what is known so far.
 <a id="portfolio-24"></a>Slices are the largest first in Allocation's palette, every sector (the set is twelve), ten countries at most plus `Other (N)`.
 <a id="portfolio-25"></a>Each donut's centre reads `Sectors` or `Regions` over the number of them the positions span (every sector or country with value, `Not classified` not counted), or the hovered slice's name and share, and hovering a slice or its legend row dims the rest of that donut, as Allocation's does.
 

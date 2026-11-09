@@ -33,10 +33,11 @@ pub const PACE: Duration = Duration::from_millis(600);
 pub const MAX_DEPTH: usize = 3;
 /// A breakdown older than this is fetched again.
 pub const FRESH_DAYS: i64 = 7;
-/// A record that states no sector or no country is read again after this: what no
-/// source answered yet, or an earlier build could not read, is repaired by the next
-/// read rather than standing for the week.
-pub const FRESH_INCOMPLETE_SECS: i64 = 3600;
+/// A record with no sector or no country fetched before this instant is read once
+/// more: an earlier build could not read a holding its issuer names only by ticker
+/// and company. The next read stamps it, it stands the week like any other, and this
+/// rule goes quiet by itself.
+pub const REPAIRED_FROM: &str = "2026-11-10T00:00:00Z";
 pub use bagholder_model::venues::{FUND_KEY, SHARE_KEY};
 
 /// What one pass of classification works in: the database, and the pool it came
@@ -1191,9 +1192,15 @@ fn fresh(rec: crate::stored::feeds::StoredExposure) -> Option<ExposureRecord> {
         p[0] * 3600 + p[1] * 60 + p[2]
     };
     let (_, now, _) = crate::clock_now();
-    let age = (now as i64) - then;
-    let incomplete = rec.record.sectors.is_empty() || rec.record.countries.is_empty();
-    if if incomplete { age < FRESH_INCOMPLETE_SECS } else { age.div_euclid(86400) < FRESH_DAYS } { Some(rec.record) } else { None }
+    if stands(&rec.record, &fetched, (now as i64) - then) { Some(rec.record) } else { None }
+}
+
+/// Whether a stored record, fetched at that stamp and that many seconds old, stands.
+pub fn stands(record: &ExposureRecord, fetched_at: &str, age_secs: i64) -> bool {
+    if (record.sectors.is_empty() || record.countries.is_empty()) && fetched_at < REPAIRED_FROM {
+        return false;
+    }
+    age_secs.div_euclid(86400) < FRESH_DAYS
 }
 
 fn store_exposure(ctx: &Ctx, key: &str, rec: &ExposureRecord) -> Result<(), String> {
@@ -1248,9 +1255,10 @@ pub fn lookthrough(ctx: &Ctx, holdings: &[Holding], depth: usize, seen: &mut Vec
             continue;
         }
         let name = h.name.clone();
-        // a row that names no listing, its ticker alone or nothing: the one its name
-        // finds, under that ticker where it states one
-        if bagholder_core::ListingKey::on(&tk, &ex).is_err() && !name.is_empty() {
+        // a row that states no exchange, with its ticker or without: the one listing
+        // its name finds, under that ticker where it states one. A row that states an
+        // exchange names its listing, whether or not that venue is keyed here.
+        if (tk.is_empty() || ex.trim().is_empty()) && !name.is_empty() {
             if let Some(m) = resolve_name_of(&name, &tk)? {
                 tk = m.symbol;
                 ex = m.exchange;

@@ -351,20 +351,40 @@ fn test_a_name_is_narrowed_to_the_ticker_the_holding_states() {
     assert!(exposure::resolve_named("Reddit, Inc.", "", &search).unwrap().is_none(), "two listings and no ticker: none, never the first");
 }
 
-/// A record that states no sector or no country stands an hour, not a week, so what
-/// an earlier build could not read is repaired by the next read. A whole one stands.
+/// A row that states a venue not keyed here names that listing: its name never
+/// finds a same-ticker listing elsewhere, where a share's country would be wrong.
 #[test]
-fn test_an_incomplete_record_is_read_again_within_the_hour_and_a_whole_one_stands() {
+fn test_a_row_stating_a_foreign_exchange_is_not_found_by_its_name() {
     let conn = db();
-    let stamp = |secs_ago: i64| (bagholder_core::jiff::Timestamp::now() - bagholder_core::jiff::SignedDuration::from_secs(secs_ago)).strftime("%Y-%m-%dT%H:%M:%SZ").to_string();
+    let asked = Rc::new(RefCell::new(Vec::<String>::new()));
+    let a2 = asked.clone();
+    hooks::RESOLVE.with(|h| *h.borrow_mut() = Some(Box::new(move |name| {
+        a2.borrow_mut().push(name.to_string());
+        Some(Listed { symbol: "SAP".into(), exchange: "NYSE".into(), currency: "USD".into() })
+    })));
+    set_classify(classified());
+    let agg = lookthrough(&ctx(&conn), &[holding("SAP", "SAP SE", 5.0, "", "", "XETRA", "EUR", false)]);
+    assert!(asked.borrow().is_empty(), "never searched by its name");
+    assert_eq!(agg.coverage, 0.0);
+}
+
+/// What an earlier build stored with no sector or no country is read once more; the
+/// read that stamps it stands the week, as a whole record always does. A real
+/// answer with no sector, a bond fund's, is not read again and again.
+#[test]
+fn test_an_incomplete_record_stored_before_the_repair_is_read_once_more() {
     let whole = ExposureRecord { sectors: Weights(vec![("Energy".into(), 1.0)]), countries: Weights(vec![("Canada".into(), 1.0)]), coverage: 1.0, ..Default::default() };
     let no_sector = ExposureRecord { countries: Weights(vec![("Canada".into(), 1.0)]), coverage: 1.0, ..Default::default() };
-    bagholder_market::stored::feeds::replace_exposure(&conn, "whole", &whole, &stamp(2 * 3600)).unwrap();
-    bagholder_market::stored::feeds::replace_exposure(&conn, "empty-old", &ExposureRecord::default(), &stamp(2 * 3600)).unwrap();
-    bagholder_market::stored::feeds::replace_exposure(&conn, "half-old", &no_sector, &stamp(2 * 3600)).unwrap();
-    bagholder_market::stored::feeds::replace_exposure(&conn, "empty-new", &ExposureRecord::default(), &stamp(60)).unwrap();
-    let ids = ["whole", "empty-old", "half-old", "empty-new"].map(String::from);
-    assert_eq!(exposure::stale(&ctx(&conn), &ids).unwrap(), vec!["empty-old".to_string(), "half-old".to_string()]);
+    let no_country = ExposureRecord { sectors: Weights(vec![("Energy".into(), 1.0)]), coverage: 1.0, ..Default::default() };
+    let (before, after) = ("2026-11-09T23:59:59Z", exposure::REPAIRED_FROM);
+    let (day, week) = (86400, 7 * 86400);
+    for r in [&no_sector, &no_country, &ExposureRecord::default()] {
+        assert!(!exposure::stands(r, before, day), "stored before the repair");
+        assert!(exposure::stands(r, after, day), "read since: a real answer, standing the week");
+        assert!(!exposure::stands(r, after, week), "and no longer than the week");
+    }
+    assert!(exposure::stands(&whole, before, day), "a whole record is not read for the repair");
+    assert!(!exposure::stands(&whole, before, week));
 }
 
 #[test]
