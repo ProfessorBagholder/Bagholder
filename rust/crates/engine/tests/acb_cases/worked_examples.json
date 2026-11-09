@@ -1,0 +1,848 @@
+[
+ {
+  "name": "CRA's identical properties: each purchase averages, a sale leaves the average as it was",
+  "spec": "SPEC.md tax-cost-of-an-etf-1, tax-cost-of-an-etf-3; CRA T4037 (2025), Identical properties, Example 1",
+  "working": [
+   "CRA's chart: 100 at $15 in 2001 = 1,500; 150 at $20 in 2006 = +3,000 -> 4,500 on 250 units, 18.00 each.",
+   "Sale in 2008 of 200 at $18: cost 4,500 x 200/250 = 3,600 off -> 900 on 50, 18.00 each. Proceeds 3,600, no commission: gain 0.00.",
+   "Purchase in 2025 of 350 at $21 = +7,350 -> 8,250 on 400 units, 20.625 each (CRA prints 20.63).",
+   "Days are made up inside CRA's years; each settles T+2 before 2024-05-27, T+1 after (a Wednesday: the next business day)."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "STU"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2001-03-07",
+    "kind": "buy",
+    "instrument": "STU",
+    "qty": "100",
+    "cash": "-1500"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2006-03-08",
+    "kind": "buy",
+    "instrument": "STU",
+    "qty": "150",
+    "cash": "-3000"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2008-03-05",
+    "kind": "sell",
+    "instrument": "STU",
+    "qty": "-200",
+    "cash": "3600"
+   },
+   {
+    "id": "t4",
+    "account": "A",
+    "day": "2025-03-05",
+    "kind": "buy",
+    "instrument": "STU",
+    "qty": "350",
+    "cash": "-7350"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "STU": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "STU",
+     "units": "400",
+     "cost": "8250",
+     "complete_through": "2025",
+     "rows": [
+      "2001-03-09 bought 100 1500 1500",
+      "2006-03-10 bought 150 3000 4500",
+      "2008-03-07 sold -200 -3600 900",
+      "2025-03-06 bought 350 7350 8250"
+     ],
+     "years": {
+      "2008": {
+       "gains": [
+        {
+         "day": "2008-03-07",
+         "units": "200",
+         "proceeds": "3600",
+         "cost": "3600",
+         "outlays": "0",
+         "gain": "0",
+         "denied": "0"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "CRA's mutual fund units bought and reinvested average to the cent",
+  "spec": "SPEC.md tax-cost-of-an-etf-1, tax-cost-of-an-etf-4; CRA T4037 (2025), Identical properties, Example 2",
+  "working": [
+   "15,000.00 for 833.3333 units in 2001; reinvested 1,170.00 for 59.8466 -> 16,170.00 on 893.1799 (18.10 each, as CRA prints).",
+   "Reinvested 1,455.30 for 70.5429 in 2002 -> 17,625.30 on 963.7228 (18.29 each). A reinvestment is a purchase: its cash moved into units."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "MFT"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "t1",
+    "account": "A",
+    "day": "2001-02-01",
+    "kind": "buy",
+    "instrument": "MFT",
+    "qty": "833.3333",
+    "cash": "-15000.00",
+    "settle": "2001-02-05"
+   },
+   {
+    "id": "t2",
+    "account": "A",
+    "day": "2001-12-31",
+    "kind": "buy",
+    "instrument": "MFT",
+    "qty": "59.8466",
+    "cash": "-1170.00",
+    "settle": "2001-12-31"
+   },
+   {
+    "id": "t3",
+    "account": "A",
+    "day": "2002-12-31",
+    "kind": "buy",
+    "instrument": "MFT",
+    "qty": "70.5429",
+    "cash": "-1455.30",
+    "settle": "2002-12-31"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "MFT": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "MFT",
+     "units": "963.7228",
+     "cost": "17625.30",
+     "complete_through": "2002",
+     "rows": [
+      "2001-02-05 bought 833.3333 15000.00 15000.00",
+      "2001-12-31 bought 59.8466 1170.00 16170.00",
+      "2002-12-31 bought 70.5429 1455.30 17625.30"
+     ]
+    }
+   ]
+  }
+ },
+ {
+  "name": "CRA's return of capital takes the cost to zero, and the next one is a gain that day",
+  "spec": "SPEC.md tax-cost-of-an-etf-4, tax-cost-of-an-etf-5, tax-cost-of-an-etf-6; CRA, Tax treatment of mutual funds (RST Mutual Fund Trust)",
+  "working": [
+   "CRA: units bought for $1,000 in 2013; a $200 return of capital in each of 2016 to 2020 takes the cost to zero by the end of 2020; a $100 return of capital in May of the next year is a $100 gain, the cost staying zero.",
+   "Made up around it: 100 units for 1,000.00; each year's distribution paid in cash is all return of capital (box 42 equal to the cash, no income): non-cash = 0 - 0 - cash + box 42 = 0.",
+   "Record dates 20 May, paid 28 May. 2016 to 2020: 1,000 - 5 x 200 = 0.00. 2021: 0 - 100 = -100 -> a 100.00 gain on 2021-05-20, the cost 0.00."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "RST"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2013-04-01",
+    "kind": "buy",
+    "instrument": "RST",
+    "qty": "100",
+    "cash": "-1000",
+    "settle": "2013-04-04"
+   },
+   {
+    "id": "d2016",
+    "account": "A",
+    "day": "2016-05-28",
+    "kind": "dividend",
+    "instrument": "RST",
+    "cash": "200"
+   },
+   {
+    "id": "d2017",
+    "account": "A",
+    "day": "2017-05-28",
+    "kind": "dividend",
+    "instrument": "RST",
+    "cash": "200"
+   },
+   {
+    "id": "d2018",
+    "account": "A",
+    "day": "2018-05-28",
+    "kind": "dividend",
+    "instrument": "RST",
+    "cash": "200"
+   },
+   {
+    "id": "d2019",
+    "account": "A",
+    "day": "2019-05-28",
+    "kind": "dividend",
+    "instrument": "RST",
+    "cash": "200"
+   },
+   {
+    "id": "d2020",
+    "account": "A",
+    "day": "2020-05-28",
+    "kind": "dividend",
+    "instrument": "RST",
+    "cash": "200"
+   },
+   {
+    "id": "d2021",
+    "account": "A",
+    "day": "2021-05-28",
+    "kind": "dividend",
+    "instrument": "RST",
+    "cash": "100"
+   }
+  ],
+  "declared": {
+   "RST": [
+    {
+     "ex": "2016-05-20",
+     "record": "2016-05-20",
+     "pay": "2016-05-28",
+     "amount": "2.0"
+    },
+    {
+     "ex": "2017-05-20",
+     "record": "2017-05-20",
+     "pay": "2017-05-28",
+     "amount": "2.0"
+    },
+    {
+     "ex": "2018-05-20",
+     "record": "2018-05-20",
+     "pay": "2018-05-28",
+     "amount": "2.0"
+    },
+    {
+     "ex": "2019-05-20",
+     "record": "2019-05-20",
+     "pay": "2019-05-28",
+     "amount": "2.0"
+    },
+    {
+     "ex": "2020-05-20",
+     "record": "2020-05-20",
+     "pay": "2020-05-28",
+     "amount": "2.0"
+    },
+    {
+     "ex": "2021-05-20",
+     "record": "2021-05-20",
+     "pay": "2021-05-28",
+     "amount": "1.0"
+    }
+   ]
+  },
+  "tax": {
+   "funds": {
+    "RST": "canada"
+   },
+   "slips": {
+    "RST": {
+     "2016": [
+      {
+       "box42": "200.00",
+       "income": "0"
+      }
+     ],
+     "2017": [
+      {
+       "box42": "200.00",
+       "income": "0"
+      }
+     ],
+     "2018": [
+      {
+       "box42": "200.00",
+       "income": "0"
+      }
+     ],
+     "2019": [
+      {
+       "box42": "200.00",
+       "income": "0"
+      }
+     ],
+     "2020": [
+      {
+       "box42": "200.00",
+       "income": "0"
+      }
+     ],
+     "2021": [
+      {
+       "box42": "100.00",
+       "income": "0"
+      }
+     ]
+    }
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "RST",
+     "units": "100",
+     "cost": "0",
+     "complete_through": "2021",
+     "rows": [
+      "2013-04-04 bought 100 1000 1000",
+      "2016-05-20 return-of-capital 0 -200 800",
+      "2017-05-20 return-of-capital 0 -200 600",
+      "2018-05-20 return-of-capital 0 -200 400",
+      "2019-05-20 return-of-capital 0 -200 200",
+      "2020-05-20 return-of-capital 0 -200 0",
+      "2021-05-20 return-of-capital 0 -100 -100",
+      "2021-05-20 below-zero 0 100 0"
+     ],
+     "years": {
+      "2020": {
+       "gains": []
+      },
+      "2021": {
+       "gains": [
+        {
+         "kind": "below-zero",
+         "day": "2021-05-20",
+         "gain": "100"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A commission adds to cost and is an outlay on the sale",
+  "spec": "SPEC.md tax-cost-of-an-etf-3; CRA T4037 (2025), Calculating your capital gain or loss (XYZ Public Corporation)",
+  "working": [
+   "CRA: 400 shares sold for $6,500 with a $60 commission, ACB $4,000: 6,500 - (4,000 + 60) = 2,440.",
+   "The book: bought 400 for 4,000.00 paid; the sale's cash is what it received, 6,440.00, its fee 60.00. Proceeds 6,440 + 60 = 6,500.00; outlays 60.00; cost 4,000.00; gain 2,440.00."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "XYZ"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2024-11-04",
+    "kind": "buy",
+    "instrument": "XYZ",
+    "qty": "400",
+    "cash": "-4000"
+   },
+   {
+    "id": "s",
+    "account": "A",
+    "day": "2025-03-12",
+    "kind": "sell",
+    "instrument": "XYZ",
+    "qty": "-400",
+    "cash": "6440",
+    "fee": "60"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "XYZ": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "XYZ",
+     "units": "0",
+     "cost": "0",
+     "years": {
+      "2025": {
+       "gains": [
+        {
+         "day": "2025-03-13",
+         "units": "400",
+         "proceeds": "6500",
+         "cost": "4000",
+         "outlays": "60",
+         "gain": "2440",
+         "denied": "0"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A US-listed fund's cost and proceeds are in CAD at the rate of each settlement, and its distributions leave its cost alone",
+  "spec": "SPEC.md tax-cost-of-an-etf-2, tax-cost-of-an-etf-8; CRA T4037 (2025), Foreign currencies",
+  "working": [
+   "Bought 100 units on Thursday 2024-05-23 for USD 1,000.00 paid: T+2, settled Monday 2024-05-27, at that day's 1.3600 (the trade day's 1.3700 not taken) -> 1,360.00.",
+   "A USD 12.00 distribution in 2024: a US-listed fund's never touch the cost, and no slip is needed for its cost.",
+   "Sold 100 on Monday 2025-03-03 for USD 1,195.00 received, USD 5.00 commission: T+1, settled 2025-03-04 at 1.4400 -> received 1,720.80, outlays 7.20, proceeds 1,728.00.",
+   "Gain = 1,728.00 - 1,360.00 - 7.20 = 360.80."
+  ],
+  "today": "2026-03-01",
+  "now": "2026-03-01T20:00:00Z",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "QQQ",
+    "currency": "USD"
+   }
+  ],
+  "rates": {
+   "USD": {
+    "2024-05-23": "1.3700",
+    "2024-05-27": "1.3600",
+    "2024-06-28": "1.3650",
+    "2025-03-03": "1.4300",
+    "2025-03-04": "1.4400"
+   }
+  },
+  "covered": {
+   "USD": [
+    [
+     "2024-05-01",
+     "2025-12-31"
+    ]
+   ]
+  },
+  "series": {
+   "USD": [
+    [
+     "2017-01-03",
+     "2026-12-31"
+    ]
+   ]
+  },
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2024-05-23",
+    "kind": "buy",
+    "instrument": "QQQ",
+    "qty": "100",
+    "cash": "-1000.00"
+   },
+   {
+    "id": "d",
+    "account": "A",
+    "day": "2024-06-28",
+    "kind": "dividend",
+    "instrument": "QQQ",
+    "cash": "12.00"
+   },
+   {
+    "id": "s",
+    "account": "A",
+    "day": "2025-03-03",
+    "kind": "sell",
+    "instrument": "QQQ",
+    "qty": "-100",
+    "cash": "1195.00",
+    "fee": "5.00"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "QQQ": "united-states"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "QQQ",
+     "units": "0",
+     "cost": "0",
+     "complete_through": "2025",
+     "rows": [
+      "2024-05-27 bought 100 1360.00 1360.00",
+      "2025-03-04 sold -100 -1360.00 0"
+     ],
+     "years": {
+      "2025": {
+       "gains": [
+        {
+         "day": "2025-03-04",
+         "proceeds": "1728.00",
+         "cost": "1360.00",
+         "outlays": "7.20",
+         "gain": "360.80",
+         "denied": "0"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A loss partly replaced within the period is denied in proportion and added to the new units' cost",
+  "spec": "SPEC.md tax-cost-of-an-etf-7; adjustedcostbase.ca, Applying the superficial loss rule for a partial disposition of shares, Example 1",
+  "working": [
+   "Bought 100 for 300.00 on 2015-01-02; sold 100 for 200.00 on Thursday 2015-04-09 (settled Monday 04-13); bought 25 for 55.00 on Friday 04-10 (settled 04-14), held past the period.",
+   "Loss = 200 - 300 = -100. Period 2015-03-14 to 2015-05-13: bought in it P = 25, held at its end B = 25, sold S = 100: denied = 100 x min(100, 25, 25) / 100 = 25.00; allowed loss 75.00.",
+   "The 25.00 goes on the holding's cost the day of the sale (no units then), the 25 units bring 55.00: cost 80.00 on 25 units, as the example's $80.00."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b1",
+    "account": "A",
+    "day": "2015-01-02",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-300.00"
+   },
+   {
+    "id": "s",
+    "account": "A",
+    "day": "2015-04-09",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-100",
+    "cash": "200.00"
+   },
+   {
+    "id": "b2",
+    "account": "A",
+    "day": "2015-04-10",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "25",
+    "cash": "-55.00"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "X": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "X",
+     "units": "25",
+     "cost": "80.00",
+     "rows": [
+      "2015-01-06 bought 100 300.00 300.00",
+      "2015-04-13 sold -100 -300.00 0",
+      "2015-04-13 loss-added 0 25.00 25.00",
+      "2015-04-14 bought 25 55.00 80.00"
+     ],
+     "years": {
+      "2015": {
+       "gains": [
+        {
+         "day": "2015-04-13",
+         "units": "100",
+         "proceeds": "200.00",
+         "cost": "300.00",
+         "gain": "-75.00",
+         "denied": "25.00"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A loss on units bought within the period is denied for those still held",
+  "spec": "SPEC.md tax-cost-of-an-etf-7; adjustedcostbase.ca, Applying the superficial loss rule for a partial disposition of shares, Example 2",
+  "working": [
+   "Bought 100 for 300.00 on Thursday 2015-04-09 (settled Monday 04-13); sold 80 for 160.00 on Friday 04-10 (settled 04-14).",
+   "Cost of the 80 = 300 x 80/100 = 240.00; loss = 160 - 240 = -80. P = 100 bought in the period, B = 20 held at its end, S = 80: denied = 80 x 20/80 = 20.00; allowed 60.00.",
+   "The 20 units left: 60.00 + 20.00 = 80.00, as the example's $80.00."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2015-04-09",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-300.00"
+   },
+   {
+    "id": "s",
+    "account": "A",
+    "day": "2015-04-10",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-80",
+    "cash": "160.00"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "X": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "X",
+     "units": "20",
+     "cost": "80.00",
+     "rows": [
+      "2015-04-13 bought 100 300.00 300.00",
+      "2015-04-14 sold -80 -240.00 60.00",
+      "2015-04-14 loss-added 0 20.00 80.00"
+     ],
+     "years": {
+      "2015": {
+       "gains": [
+        {
+         "day": "2015-04-14",
+         "units": "80",
+         "gain": "-60.00",
+         "denied": "20.00"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A loss replaced in a registered plan is denied and gone for good",
+  "spec": "SPEC.md tax-cost-of-an-etf-7",
+  "working": [
+   "Example 1's book with the 25 units bought in a TFSA instead: the TFSA counts for the rule (in any account of the person's), so 25.00 of the loss is still denied.",
+   "The holding's own accounts hold none of the replacing units at the period's end: nothing is added to its cost, which stays 0.00 on 0 units."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   },
+   {
+    "id": "T",
+    "registration": "tfsa"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b1",
+    "account": "A",
+    "day": "2015-01-02",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "100",
+    "cash": "-300.00"
+   },
+   {
+    "id": "s",
+    "account": "A",
+    "day": "2015-04-09",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-100",
+    "cash": "200.00"
+   },
+   {
+    "id": "b2",
+    "account": "T",
+    "day": "2015-04-10",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "25",
+    "cash": "-55.00"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "X": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "X",
+     "units": "0",
+     "cost": "0",
+     "rows": [
+      "2015-01-06 bought 100 300.00 300.00",
+      "2015-04-13 sold -100 -300.00 0"
+     ],
+     "years": {
+      "2015": {
+       "gains": [
+        {
+         "day": "2015-04-13",
+         "gain": "-75.00",
+         "denied": "25.00"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A loss whose period has not ended leaves its year open",
+  "spec": "SPEC.md tax-cost-of-an-etf-7, tax-cost-of-an-etf-9",
+  "working": [
+   "Sold at a loss, settled 2026-02-17; the period ends 2026-03-19, after today 2026-03-01: whether units bought by then replace it is not known, so 2026 is not complete."
+  ],
+  "today": "2026-03-01",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "X"
+   }
+  ],
+  "transactions": [
+   {
+    "id": "b",
+    "account": "A",
+    "day": "2025-06-02",
+    "kind": "buy",
+    "instrument": "X",
+    "qty": "10",
+    "cash": "-100.00"
+   },
+   {
+    "id": "s",
+    "account": "A",
+    "day": "2026-02-16",
+    "kind": "sell",
+    "instrument": "X",
+    "qty": "-10",
+    "cash": "90.00"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "X": "canada"
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "X",
+     "units": "0",
+     "cost": "0",
+     "complete_through": "2025",
+     "years": {
+      "2026": {
+       "missing": [
+        "period-open 2026-03-19"
+       ],
+       "gains": [
+        {
+         "day": "2026-02-17",
+         "gain": "-10.00",
+         "denied": "0"
+        }
+       ]
+      }
+     }
+    }
+   ]
+  }
+ }
+]

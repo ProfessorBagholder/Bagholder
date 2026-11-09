@@ -120,7 +120,8 @@ pub fn build(case: &Value) -> Built {
         let registration = Registration::parse(s(&a, "registration").unwrap_or("none")).unwrap();
         let status = AccountStatus::parse(s(&a, "status").unwrap_or("open")).unwrap();
         let managed = a.get("managed").and_then(Value::as_bool).unwrap_or(false);
-        let account = Account { id, connection, account_type: AccountType::Known { kind, registration, managed, joint: false }, status, nickname: Some(label.to_string()) };
+        let joint = a.get("joint").and_then(Value::as_bool).unwrap_or(false);
+        let account = Account { id, connection, account_type: AccountType::Known { kind, registration, managed, joint }, status, nickname: Some(label.to_string()) };
         // the broker's smallest coin order, `"1.00 CAD"`, where the case states one
         let coin_minimum = s(&a, "coin_minimum").map(|m| {
             let (amount, currency) = m.split_once(' ').unwrap();
@@ -174,7 +175,8 @@ pub fn build(case: &Value) -> Built {
             account: ids.account(s(&t, "account").unwrap()),
             occurred_at: s(&t, "at").map(at),
             trade_date: day(s(&t, "day").unwrap()),
-            settle_date: None,
+            // the settlement the row states, where the case gives one
+            settle_date: s(&t, "settle").map(day),
             kind: Kind::parse(s(&t, "kind").unwrap()).unwrap(),
             effect: s(&t, "effect").map(|e| Effect::parse(e).unwrap()),
             instrument,
@@ -244,7 +246,7 @@ pub fn build(case: &Value) -> Built {
             .iter()
             .map(|d| Declared {
                 ex_date: day(s(d, "ex").unwrap()),
-                record_date: None,
+                record_date: s(d, "record").map(day),
                 pay_date: s(d, "pay").map(day),
                 amount: Money::new(dec(s(d, "amount").unwrap()), ccy(s(d, "currency").unwrap_or("CAD"))),
                 reinvested: s(d, "reinvested").map(dec),

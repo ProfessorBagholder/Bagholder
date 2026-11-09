@@ -174,6 +174,28 @@
 
 <a id="distribution-rate-for-a-holding-10"></a>Annual income for a holding = per-unit amount × payments per year × qty.
 
+### Tax cost of an ETF
+
+<a id="tax-cost-of-an-etf-1"></a>For each ETF held in a non-registered account, one holding: the person's units of it across all their non-registered accounts held alone, at average cost, in CAD. Joint accounts are not in. Trades' lots are not touched: the holding is a separate reading of the same rows, worked out whole on every read, nothing kept.
+
+<a id="tax-cost-of-an-etf-2"></a>Each amount is in CAD on its own settlement date: the date the row states, else two business days after the trade before 27 May 2024 for a Canadian listing and 28 May 2024 for a US one, one from then. A foreign amount takes the Bank of Canada rate in effect that day; a fill the broker settled in CAD costs the CAD that moved.
+
+<a id="tax-cost-of-an-etf-3"></a>A purchase costs the cash it paid, commission in. A sale's proceeds are the cash it received plus its commission, the commission an outlay; its cost is the holding's cost × units sold ÷ units held, to the cent; its tax year is its settlement's.
+
+<a id="tax-cost-of-an-etf-4"></a>A Canadian-listed fund's distribution applies to the units the holding held at the end of its record date, found from the person's own cash row by its pay date. On one day: sales, then return of capital, then non-cash distribution, then purchases.
+
+<a id="tax-cost-of-an-etf-5"></a>Return of capital is placed per record date as the fund's own per-unit figure, or the person's entry (`what-you-enter-9`), states it, and the year's slips (T3 box 42, in CRA's sign) check it: a difference of a cent or less per distribution goes on the year's last; beyond that it is flagged, never smoothed, and the year is not complete. With no per-unit figure, box 42 is placed by the person's cash on each record date, the last taking the rounding. The non-cash distribution is the slip's income less its foreign tax, less the cash on the year's record dates, plus its return of capital, dated as the fund states, else on the year's last record date.
+
+<a id="tax-cost-of-an-etf-6"></a>Cost below zero is a capital gain of that much that day, the cost then zero; later purchases build from zero.
+
+<a id="tax-cost-of-an-etf-7"></a>A loss is superficial in the proportion min(units sold, units bought in the 61 days around the sale's settlement, units held at the end of those days) ÷ units sold, counting every account of the person's, registered plans included. The denied part is added to the holding's cost in the share of those units its own accounts hold; a registered plan's share is gone. Until those days end, the year is not complete.
+
+<a id="tax-cost-of-an-etf-8"></a>A US-listed fund's distributions never touch its cost, whatever the fund calls them.
+
+<a id="tax-cost-of-an-etf-9"></a>A year is complete once every slip and figure it needs is in, every rate it takes is published, every superficial-loss period in it has ended, and every year before it is complete; the holding is complete through its last such year. Nothing is estimated: what cannot be stated exactly leaves its year not complete, saying why.
+
+<a id="tax-cost-of-an-etf-10"></a>Units moved between the person's own non-registered accounts leave the holding as it is. Units moved in from outside take the cost entered for them (`what-you-enter-3`) at the rate of the day acquired, a row marked as entered; with none entered, units moved out to a registered plan or another person, or a corporate event on the fund, the year is not complete.
+
 ### Equity and returns
 
 - <a id="equity-and-returns-1"></a>**Equity series.** Each account's daily net liquidation value as Wealthsimple states it, and beside it the net deposits it states (money put in less money taken out, to date); a day's deposits and withdrawals are the change in those net deposits since the account's stated day before; none is known for the first stated day, nor for a day where either of the two states no net deposits. The history is asked of Wealthsimple in CAD, so an account held in US dollars arrives in CAD at Wealthsimple's rate, and its return is the account's in CAD, the rate's move in it, as a portfolio tracker reports a foreign holding in its base currency (GIPS 2020, 4.A.12: one currency throughout). A day stated in another currency anyway is put in CAD at that day's rate, its deposits and withdrawals at the rate of the day they moved; a day whose rate is not published yet forms no point and says so. A day whose net deposits are stated in another currency than the day before forms no deposits or withdrawals, and so no return over it, and says so (`deposits`): a total restated is not money moved, and converting the two totals at their own days' rates would count the rate's move on everything deposited as money moved.

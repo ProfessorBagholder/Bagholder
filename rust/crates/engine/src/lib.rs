@@ -4,6 +4,7 @@
 //! give the same figures, and nothing is read from a database, the network or a
 //! clock (`crates/core/tests/boundaries.rs`).
 
+pub mod acb;
 pub mod fx;
 pub mod gap;
 pub mod input;
