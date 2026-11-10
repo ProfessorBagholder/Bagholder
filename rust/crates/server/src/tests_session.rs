@@ -345,309 +345,125 @@ impl Drop for StandIn {
     }
 }
 
-fn saved_without_client_id(app: &Arc<App>, refresh: &str) -> String {
-    let sess = bagholder_ws::session::Session {
-        access_token: "saved-access".into(),
-        refresh_token: refresh.into(),
-        ids: bagholder_ws::session::IdentityKeys { identity_canonical_id: "identity-1".into(), ..Default::default() },
-        ..Default::default()
-    };
-    session::save_session(app, &sess).unwrap();
-    let text = std::fs::read_to_string(app.ws_home().session_path()).unwrap();
-    assert!(!text.contains("client_id"), "{text}");
-    assert!(!app.ws_home().client_id_path().exists());
-    text
+fn posted_client_id(posts: &[String]) -> String {
+    let body: serde_json::Value = serde_json::from_str(posts.last().unwrap()).unwrap();
+    body["client_id"].as_str().unwrap().to_string()
 }
 
-fn captured_without_client_id(refresh: &str) -> Capture {
-    Capture {
-        access_token: "captured-access".into(),
-        refresh_token: refresh.into(),
-        ids: bagholder_ws::session::IdentityKeys { identity_canonical_id: "identity-1".into(), ..Default::default() },
-        ..Default::default()
-    }
-}
-
-fn says_nothing_secret(error: &str, secrets: &[&str]) {
-    for secret in secrets {
-        assert!(!error.contains(secret), "the error names a secret: {error}");
-    }
-}
-
-/// The id the current login script names for production, not the sandbox one
-/// beside it, in either key order and either quote. An older `production` key
-/// still reads. A sandbox object alone is not an id.
+/// Every accepted identity key, one table: token info refuses the access token,
+/// the login script names a sandbox id and a production id, and the refresh that
+/// follows posts the production id. The file keeps that key, `wssdi`, and any
+/// other key it had.
 #[test]
-fn the_production_client_id_is_read_from_the_login_script() {
+fn a_login_under_any_identity_key_refreshes_with_the_production_client_id() {
     let _g = crate::tests_common::guard();
+    let keys = ["identity_canonical_id", "identityCanonicalId", "canonical_id", "identity_id", "resource_owner_id", "sub"];
     let production = generated_id(0x11);
     let sandbox = generated_id(0x22);
-    let older = generated_id(0x33);
-    let read = session::client_id_from_app_script;
-    assert_eq!(read(&login_script(&sandbox, &production)).as_deref(), Some(production.as_str()));
-    let swapped = format!(r#"{{ clientId: '{production}', scope: 'read write', env: 'production' }},{{env:"sandbox",clientId:"{sandbox}"}}"#);
-    assert_eq!(read(&swapped).as_deref(), Some(production.as_str()));
-    let spelling = format!(r#"{{env:"production", client_id:"{production}"}}"#);
-    assert_eq!(read(&spelling).as_deref(), Some(production.as_str()));
-    let legacy = format!(r#"var cfg={{sandbox:{{clientId:"{sandbox}"}},production:{{env:"prod",clientId:"{older}"}}}};"#);
-    assert_eq!(read(&legacy).as_deref(), Some(older.as_str()));
-    let both = format!(r#"{{production:{{clientId:"{older}"}}}}{{env:"production",clientId:"{production}"}}"#);
-    assert_eq!(read(&both).as_deref(), Some(production.as_str()), "the object whose env is production wins");
-    assert_eq!(read(&format!(r#"{{env:"sandbox",clientId:"{sandbox}"}}"#)), None);
-    assert_eq!(read(r#"{env:"production",clientId:"abc"}"#), None, "fewer than eight hex digits is not an id");
-    let html = "<script src=\"https://cdn.example/p.js\"></script>\n<script\n      src=\"/assets/app-0123456789abcdef.js\"\n      crossorigin=\"anonymous\"\n    >\n<script src='https://cdn.example/app-abcdef0123456789.js?v=2'></script>";
-    assert_eq!(session::app_script_from_login_html(html).as_deref(), Some("/assets/app-0123456789abcdef.js"));
-    assert_eq!(session::app_script_from_login_html("<script src='https://cdn.example/app-abcdef0123456789.js?v=2'></script>").as_deref(), Some("https://cdn.example/app-abcdef0123456789.js?v=2"));
-    assert_eq!(session::app_script_from_login_html("<script src=\"app.js\"></script>"), None);
-    let _base = StandIn::at("http://127.0.0.1:9");
-    assert_eq!(session::absolute_script_url("/assets/app-0123456789abcdef.js"), "http://127.0.0.1:9/assets/app-0123456789abcdef.js");
-    assert_eq!(session::absolute_script_url("app-0123456789abcdef.js"), "http://127.0.0.1:9/app-0123456789abcdef.js");
-    assert_eq!(session::absolute_script_url("//cdn.example/app-0123456789abcdef.js"), "https://cdn.example/app-0123456789abcdef.js");
-    assert_eq!(session::absolute_script_url("https://cdn.example/app-0123456789abcdef.js"), "https://cdn.example/app-0123456789abcdef.js");
-}
-
-/// No client id on the cookie, none from token info, none cached: the login
-/// script's production id is what the refresh posts. The sandbox id is not.
-#[test]
-fn a_capture_with_no_client_id_reads_the_production_id_from_the_login_script() {
-    let _g = crate::tests_common::guard();
-    let production = generated_id(0x11);
-    let sandbox = generated_id(0x22);
-    let (_dir, app, posts) = app_recorded(vec![(200, NEW_TOKENS.into())]);
-    let before = saved_without_client_id(&app, "kept-refresh");
+    let (_dir, app, posts) = app_recorded(keys.iter().map(|_| (200, NEW_TOKENS.into())).collect());
     let site = pages(vec![
-        ("/oauth/token/info".into(), 200, br#"{"email":"a@example.com"}"#.to_vec()),
+        ("/oauth/token/info".into(), 401, b"{}".to_vec()),
         ("/app/login".into(), 200, login_html().into_bytes()),
         (SCRIPT_PATH.into(), 200, login_script(&sandbox, &production).into_bytes()),
     ]);
     let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
-    assert_eq!(session::take_capture(&app, &captured_without_client_id("captured-new")), Taken::Taken);
-    let posted = posts.lock().unwrap().clone();
-    assert_eq!(posted.len(), 1, "one refresh");
-    let body: serde_json::Value = serde_json::from_str(&posted[0]).unwrap();
-    assert_eq!(body["client_id"], production);
-    assert_ne!(body["client_id"], sandbox);
-    let now = session::load_session(&app).unwrap().unwrap();
-    assert_eq!(now.client_id, production);
-    assert_eq!(now.refresh_token, "new-refresh");
-    assert_ne!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), before);
-    assert_eq!(app.ws_home().cached_client_id().unwrap(), production);
-    assert!(app.state.lock().unwrap().error.is_empty());
-    let _ = site.hits();
-}
-
-/// The same capture when the script names no production id: the error says
-/// which step failed, nothing is posted, and the saved login is left as it was.
-#[test]
-fn a_capture_whose_client_id_cannot_be_read_is_not_refreshed_or_saved() {
-    let _g = crate::tests_common::guard();
-    let sandbox = generated_id(0x22);
-    let held_base = std::env::var(bagholder_wealthsimple::hosts::BASE_VAR).ok();
-    std::env::remove_var(bagholder_wealthsimple::hosts::BASE_VAR);
-    let (_dir, app, posts) = app_recorded(vec![]);
-    let from_cookie = crate::login::tokens_from_cookie_list(
-        &app,
-        &[serde_json::json!({"name": crate::login::OAUTH_COOKIE, "value": r#"{"access_token":"captured-access","refresh_token":"captured-script","identity_canonical_id":"identity-1"}"#, "domain": "my.wealthsimple.com"})],
-    )
-    .unwrap()
-    .unwrap();
-    assert!(from_cookie.client_id.is_empty(), "the cookie field is absent");
-    let before = saved_without_client_id(&app, "kept-refresh");
-    let js = format!(r#"{{env:"sandbox",scope:"read write",clientId:"{sandbox}"}},{{env:"production",clientId:"not-an-id"}}"#);
-    let site = pages(vec![
-        ("/oauth/token/info".into(), 200, br#"{"email":"a@example.com"}"#.to_vec()),
-        ("/app/login".into(), 200, format!("<html><script src=\"{SCRIPT_PATH}\"></script></html>", SCRIPT_PATH = SCRIPT_PATH).into_bytes()),
-        (SCRIPT_PATH.into(), 200, js.into_bytes()),
-    ]);
-    if let Some(v) = &held_base {
-        std::env::set_var(bagholder_wealthsimple::hosts::BASE_VAR, v);
+    for (n, key) in keys.iter().enumerate() {
+        let refresh = format!("refresh-{n}");
+        let raw = format!(r#"{{"access_token":"saved-access","refresh_token":"{refresh}","{key}":"person-1","wssdi":"device-7","note":"kept-extra"}}"#);
+        std::fs::write(app.ws_home().session_path(), &raw).unwrap();
+        let _ = std::fs::remove_file(app.ws_home().client_id_path());
+        let before = posts.lock().unwrap().len();
+        session::boot_session(&app);
+        let posted = posts.lock().unwrap();
+        assert_eq!(posted.len(), before + 1, "{key}: token info refused, so the script's id is posted");
+        let cid = posted_client_id(&posted);
+        assert_eq!(cid, production, "{key}");
+        assert_ne!(cid, sandbox, "{key}");
+        drop(posted);
+        let saved = std::fs::read_to_string(app.ws_home().session_path()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(v[key], "person-1", "{key} stays");
+        assert_eq!(v["wssdi"], "device-7");
+        assert_eq!(v["note"], "kept-extra");
+        assert_eq!(v["client_id"], production);
     }
-    let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
-    let taken = session::take_capture(&app, &from_cookie);
-    let Taken::Refused(why) = taken else { panic!("a page that names no id is not retried: {taken:?}") };
-    assert!(why.contains("the sign-in cookie has no client id"), "{why}");
-    assert!(why.contains("token info gave no client id"), "{why}");
-    assert!(why.contains("the login script matched no client id"), "{why}");
-    assert!(why.contains("will not supply a client id"), "{why}");
-    assert!(!why.contains("Try connecting again."), "{why}");
-    says_nothing_secret(&why, &[&sandbox, "captured-access", "captured-script", "kept-refresh", "saved-access"]);
-    assert!(posts.lock().unwrap().is_empty(), "no refresh is posted without an id");
-    assert_eq!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), before, "the saved login is not overwritten");
-    assert!(!app.ws_home().client_id_path().exists());
 }
 
-/// The login page, or its script, not answering is a different failure from a
-/// page that was read and did not match, and from token info that answered
-/// with no id. Nothing is posted and the saved login stands.
+/// A client id already stored is the one posted. Two production ids, or a page
+/// that is not the app, post nothing and leave the file as it was; the page
+/// that is not the app does not block a later script.
 #[test]
-fn a_capture_whose_login_page_or_script_cannot_be_fetched_is_not_refreshed_or_saved() {
+fn a_stored_client_id_is_posted_and_anything_ambiguous_is_not() {
     let _g = crate::tests_common::guard();
-    let (_dir, app, posts) = app_recorded(vec![]);
-    let before = saved_without_client_id(&app, "kept-refresh");
-    let site = pages(vec![
-        ("/oauth/token/info".into(), 500, br#"{"error":"unavailable"}"#.to_vec()),
-        ("/app/login".into(), 500, b"no".to_vec()),
-    ]);
-    let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
-    let Taken::NotAsked(why) = session::take_capture(&app, &captured_without_client_id("captured-page")) else { panic!("a failed fetch is tried again") };
-    assert!(why.contains("the sign-in cookie has no client id"), "{why}");
-    assert!(why.contains("token info could not be read"), "{why}");
-    assert!(why.contains("the login page could not be fetched"), "{why}");
-    assert!(why.contains("Try connecting again."), "{why}");
-    assert!(!why.contains("matched no"), "{why}");
-    says_nothing_secret(&why, &["captured-access", "captured-page", "kept-refresh"]);
-    assert!(posts.lock().unwrap().is_empty());
-    assert_eq!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), before);
-}
-
-/// A script the page names, which then does not answer, is its own failure.
-#[test]
-fn a_capture_whose_login_script_cannot_be_fetched_is_not_refreshed_or_saved() {
-    let _g = crate::tests_common::guard();
-    let (_dir, app, posts) = app_recorded(vec![]);
-    let before = saved_without_client_id(&app, "kept-refresh");
-    let site = pages(vec![
-        ("/oauth/token/info".into(), 200, br#"{"email":"a@example.com"}"#.to_vec()),
-        ("/app/login".into(), 200, format!("<html><script src=\"{SCRIPT_PATH}\"></script></html>", SCRIPT_PATH = SCRIPT_PATH).into_bytes()),
-        (SCRIPT_PATH.into(), 500, b"no".to_vec()),
-    ]);
-    let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
-    let Taken::NotAsked(why) = session::take_capture(&app, &captured_without_client_id("captured-script-fetch")) else { panic!("a failed script fetch is tried again") };
-    assert!(why.contains("token info gave no client id"), "{why}");
-    assert!(why.contains("the login script could not be fetched"), "{why}");
-    assert!(why.contains("Try connecting again."), "{why}");
-    says_nothing_secret(&why, &["captured-access", "captured-script-fetch", "kept-refresh"]);
-    assert!(posts.lock().unwrap().is_empty());
-    assert_eq!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), before);
-}
-
-/// A login page that names no app script is a parser miss, not a failed fetch.
-#[test]
-fn a_capture_whose_login_page_matches_no_script_is_not_refreshed_or_saved() {
-    let _g = crate::tests_common::guard();
-    let (_dir, app, posts) = app_recorded(vec![]);
-    let before = saved_without_client_id(&app, "kept-refresh");
-    let site = pages(vec![
-        ("/oauth/token/info".into(), 200, br#"{"email":"a@example.com"}"#.to_vec()),
-        ("/app/login".into(), 200, b"<html><script src=\"https://example.invalid/p.js\"></script></html>".to_vec()),
-    ]);
-    let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
-    let Taken::Refused(why) = session::take_capture(&app, &captured_without_client_id("captured-no-script")) else { panic!("a page with no script is not retried") };
-    assert!(why.contains("the login page matched no script"), "{why}");
-    assert!(why.contains("will not supply a client id"), "{why}");
-    assert!(!site.hits().iter().any(|p| p.ends_with(".js")), "no script is fetched when the page names none");
-    assert!(posts.lock().unwrap().is_empty());
-    assert_eq!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), before);
-}
-
-/// Token info naming an id is that id. The login page is not read.
-#[test]
-fn a_capture_uses_the_client_id_token_info_names() {
-    let _g = crate::tests_common::guard();
-    let id = generated_id(0x44);
-    let (_dir, app, posts) = app_recorded(vec![(200, NEW_TOKENS.into())]);
-    let site = pages(vec![
-        ("/oauth/token/info".into(), 200, format!(r#"{{"application_uid":"{id}"}}"#).into_bytes()),
-        ("/app/login".into(), 500, b"no".to_vec()),
-    ]);
-    let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
-    assert_eq!(session::take_capture(&app, &captured_without_client_id("captured-info")), Taken::Taken);
-    let body: serde_json::Value = serde_json::from_str(&posts.lock().unwrap()[0]).unwrap();
-    assert_eq!(body["client_id"], id);
-    assert!(!site.hits().iter().any(|p| p == "/app/login"), "token info already named the id: {:?}", site.hits());
-    says_nothing_secret(&app.state.lock().unwrap().error, &[&id, "captured-access", "captured-info"]);
-}
-
-/// A refresh of a saved login with no client id posts nothing and does not ask
-/// token info or the login page. Those are how a capture, and a start, find one.
-#[test]
-fn a_refresh_without_a_client_id_is_not_posted() {
-    let _g = crate::tests_common::guard();
-    let (_dir, app, posts) = app_recorded(vec![]);
-    let before = saved_without_client_id(&app, "kept-refresh");
-    let site = pages(vec![
-        ("/oauth/token/info".into(), 200, br#"{"application_uid":"aaaaaaaaaaaaaaaa"}"#.to_vec()),
-        ("/app/login".into(), 200, b"<html></html>".to_vec()),
-    ]);
-    let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
-    let answer = session::refresh_now(&app);
-    assert!(!answer.ok);
-    assert_eq!(answer.error, "The saved Wealthsimple login has no client id. A refresh does not read token info or the login page. Connect again to read the client id.");
-    assert!(posts.lock().unwrap().is_empty(), "no refresh is posted without an id");
-    assert!(site.hits().is_empty(), "a refresh does not ask token info or the login page: {:?}", site.hits());
-    assert_eq!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), before);
-    says_nothing_secret(&answer.error, &["kept-refresh", "saved-access", "aaaaaaaaaaaaaaaa"]);
-}
-
-/// At start, token info's application uid is stored, and the login page is not read.
-#[test]
-fn a_boot_with_no_client_id_recovers_it_from_token_info() {
-    let _g = crate::tests_common::guard();
-    let id = generated_id(0x55);
-    let (_dir, app, posts) = app_recorded(vec![]);
-    saved_without_client_id(&app, "kept-refresh");
-    let site = pages(vec![
-        ("/oauth/token/info".into(), 200, format!(r#"{{"application_uid":"{id}","email":"a@example.com"}}"#).into_bytes()),
-        ("/app/login".into(), 500, b"no".to_vec()),
-    ]);
-    let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
-    session::boot_session(&app);
-    let now = session::load_session(&app).unwrap().unwrap();
-    assert_eq!(now.client_id, id);
-    assert_eq!(now.refresh_token, "kept-refresh", "token info was accepted, so nothing was refreshed");
-    assert!(posts.lock().unwrap().is_empty());
-    assert_eq!(site.hits(), vec!["/oauth/token/info".to_string()], "{:?}", site.hits());
-    assert!(app.state.lock().unwrap().connected);
-    says_nothing_secret(&app.state.lock().unwrap().error, &[&id, "kept-refresh", "saved-access"]);
-}
-
-/// At start, token info with no id falls through to the login script. The id is
-/// saved and no refresh is posted while the access token was accepted.
-#[test]
-fn a_boot_with_no_client_id_reads_the_login_script_when_token_info_has_none() {
-    let _g = crate::tests_common::guard();
+    let stored = generated_id(0x44);
     let production = generated_id(0x11);
     let sandbox = generated_id(0x22);
-    let (_dir, app, posts) = app_recorded(vec![]);
-    saved_without_client_id(&app, "kept-refresh");
+    let other = generated_id(0x55);
+    let (_dir, app, posts) = app_recorded(vec![(200, NEW_TOKENS.into()), (200, NEW_TOKENS.into())]);
+    let login = format!(r#"{{"access_token":"saved-access","refresh_token":"kept-refresh","client_id":"{stored}","identity_canonical_id":"person-1","wssdi":"device-7","note":"kept-extra"}}"#);
+    std::fs::write(app.ws_home().session_path(), &login).unwrap();
     let site = pages(vec![
-        ("/oauth/token/info".into(), 200, br#"{"email":"a@example.com"}"#.to_vec()),
-        ("/app/login".into(), 200, format!("<html><script src=\"{SCRIPT_PATH}\"></script></html>", SCRIPT_PATH = SCRIPT_PATH).into_bytes()),
+        ("/oauth/token/info".into(), 200, format!(r#"{{"application_uid":"{other}"}}"#).into_bytes()),
+        ("/app/login".into(), 200, login_html().into_bytes()),
         (SCRIPT_PATH.into(), 200, login_script(&sandbox, &production).into_bytes()),
     ]);
     let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
     session::boot_session(&app);
-    let now = session::load_session(&app).unwrap().unwrap();
-    assert_eq!(now.client_id, production);
-    assert_ne!(now.client_id, sandbox);
-    assert_eq!(now.refresh_token, "kept-refresh");
-    assert!(posts.lock().unwrap().is_empty(), "an accepted access token is not refreshed");
-    assert_eq!(app.ws_home().cached_client_id().unwrap(), production);
-    says_nothing_secret(&app.state.lock().unwrap().error, &[&production, &sandbox, "kept-refresh", "saved-access"]);
-}
+    assert!(posts.lock().unwrap().is_empty(), "a stored id is not replaced, and an accepted token is not refreshed");
+    assert!(!site.hits().iter().any(|p| p == SCRIPT_PATH || p == "/app/login"), "the script is not read when an id is stored: {:?}", site.hits());
+    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(app.ws_home().session_path()).unwrap()).unwrap();
+    assert_eq!(saved["client_id"], stored);
+    assert_eq!(saved["wssdi"], "device-7");
+    assert_eq!(saved["note"], "kept-extra");
+    let no_id = r#"{"access_token":"saved-access","refresh_token":"kept-refresh","identity_canonical_id":"person-1","wssdi":"device-7","note":"kept-extra"}"#;
+    std::fs::write(app.ws_home().session_path(), no_id).unwrap();
+    session::boot_session(&app);
+    assert!(posts.lock().unwrap().is_empty(), "an accepted token is not refreshed");
+    assert!(!site.hits().iter().any(|p| p == SCRIPT_PATH), "token info supplies the id, so the script is not read");
+    assert!(!app.ws_home().client_id_path().exists(), "an id from token info is not written as if the script had been read");
+    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(app.ws_home().session_path()).unwrap()).unwrap();
+    assert_eq!(saved["client_id"], other);
+    drop(_base);
+    drop(site);
 
-/// At start, an access token token info refuses can still be refreshed once the
-/// login script has named the id. Token info itself did not recover it.
-#[test]
-fn a_boot_refused_by_token_info_refreshes_with_the_id_from_the_login_script() {
-    let _g = crate::tests_common::guard();
-    let production = generated_id(0x11);
-    let sandbox = generated_id(0x22);
-    let (_dir, app, posts) = app_recorded(vec![(200, NEW_TOKENS.into())]);
-    saved_without_client_id(&app, "kept-refresh");
+    let bare = r#"{"access_token":"saved-access","refresh_token":"kept-refresh","identity_id":"person-1","wssdi":"device-7","note":"kept-extra"}"#;
+    std::fs::write(app.ws_home().session_path(), bare).unwrap();
+    let two = format!(r#"{{env:"production",clientId:"{sandbox}"}},{{env:"production",clientId:"{production}"}}"#);
     let site = pages(vec![
         ("/oauth/token/info".into(), 401, b"{}".to_vec()),
         ("/app/login".into(), 200, format!("<html><script src=\"{SCRIPT_PATH}\"></script></html>", SCRIPT_PATH = SCRIPT_PATH).into_bytes()),
+        (SCRIPT_PATH.into(), 200, two.into_bytes()),
+    ]);
+    let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
+    session::boot_session(&app);
+    assert!(posts.lock().unwrap().is_empty(), "two production ids are not a guess");
+    assert_eq!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), bare);
+    drop(_base);
+    drop(site);
+
+    std::fs::write(app.ws_home().session_path(), bare).unwrap();
+    let site = pages(vec![
+        ("/oauth/token/info".into(), 401, b"{}".to_vec()),
+        ("/app/login".into(), 200, b"<html><p>not the app</p></html>".to_vec()),
+    ]);
+    let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
+    session::boot_session(&app);
+    assert!(posts.lock().unwrap().is_empty());
+    assert_eq!(std::fs::read_to_string(app.ws_home().session_path()).unwrap(), bare, "a page that is not the app changes nothing");
+    drop(_base);
+    drop(site);
+
+    let site = pages(vec![
+        ("/oauth/token/info".into(), 401, b"{}".to_vec()),
+        ("/app/login".into(), 200, login_html().into_bytes()),
         (SCRIPT_PATH.into(), 200, login_script(&sandbox, &production).into_bytes()),
     ]);
     let _base = StandIn::at(&format!("http://127.0.0.1:{}", site.port));
     session::boot_session(&app);
-    let posted = posts.lock().unwrap().clone();
-    assert_eq!(posted.len(), 1);
-    let body: serde_json::Value = serde_json::from_str(&posted[0]).unwrap();
-    assert_eq!(body["client_id"], production);
-    assert_ne!(body["client_id"], sandbox);
-    let now = session::load_session(&app).unwrap().unwrap();
-    assert_eq!((now.access_token.as_str(), now.client_id.as_str()), ("new-access", production.as_str()));
-    says_nothing_secret(&app.state.lock().unwrap().error, &[&production, &sandbox, "kept-refresh", "saved-access", "new-access"]);
+    assert_eq!(posted_client_id(&posts.lock().unwrap()), production, "the next page that is the app still refreshes");
+    let saved: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(app.ws_home().session_path()).unwrap()).unwrap();
+    assert_eq!(saved["wssdi"], "device-7");
+    assert_eq!(saved["note"], "kept-extra");
+    assert_eq!(saved["identity_id"], "person-1");
 }
+

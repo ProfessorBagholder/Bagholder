@@ -116,22 +116,13 @@ pub fn refresh_session(app: &Arc<App>, sess: &mut Session) -> bool {
     }
 }
 
-/// What a refresh tells the person when the saved login names no client id.
-/// A refresh reads the session and the cached id only: it does not call token
-/// info (that needs an access token Wealthsimple still accepts) and it does not
-/// read the login page. Capture and boot do those, and store what they find.
-const REFRESH_NEEDS_A_STORED_CLIENT_ID: &str = "The saved Wealthsimple login has no client id. A refresh does not read token info or the login page. Connect again to read the client id.";
-
-/// The tokens a refresh posts, from a login: its client id (the cached one where it
-/// names none) and whose login it is.
+/// The tokens a refresh posts. The client id and whose login it is come from
+/// the one reader (`read_tokens`) and the one discovery (`discover_client_id`).
 fn held_tokens(app: &Arc<App>, sess: &mut Session) -> Result<bagholder_wealthsimple::session::Tokens, RefreshFailed> {
-    let home = app.ws_home();
-    let client_id = Client { home: &home }.client_id_for(sess).map_err(|e| RefreshFailed::NotAsked(format!("Could not read the cached Wealthsimple client id: {e}")))?;
-    if client_id.is_empty() {
-        return Err(RefreshFailed::Lapsed(REFRESH_NEEDS_A_STORED_CLIENT_ID.into()));
-    }
+    let client_id = discover_client_id(app, sess, None, None)?;
     sess.client_id = client_id.clone();
-    if sess.identity().is_empty() {
+    let identity = resolve_identity(sess);
+    if identity.is_empty() {
         // the adapter asks for the accounts by it: a login without it cannot be read
         return Err(RefreshFailed::Lapsed("Wealthsimple did not say whose login this is; connect again".into()));
     }
@@ -142,9 +133,19 @@ fn held_tokens(app: &Arc<App>, sess: &mut Session) -> Result<bagholder_wealthsim
         access: sess.access_token.clone(),
         refresh: sess.refresh_token.clone(),
         client_id,
-        identity: sess.identity(),
+        identity,
         expires_at: None,
     })
+}
+
+/// The identity the saved login names, under whichever accepted key, written
+/// back as `identity_canonical_id` so every path stores it the same way.
+fn resolve_identity(sess: &mut Session) -> String {
+    let id = sess.identity();
+    if !id.is_empty() {
+        sess.ids.identity_canonical_id = id.clone();
+    }
+    id
 }
 
 fn adopt(sess: &mut Session, fresh: bagholder_wealthsimple::session::Tokens) {
@@ -175,100 +176,211 @@ pub fn token_info(app: &Arc<App>, sess: &Session) -> bagholder_ws::session::Toke
     Client { home: &home }.token_info(sess)
 }
 
-pub fn apply_token_info_client_id(app: &Arc<App>, sess: &mut Session, info: Option<&bagholder_ws::session::TokenInfo>) -> String {
-    if sess.access_token.is_empty() {
-        return String::new();
+fn nonempty(s: &str) -> Option<String> {
+    let t = s.trim();
+    if t.is_empty() { None } else { Some(t.to_string()) }
+}
+
+/// One list, used by capture, boot and refresh. Stored first (the login, then
+/// the cache file), then the sign-in cookie, then token info, then the login
+/// script. The cache file is written only from the script, never from another source.
+fn discover_client_id(app: &Arc<App>, sess: &Session, cookie: Option<&str>, info: Option<&bagholder_ws::session::TokenInfo>) -> Result<String, RefreshFailed> {
+    // the id already on the login, before the cookie, token info, or the script
+    if let Some(id) = nonempty(&sess.client_id) {
+        return Ok(id);
+    }
+    match app.ws_home().cached_client_id() {
+        Ok(c) => {
+            if let Some(id) = nonempty(&c) {
+                return Ok(id);
+            }
+        }
+        Err(e) => return Err(RefreshFailed::NotAsked(format!("Could not read the cached Wealthsimple client id: {e}"))),
+    }
+    if let Some(id) = cookie.and_then(nonempty) {
+        return Ok(id);
     }
     let fetched;
-    let info = match info {
-        Some(i) => i,
-        None => {
-            fetched = token_info(app, sess);
-            &fetched
-        }
-    };
-    let cid = bagholder_ws::session::client_id_from_token_info(info);
-    if cid.is_empty() {
-        return String::new();
-    }
-    sess.client_id = cid.clone();
-    if let Err(e) = app.ws_home().save_client_id(&cid) {
-        set_error(app, &format!("Could not save the Wealthsimple client id: {e}"));
-    }
-    cid
-}
-
-/// Why a client id was not found. The words are the diagnostic: they name the
-/// step, and they never include a token, a cookie or the id.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum ClientIdGap {
-    CookieAbsent,
-    TokenInfoFailed,
-    TokenInfoNoId,
-    LoginPageUnfetched,
-    ScriptUnfetched,
-    ParserNoScript,
-    ParserNoClientId,
-}
-
-impl ClientIdGap {
-    fn phrase(self) -> &'static str {
-        match self {
-            ClientIdGap::CookieAbsent => "the sign-in cookie has no client id",
-            ClientIdGap::TokenInfoFailed => "token info could not be read",
-            ClientIdGap::TokenInfoNoId => "token info gave no client id",
-            ClientIdGap::LoginPageUnfetched => "the login page could not be fetched",
-            ClientIdGap::ScriptUnfetched => "the login script could not be fetched",
-            ClientIdGap::ParserNoScript => "the login page matched no script",
-            ClientIdGap::ParserNoClientId => "the login script matched no client id",
-        }
-    }
-
-    /// The page was fetched and did not name an id. The next sign-in reads that
-    /// same page, so signing in again does not supply one.
-    fn page_will_not_change(self) -> bool {
-        matches!(self, ClientIdGap::ParserNoScript | ClientIdGap::ParserNoClientId)
-    }
-}
-
-fn client_id_message(gaps: &[ClientIdGap]) -> String {
-    let why = gaps.iter().map(|g| g.phrase()).collect::<Vec<_>>().join("; ");
-    let next = if gaps.iter().any(|g| g.page_will_not_change()) {
-        "Connecting again reads the same login page and will not supply a client id."
+    let info = if sess.access_token.is_empty() {
+        None
+    } else if let Some(i) = info {
+        Some(i)
     } else {
-        "Try connecting again."
+        fetched = token_info(app, sess);
+        Some(&fetched)
     };
-    format!("Wealthsimple's client id could not be read: {why}. {next}")
+    if let Some(info) = info {
+        let cid = bagholder_ws::session::client_id_from_token_info(info);
+        if info.is_ok() && !cid.is_empty() {
+            return Ok(cid);
+        }
+    }
+    client_id_from_login_script(app)
 }
 
-fn client_id_failed(gaps: &[ClientIdGap]) -> RefreshFailed {
-    let msg = client_id_message(gaps);
-    crate::app::log(&format!("bagholder login: {msg}"));
-    if gaps.iter().any(|g| g.page_will_not_change()) { RefreshFailed::Lapsed(msg) } else { RefreshFailed::NotAsked(msg) }
+/// What the login script said about the production client id.
+pub(crate) enum IdInScript {
+    Found(String),
+    Missing,
+    Ambiguous,
 }
 
-/// `env` is `production`, then the id, before the object ends. The id is group 1.
-/// The `regex` crate has no backreferences, so either quote is accepted on its own.
-const PRODUCTION_ENV_THEN_ID: &str = r#"(?i:env)\s*:\s*["']production["'][^}]*?(?i:client_?id)\s*:\s*["']([0-9a-fA-F]{8,})["']"#;
-/// The id, then `env` is `production`, before the object ends. The id is group 1.
-const PRODUCTION_ID_THEN_ENV: &str = r#"(?i:client_?id)\s*:\s*["']([0-9a-fA-F]{8,})["'][^}]*?(?i:env)\s*:\s*["']production["']"#;
-/// An older build: a `production` key whose object holds the id. The id is group 1.
-const PRODUCTION_KEY_THEN_ID: &str = r#"(?i:production)\s*:\s*\{[^}]*?(?i:client_?id)\s*:\s*["']([0-9a-fA-F]{8,})["']"#;
-
-fn first_hex(pattern: &str, text: &str, group: usize) -> Option<String> {
-    regex::Regex::new(pattern).unwrap().captures(text).and_then(|c| c.get(group)).map(|m| m.as_str().to_string())
+/// The production client id, from the one flat object that has `env` `production`
+/// and `clientId` (or `client_id`) together. Two such objects, or the two fields
+/// only inside an object that contains another, is ambiguous: nothing is guessed.
+pub(crate) fn production_client_id(js: &str) -> IdInScript {
+    let mut ids = Vec::new();
+    for body in flat_object_bodies(js) {
+        let fields = string_fields(&body);
+        let production = fields.iter().any(|(k, v)| k == "env" && v == "production");
+        let mut found = Vec::new();
+        for (k, v) in &fields {
+            if (k == "clientId" || k == "client_id") && is_client_id(v) {
+                found.push(v.clone());
+            }
+        }
+        if !production {
+            continue;
+        }
+        if found.len() > 1 {
+            return IdInScript::Ambiguous;
+        }
+        if let Some(id) = found.pop() {
+            ids.push(id);
+        }
+    }
+    match ids.len() {
+        1 => IdInScript::Found(ids.remove(0)),
+        0 => {
+            // the words are in the script but not as one flat object: do not stitch them
+            let mentions_id = ident_present(js, "clientId") || ident_present(js, "client_id");
+            let mentions_prod = js.contains("\"production\"") || js.contains("'production'");
+            if mentions_id && mentions_prod { IdInScript::Ambiguous } else { IdInScript::Missing }
+        }
+        _ => IdInScript::Ambiguous,
+    }
 }
 
-/// The production OAuth client id in Wealthsimple's login script.
-///
-/// The current build names it on the flat object whose `env` is `production`
-/// (`{env:"production",…,clientId:"<hex>"}`), beside a sandbox object that a
-/// sign-in does not use. An older build named it under a `production` key
-/// (`{production:{clientId:"<hex>"}}`). Either quote, either order of the keys,
-/// either spelling `clientId` or `client_id`, and the whitespace a minifier
-/// keeps or drops are the same id. The value is hex of at least eight digits.
-pub(crate) fn client_id_from_app_script(js: &str) -> Option<String> {
-    first_hex(PRODUCTION_ENV_THEN_ID, js, 1).or_else(|| first_hex(PRODUCTION_ID_THEN_ENV, js, 1)).or_else(|| first_hex(PRODUCTION_KEY_THEN_ID, js, 1))
+fn is_client_id(s: &str) -> bool {
+    s.len() >= 8 && s.bytes().all(|c| c.is_ascii_hexdigit())
+}
+
+fn ident_present(js: &str, ident: &str) -> bool {
+    let b = js.as_bytes();
+    let n = ident.len();
+    let mut i = 0;
+    while i + n <= b.len() {
+        if &b[i..i + n] == ident.as_bytes() {
+            let before = i == 0 || !is_ident(b[i - 1]);
+            let after = i + n == b.len() || !is_ident(b[i + n]);
+            if before && after {
+                return true;
+            }
+        }
+        i += 1;
+    }
+    false
+}
+
+fn is_ident(c: u8) -> bool {
+    c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// Interiors of `{...}` that contain no further `{...}` outside a string.
+fn flat_object_bodies(js: &str) -> Vec<String> {
+    let b = js.as_bytes();
+    let mut out = Vec::new();
+    let mut stack: Vec<(usize, bool)> = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'"' | b'\'' => i = end_of_string(b, i),
+            b'{' => {
+                stack.push((i, false));
+                i += 1;
+            }
+            b'}' => {
+                if let Some((start, nested)) = stack.pop() {
+                    if let Some(parent) = stack.last_mut() {
+                        parent.1 = true;
+                    }
+                    if !nested && i > start + 1 {
+                        out.push(js[start + 1..i].to_string());
+                    }
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    out
+}
+
+fn end_of_string(b: &[u8], start: usize) -> usize {
+    let q = b[start];
+    let mut i = start + 1;
+    while i < b.len() {
+        if b[i] == b'\\' && i + 1 < b.len() {
+            i += 2;
+            continue;
+        }
+        if b[i] == q {
+            return i + 1;
+        }
+        i += 1;
+    }
+    b.len()
+}
+
+/// `key: "value"` fields of one flat object. A key is a whole identifier.
+fn string_fields(body: &str) -> Vec<(String, String)> {
+    let b = body.as_bytes();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i].is_ascii_whitespace() || b[i] == b',' {
+            i += 1;
+            continue;
+        }
+        if !is_ident(b[i]) || b[i].is_ascii_digit() {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < b.len() && is_ident(b[i]) {
+            i += 1;
+        }
+        let key = body[start..i].to_string();
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= b.len() || b[i] != b':' {
+            continue;
+        }
+        i += 1;
+        while i < b.len() && b[i].is_ascii_whitespace() {
+            i += 1;
+        }
+        if i >= b.len() || (b[i] != b'"' && b[i] != b'\'') {
+            continue;
+        }
+        let q = b[i];
+        i += 1;
+        let mut val = String::new();
+        while i < b.len() && b[i] != q {
+            if b[i] == b'\\' && i + 1 < b.len() {
+                i += 1;
+            }
+            val.push(b[i] as char);
+            i += 1;
+        }
+        if i < b.len() {
+            i += 1;
+        }
+        out.push((key, val));
+    }
+    out
 }
 
 /// The login page's app bundle (`app-<hex>.js`), in either quote, with the
@@ -299,51 +411,38 @@ pub(crate) fn absolute_script_url(src: &str) -> String {
     }
 }
 
-enum ScrapeFail {
-    /// The cached id, or the cached user agent, could not be read. The words
-    /// are the error.
-    Unread(String),
-    Gap(ClientIdGap),
-}
-
-/// The production client id from Wealthsimple's login script, cached.
-fn scrape_client_id(app: &Arc<App>) -> Result<String, ScrapeFail> {
+/// The production client id from the login script. A page that is not the app
+/// is tried again; the cache is written only when the script names one id.
+fn client_id_from_login_script(app: &Arc<App>) -> Result<String, RefreshFailed> {
     let home = app.ws_home();
-    let cached = match home.cached_client_id() {
-        Ok(c) => c,
-        Err(e) => return Err(ScrapeFail::Unread(format!("Could not read the cached Wealthsimple client id: {e}"))),
-    };
-    if !cached.is_empty() {
-        return Ok(cached);
-    }
     let ua = match home.cached_user_agent() {
         Ok(ua) => ua,
-        Err(e) => return Err(ScrapeFail::Unread(format!("Could not read the cached browser user agent: {e}"))),
+        Err(e) => return Err(RefreshFailed::NotAsked(format!("Could not read the cached browser user agent: {e}"))),
     };
     let hdrs: Vec<(&str, &str)> = if ua.is_empty() { vec![] } else { vec![("User-Agent", ua.as_str())] };
     let get = |url: &str| bagholder_net::client::request("GET", url, &hdrs, None, Duration::from_secs(20)).ok().map(|r| r.text());
     bagholder_net::client::named_call("wealthsimple", "web app/login");
     let html = match get(&bagholder_wealthsimple::hosts::login_url()) {
         Some(h) => h,
-        None => return Err(ScrapeFail::Gap(ClientIdGap::LoginPageUnfetched)),
+        None => return Err(RefreshFailed::NotAsked("Wealthsimple's login page could not be fetched. Try connecting again.".into())),
     };
-    let src = match app_script_from_login_html(&html) {
-        Some(s) => s,
-        None => return Err(ScrapeFail::Gap(ClientIdGap::ParserNoScript)),
+    let Some(src) = app_script_from_login_html(&html) else {
+        return Err(RefreshFailed::NotAsked("Wealthsimple's login page did not include the app script. Try connecting again.".into()));
     };
     bagholder_net::client::named_call("wealthsimple", "web app script");
     let js = match get(&absolute_script_url(&src)) {
         Some(j) => j,
-        None => return Err(ScrapeFail::Gap(ClientIdGap::ScriptUnfetched)),
+        None => return Err(RefreshFailed::NotAsked("Wealthsimple's login script could not be fetched. Try connecting again.".into())),
     };
-    match client_id_from_app_script(&js) {
-        Some(id) => {
+    match production_client_id(&js) {
+        IdInScript::Found(id) => {
             if let Err(e) = home.save_client_id(&id) {
                 set_error(app, &format!("Could not save the Wealthsimple client id: {e}"));
             }
             Ok(id)
         }
-        None => Err(ScrapeFail::Gap(ClientIdGap::ParserNoClientId)),
+        IdInScript::Missing => Err(RefreshFailed::Lapsed("Wealthsimple's login script has no production client id.".into())),
+        IdInScript::Ambiguous => Err(RefreshFailed::Lapsed("Wealthsimple's login script does not name one production client id.".into())),
     }
 }
 
@@ -410,83 +509,58 @@ pub fn boot_session(app: &Arc<App>) {
         }
     };
     let mut saved = Ok(());
-    let mut answered = false;
-    let mut token_gap = None;
-    if !sess.access_token.is_empty() {
-        let info = token_info(app, &sess);
-        if info.is_ok() {
-            answered = true;
-            apply_token_info_client_id(app, &mut sess, Some(&info));
-            if sess.client_id.is_empty() {
-                token_gap = Some(ClientIdGap::TokenInfoNoId);
+    let info = if sess.access_token.is_empty() { None } else { Some(token_info(app, &sess)) };
+    let info_ok = info.as_ref().is_some_and(|i| i.is_ok());
+    if let Some(info) = info.as_ref().filter(|i| i.is_ok()) {
+        if sess.identity().is_empty() {
+            let id = info.identity();
+            if !id.is_empty() {
+                sess.ids.identity_canonical_id = id;
             }
-            let identity = info.identity();
-            if !identity.is_empty() && sess.identity().is_empty() {
-                sess.ids.identity_canonical_id = identity;
+        }
+        if !info.email.is_empty() {
+            sess.email = info.email.clone();
+        }
+        // Wealthsimple answered a request signed with the token held
+        heard(app, Heard::Issued);
+        app.state.lock().unwrap().error.clear();
+    }
+    if let Err(f) = settle_client_id(app, &mut sess, None, info.as_ref()) {
+        // a failed discovery writes nothing: the saved login stays as it was
+        if !info_ok {
+            match f {
+                RefreshFailed::Lapsed(why) => heard(app, Heard::Lapsed(why)),
+                RefreshFailed::NotAsked(why) => heard(app, Heard::NotAsked(why)),
             }
-            if !info.email.is_empty() {
-                sess.email = info.email.clone();
-            }
-            // Wealthsimple answered a request signed with the token held
-            heard(app, Heard::Issued);
-            app.state.lock().unwrap().error.clear();
         } else {
-            token_gap = Some(ClientIdGap::TokenInfoFailed);
+            set_error(app, f.why());
         }
+        app.state.lock().unwrap().email = sess.email.clone();
+        return;
     }
-    // an older saved login with no client id: the login script, which a refresh does not read
-    let had_id = !sess.client_id.is_empty();
-    let mut unread = None;
-    if !had_id {
-        match scrape_client_id(app) {
-            Ok(cid) => sess.client_id = cid,
-            Err(ScrapeFail::Unread(msg)) => unread = Some(RefreshFailed::NotAsked(msg)),
-            Err(ScrapeFail::Gap(gap)) => {
-                let mut gaps = Vec::new();
-                if let Some(g) = token_gap {
-                    gaps.push(g);
-                }
-                gaps.push(gap);
-                unread = Some(client_id_failed(&gaps));
-            }
-        }
-    }
-    if answered {
+    resolve_identity(&mut sess);
+    if info_ok {
         saved = save_session(app, &sess);
-    }
-    if !answered {
-        if sess.refresh_token.is_empty() {
-            heard(app, Heard::Lapsed("missing refresh token".into()));
-        } else if sess.client_id.is_empty() {
-            match unread.as_ref() {
-                Some(RefreshFailed::NotAsked(why)) => heard(app, Heard::NotAsked(why.clone())),
-                Some(RefreshFailed::Lapsed(why)) => heard(app, Heard::Lapsed(why.clone())),
-                None => heard(app, Heard::Lapsed(REFRESH_NEEDS_A_STORED_CLIENT_ID.into())),
-            }
-        } else {
-            // the adapter reads the saved login before it posts, and that read requires the id
-            if !had_id {
-                saved = save_session(app, &sess);
-            }
-            if saved.is_ok() && refresh_session(app, &mut sess) {
-                app.state.lock().unwrap().error.clear();
-                match load_session(app) {
-                    Ok(Some(s)) => sess = s,
-                    Ok(None) => {}
-                    Err(e) => saved = Err(e),
-                }
-            }
+    } else if sess.refresh_token.is_empty() {
+        heard(app, Heard::Lapsed("missing refresh token".into()));
+    } else if refresh_session(app, &mut sess) {
+        app.state.lock().unwrap().error.clear();
+        match load_session(app) {
+            Ok(Some(s)) => sess = s,
+            Ok(None) => {}
+            Err(e) => saved = Err(e),
         }
     }
     let mut st = app.state.lock().unwrap();
     if let Err(e) = saved {
         st.error = e;
-    } else if answered {
-        if let Some(failed) = unread.as_ref() {
-            st.error = failed.why().to_string();
-        }
     }
     st.email = sess.email.clone();
+}
+
+fn settle_client_id(app: &Arc<App>, sess: &mut Session, cookie: Option<&str>, info: Option<&bagholder_ws::session::TokenInfo>) -> Result<(), RefreshFailed> {
+    sess.client_id = discover_client_id(app, sess, cookie, info)?;
+    Ok(())
 }
 
 /// Told once per expiry.
@@ -679,9 +753,6 @@ pub fn take_capture(app: &Arc<App>, capture: &Capture) -> Taken {
     if !capture.wssdi.is_empty() {
         sess.wssdi = capture.wssdi;
     }
-    if !capture.client_id.is_empty() {
-        sess.client_id = capture.client_id;
-    }
     if !capture.session_id.is_empty() {
         sess.session_id = capture.session_id;
     }
@@ -709,19 +780,8 @@ pub fn take_capture(app: &Arc<App>, capture: &Capture) -> Taken {
     if sess.session_id.is_empty() {
         sess.session_id = crate::app::uuid4();
     }
-    apply_token_info_client_id(app, &mut sess, Some(&info));
-    if sess.client_id.is_empty() {
-        match scrape_client_id(app) {
-            Ok(cid) => sess.client_id = cid,
-            Err(ScrapeFail::Unread(msg)) => return refused_capture(app, RefreshFailed::NotAsked(msg)),
-            Err(ScrapeFail::Gap(gap)) => {
-                // the captured client id is the sign-in cookie's; token info was just asked
-                let mut gaps = vec![ClientIdGap::CookieAbsent];
-                gaps.push(if info.is_ok() { ClientIdGap::TokenInfoNoId } else { ClientIdGap::TokenInfoFailed });
-                gaps.push(gap);
-                return refused_capture(app, client_id_failed(&gaps));
-            }
-        }
+    if let Err(f) = settle_client_id(app, &mut sess, Some(capture.client_id.as_str()), Some(&info)) {
+        return refused_capture(app, f);
     }
     if sess.user_agent.is_empty() {
         let ua = match app.ws_home().cached_user_agent() {
