@@ -175,6 +175,31 @@ test("a disclosure's or a release's banner opens the instrument's page: the hold
   }
 })
 
+test('a menu list stays open when it slides out from under a still pointer, and closes when the pointer moves off', async ({ page }) => {
+  await page.goto('/')
+  await page.getByRole('button', { name: 'Menu' }).click()
+  // hover opens a list only once the menu has arrived, which is when a leave can close one
+  const notify = page.locator('.menu button', { hasText: 'Notifications' }).first()
+  await expect.poll(async () => {
+    await notify.hover()
+    return page.locator('.menu.sub button', { hasText: 'Fills' }).count()
+  }).toBe(1)
+  const list = page.locator('.menu.sub')
+  // the slide, and a list whose rows change height, report a leave at the pointer's own place
+  await list.evaluate((el) => {
+    const row = el.parentElement!
+    const r = el.getBoundingClientRect()
+    const x = r.left + 8
+    const y = r.top + 8
+    row.dispatchEvent(new MouseEvent('mousemove', { bubbles: true, clientX: x, clientY: y }))
+    row.dispatchEvent(new MouseEvent('mouseleave', { clientX: x, clientY: y }))
+  })
+  await expect.poll(() => list.evaluate((el) => (el as HTMLElement).inert).catch(() => true)).toBe(false)
+  // a leave at another place is the pointer moving off, and the list closes
+  await list.evaluate((el) => el.parentElement!.dispatchEvent(new MouseEvent('mouseleave', { clientX: 0, clientY: 0 })))
+  await expect(list).toHaveCount(0)
+})
+
 test('the theme row opens on a tap, and choosing a theme closes its list', async ({ page }) => {
   await page.goto('/')
   await page.getByRole('button', { name: 'Menu' }).click()
