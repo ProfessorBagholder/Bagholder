@@ -34,15 +34,40 @@ pub struct Tokens {
     pub expires_at: Option<jiff::Timestamp>,
 }
 
-/// The tokens a session file holds, read strictly: an access token, a refresh
-/// token, a client id and an identity id (under either spelling the sign-in
-/// writes it), and when the access token expires where it says.
+/// Whose login a saved file may name, first non-empty wins. The same keys a
+/// captured cookie and a token-info answer use, so a login stored under any
+/// one of them is the same login.
+pub const IDENTITY_KEYS: [&str; 6] = ["identity_canonical_id", "identityCanonicalId", "canonical_id", "identity_id", "resource_owner_id", "sub"];
+
+/// A text field that may be absent or null: none. A value that is not text is
+/// still a mismatch.
+fn stated_text(n: &Node<'_>, key: &str) -> Read<Option<String>> {
+    match n.field(key) {
+        Err(m) if m.why == "absent" => Ok(None),
+        Err(m) => Err(m),
+        Ok(f) => match f.value() {
+            Value::Null => Ok(None),
+            Value::String(s) if s.is_empty() => Ok(None),
+            Value::String(s) => Ok(Some(s.clone())),
+            other => Err(f.mismatch(format!("expected text, found {}", other.kind()))),
+        },
+    }
+}
+
+/// The tokens a session file holds. Access and refresh are required. The client
+/// id may be absent (it is discovered and written back). The identity is the
+/// first of [`IDENTITY_KEYS`] that is set. When the access token expires is
+/// read where the file says it.
 pub fn read_tokens(v: &Value) -> Read<Tokens> {
     let n = Node::root(v);
-    let identity = match n.field("identity_canonical_id") {
-        Ok(f) => f.as_text()?,
-        Err(_) => n.text("identityCanonicalId")?,
-    };
+    let mut identity = String::new();
+    for key in IDENTITY_KEYS {
+        if let Some(s) = stated_text(&n, key)? {
+            identity = s;
+            break;
+        }
+    }
+    let client_id = stated_text(&n, "client_id")?.unwrap_or_default();
     let expires_at = match n.field("expires_at") {
         Err(_) => None,
         Ok(f) => match f.value() {
@@ -52,7 +77,7 @@ pub fn read_tokens(v: &Value) -> Read<Tokens> {
             other => return Err(f.mismatch(format!("expected an instant, found {}", other.kind()))),
         },
     };
-    Ok(Tokens { access: n.text("access_token")?.to_string(), refresh: n.text("refresh_token")?.to_string(), client_id: n.text("client_id")?.to_string(), identity: identity.to_string(), expires_at })
+    Ok(Tokens { access: n.text("access_token")?.to_string(), refresh: n.text("refresh_token")?.to_string(), client_id, identity, expires_at })
 }
 
 /// What the person is told when Wealthsimple refused a refresh token whose earlier
@@ -112,6 +137,10 @@ impl SessionFile {
         m.insert("access_token".into(), Value::String(t.access.clone()));
         m.insert("refresh_token".into(), Value::String(t.refresh.clone()));
         m.insert("client_id".into(), Value::String(t.client_id.clone()));
+        // one spelling from here on, whichever key the file used; every other key stays
+        if !t.identity.is_empty() {
+            m.insert("identity_canonical_id".into(), Value::String(t.identity.clone()));
+        }
         if let Some(at) = t.expires_at {
             m.insert("expires_at".into(), Value::String(at.to_string()));
         }
@@ -144,6 +173,9 @@ pub fn refresh(net: &Net, file: &SessionFile, held: &Tokens) -> Result<Tokens, F
     let _one_at_a_time = REFRESH.lock().unwrap_or_else(|e| e.into_inner());
     let _across_processes = file.hold()?;
     let (previous, on_disk) = file.load()?.ok_or_else(|| Failure::Lapsed("no saved sign-in".into()))?;
+    if on_disk.identity.is_empty() {
+        return Err(Failure::Refused("the saved sign-in does not say whose it is".into()));
+    }
     if on_disk.refresh != held.refresh {
         // rotated by another caller while this one waited: adopt it, post nothing
         return Ok(on_disk);
@@ -175,6 +207,10 @@ pub fn take_over(net: &Net, file: &SessionFile, captured: &Tokens, keep: impl Fn
 
 /// Wealthsimple's answer to `held`'s refresh token, under the caller's lock.
 fn post_refresh(net: &Net, held: &Tokens) -> Result<Tokens, Failure> {
+    // nothing is posted without the id the grant requires; the file is left as it was
+    if held.client_id.is_empty() {
+        return Err(Failure::Refused("the saved sign-in has no client id".into()));
+    }
     if REFUSED.lock().unwrap_or_else(|e| e.into_inner()).contains(&held.refresh) {
         return Err(Failure::Lapsed(REFUSED_SIGN_IN.into()));
     }
