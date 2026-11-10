@@ -803,13 +803,14 @@ fn test_every_rule_of_the_spec_has_an_id_given_once() {
     assert!(gone.is_empty(), "ids docs/spec-ids.md lists as standing that SPEC.md no longer has (mark them retired): {gone:?}");
 }
 
-/// CI skips a change to markdown alone, except the markdown a test reads: every
-/// `.md` file a Rust test opens is named in `tests.yml`'s paths, so a change to
-/// it alone still runs the test that holds it.
+/// A pull request runs the Rust suite when the only change is a markdown file a
+/// test reads: every `.md` file a Rust test opens is named in `bin/ci-gates.sh`,
+/// so a change to it alone still runs the test that holds it. Any other markdown
+/// does not.
 #[test]
 fn test_every_markdown_file_a_test_reads_runs_the_tests_when_it_changes() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let workflow = std::fs::read_to_string(root.join(".github/workflows/tests.yml")).unwrap();
+    let gate = std::fs::read_to_string(root.join("bin/ci-gates.sh")).unwrap();
     let named = regex::Regex::new(r#"join\("([A-Za-z0-9_./-]+\.md)"\)"#).unwrap();
     let mut read = std::collections::BTreeSet::new();
     let mut stack = vec![root.join("rust/crates")];
@@ -827,8 +828,7 @@ fn test_every_markdown_file_a_test_reads_runs_the_tests_when_it_changes() {
     }
     assert!(read.contains("SPEC.md"), "the scan found no markdown read: {read:?}");
     for file in &read {
-        // named once, in the pull request's paths: the suite runs on a pull request alone
-        assert_eq!(workflow.matches(&format!("      - '{file}'\n")).count(), 1, "tests.yml does not run on a pull request that changes only {file}, which a test reads");
+        assert!(gate.contains(file), "ci-gates.sh does not run the Rust suite on a pull request that changes only {file}, which a test reads");
     }
 }
 
