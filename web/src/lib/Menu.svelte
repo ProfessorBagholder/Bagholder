@@ -11,6 +11,52 @@
   // pointer leaves it, when a choice is made, or with the menu.
   let themeOpen = $state(false)
   let notifyOpen = $state(false)
+  // While the menu slides in, its rows move under a pointer that is not moving, and the
+  // browser reads that as hovering row after row: hover opens and closes nothing until
+  // it has arrived. A real move over a row opens its list then, even one the pointer
+  // came to rest on meanwhile. A click opens a list at any time.
+  let arrived = false
+  // Where the pointer last was, and a list whose slide (or a change in its own height) was
+  // reported as the pointer leaving. The pointer did not move: the list stays, and the next
+  // move that is off it closes it.
+  let at = { x: Number.NaN, y: Number.NaN }
+  let parked: 'theme' | 'notify' | null = null
+  let themeRow = $state<HTMLElement | null>(null)
+  let notifyRow = $state<HTMLElement | null>(null)
+  function overRow(row: 'theme' | 'notify', e: MouseEvent) {
+    at = { x: e.clientX, y: e.clientY }
+    parked = null
+    if (!arrived) return
+    themeOpen = row === 'theme'
+    notifyOpen = row === 'notify'
+  }
+  function offRow(row: 'theme' | 'notify', e: MouseEvent) {
+    if (!arrived) return
+    if (e.clientX === at.x && e.clientY === at.y) {
+      parked = row
+      return
+    }
+    parked = null
+    closeRow(row)
+  }
+  function closeRow(row: 'theme' | 'notify') {
+    if (row === 'theme') themeOpen = false
+    else notifyOpen = false
+  }
+  function pointerMoved(e: PointerEvent) {
+    if (!parked) return
+    if (e.clientX === at.x && e.clientY === at.y) return
+    const row = parked
+    const root = row === 'theme' ? themeRow : notifyRow
+    const hit = document.elementFromPoint(e.clientX, e.clientY)
+    if (root && hit && root.contains(hit)) {
+      at = { x: e.clientX, y: e.clientY }
+      parked = null
+      return
+    }
+    parked = null
+    closeRow(row)
+  }
 
   const NOTIFY_KINDS: [string, string][] = [
     ['fills', 'Fills'],
@@ -34,7 +80,8 @@
   const themeWord = $derived((THEMES.find((t) => t[0] === theme.name) || THEMES[0])[1])
 </script>
 
-<div class="menu elev-md" in:drop out:lift>
+<svelte:window onpointermove={pointerMoved} />
+<div class="menu elev-md" in:drop out:lift onintroend={() => (arrived = true)}>
   {#if status?.connected}
     <button class="primary" onclick={syncNow}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:1"><path d={ICONS.sync} /></svg>Sync now</button>
     <button onclick={refreshSession}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.key} /></svg>Refresh session</button>
@@ -51,7 +98,7 @@
   <button onclick={exportCsv}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.export} /></svg>Export trades CSV</button>
 
   <div class="sep"></div>
-  <div style="position:relative" role="presentation" onmouseenter={() => (themeOpen = true)} onmouseleave={() => (themeOpen = false)}>
+  <div style="position:relative" role="presentation" bind:this={themeRow} onmousemove={(e) => overRow('theme', e)} onmouseleave={(e) => offRow('theme', e)}>
     <button class:open={themeOpen} onclick={() => { themeOpen = true; notifyOpen = false }}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.palette} /></svg>Theme<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">{themeWord}</span><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.5"><path d={ICONS.caret} /></svg></button>
     {#if themeOpen}
       <div class="menu sub" in:drop>
@@ -63,7 +110,7 @@
       </div>
     {/if}
   </div>
-  <div style="position:relative" role="presentation" onmouseenter={() => (notifyOpen = true)} onmouseleave={() => (notifyOpen = false)}>
+  <div style="position:relative" role="presentation" bind:this={notifyRow} onmousemove={(e) => overRow('notify', e)} onmouseleave={(e) => offRow('notify', e)}>
     <button class:open={notifyOpen} onclick={() => { notifyOpen = true; themeOpen = false }}><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.7"><path d={ICONS.bell} /></svg>Notifications<span style="margin-left:auto;padding-left:28px;opacity:.6;box-sizing:border-box;width:90px;flex:none;text-align:right">{notifyWord}</span><svg width="14" height="14" viewBox="0 0 256 256" fill="currentColor" style="flex:none;opacity:.5"><path d={ICONS.caret} /></svg></button>
     {#if notifyOpen}
       <div class="menu sub" in:drop>

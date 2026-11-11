@@ -1613,6 +1613,7 @@ mod tests {
     /// rule there; the budget itself, and whether a listed one now meets it, is the
     /// CI job's, at the reference size, on the runner it is stated for.
     #[test]
+    #[ignore = "growth on a made-up book; cargo test -p bagholder-server --bin bagholder -- --ignored capacity::tests::"]
     fn test_every_operation_is_measured_and_the_growth_rule_judged() {
         let _g = crate::tests_common::guard();
         // a book and thirty-two times it by breadth, and one listing twenty and
@@ -1689,6 +1690,7 @@ mod tests {
     /// run, fails it; that check now stays out of the window, so without the plant
     /// the import passes. The books are a small one and sixteen times it.
     #[test]
+    #[ignore = "growth on a made-up book; cargo test -p bagholder-server --bin bagholder -- --ignored capacity::tests::"]
     fn a_whole_pass_planted_in_the_import_fails_the_growth_rule() {
         let _g = crate::tests_common::guard();
         let (one, four) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -1714,6 +1716,7 @@ mod tests {
     /// trade's window on the depth pair: kept as runs, they cost the same at any
     /// depth, and the fold planted beside them fails the rule.
     #[test]
+    #[ignore = "growth on a made-up book; cargo test -p bagholder-server --bin bagholder -- --ignored capacity::tests::"]
     fn the_names_folded_whole_in_an_added_trade_fail_the_growth_rule() {
         let _g = crate::tests_common::guard();
         let (one, deep) = (tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap());
@@ -1766,6 +1769,7 @@ mod tests {
     /// settling changed equal the trades whose identity differs between the book
     /// before and after the change, read whole, at generated depths (brief 57, 2).
     #[test]
+    #[ignore = "growth on a made-up book; cargo test -p bagholder-server --bin bagholder -- --ignored capacity::tests::"]
     fn the_trades_a_backdated_change_is_judged_per_are_those_whose_identity_changed() {
         let _g = crate::tests_common::guard();
         let identities = |home: &Path| -> std::collections::BTreeMap<String, (Option<String>, Option<String>, Option<String>, Option<String>)> {

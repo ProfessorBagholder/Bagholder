@@ -1,17 +1,17 @@
 import { expect, test, type Page } from '@playwright/test'
 import { ready } from './helpers'
 
-// SPEC.md motion-23 to motion-25: the filters panel, the header menu and the menu's two lists
-// open from a pointer as a quick dropdown (180 ms on the app's curve, growing out of
-// their top right corner) and the panels go with a quicker fade that takes no clicks;
-// the lists go at once; what the keyboard opens or closes shows or goes at once; with
+// SPEC.md motion-23 to motion-25: the filters panel, the header menu and the menu's two
+// lists slide down from their button when a pointer opens them, long enough and far
+// enough to be seen; the panels slide back up as they fade and take no clicks while they
+// go; the lists go at once; what the keyboard opens or closes shows or goes at once; with
 // less motion asked for, they only fade.
 
 const FILTERS = '#popAnchor > .pop'
 const MENU = 'div.menu.elev-md'
 const SUB = 'div.menu.sub'
 
-type Seen = { there: boolean; n: number; end: number; moves: boolean; clicks: boolean }
+type Seen = { there: boolean; n: number; end: number; moves: boolean; clicks: boolean; y20: number }
 
 /** The element at `selector` in the next frame: whether it is there, how many
  * animations it runs, when the last of them ends, whether any keyframe scales or moves
@@ -22,7 +22,7 @@ const nextFrame = (page: Page, selector: string) =>
       new Promise<Seen>((done) =>
         requestAnimationFrame(() => {
           const el = document.querySelector(sel)
-          if (!el) return done({ there: false, n: 0, end: 0, moves: false, clicks: false })
+          if (!el) return done({ there: false, n: 0, end: 0, moves: false, clicks: false, y20: 0 })
           const a = el.getAnimations()
           done({
             there: true,
@@ -30,6 +30,12 @@ const nextFrame = (page: Page, selector: string) =>
             end: Math.max(0, ...a.map((x) => Number(x.effect?.getComputedTiming().endTime ?? 0))),
             moves: a.some((x) => (x.effect as KeyframeEffect | null)?.getKeyframes().some((k) => k.transform != null && k.transform !== 'none') ?? false),
             clicks: getComputedStyle(el).pointerEvents !== 'none',
+            // how far from its place it still is a fifth of the way through
+            y20: a.reduce((y, x) => {
+              const k = (x.effect as KeyframeEffect | null)?.getKeyframes() ?? []
+              const at = k[Math.round((k.length - 1) * 0.2)]?.transform
+              return typeof at === 'string' ? Number(/translateY\((-?[\d.]+)px\)/.exec(at)?.[1] ?? y) : y
+            }, 0),
           })
         }),
       ),
@@ -56,26 +62,31 @@ const mostAtOnce = (page: Page, selector: string, ms: number) =>
 const settled = (page: Page, selector: string) =>
   expect.poll(() => page.evaluate((sel) => document.querySelector(sel)?.getAnimations().length ?? -1, selector), { timeout: 2000 }).toBe(0)
 
-/** Opened from a pointer: moving in its first frame, there by about 200 ms, growing into
- * place unless less motion is asked for. */
-async function dropsIn(page: Page, selector: string, open: () => Promise<void>, grows = true) {
+/** Opened from a pointer: moving in its first frame, for long enough and far enough to
+ * be seen, unless less motion is asked for, when it only fades. */
+async function dropsIn(page: Page, selector: string, open: () => Promise<void>, slides = true) {
   await open()
   const s = await nextFrame(page, selector)
   expect(s.there, `${selector} opens`).toBe(true)
   expect(s.n, `${selector} is moving in its first frame`).toBeGreaterThan(0)
-  expect(s.end, `${selector} has arrived by about 200 ms`).toBeLessThanOrEqual(200)
-  expect(s.moves, `${selector} ${grows ? 'grows into place' : 'only fades'}`).toBe(grows)
+  expect(s.moves, `${selector} ${slides ? 'slides into place' : 'only fades'}`).toBe(slides)
+  if (slides) {
+    expect(s.end, `${selector} takes long enough to be seen`).toBeGreaterThanOrEqual(300)
+    expect(s.y20, `${selector} is still well short of its place a fifth of the way through`).toBeLessThanOrEqual(-15)
+  }
+  expect(s.end, `${selector} has arrived within 360 ms`).toBeLessThanOrEqual(360)
   await settled(page, selector)
 }
 
-/** Closed from a pointer: it stays for a quicker fade, with no move, taking no clicks, then goes. */
-async function fadesOut(page: Page, selector: string, close: () => Promise<void>) {
+/** Closed from a pointer: it stays to go, sliding back up unless less motion is asked
+ * for, taking no clicks, then is removed. */
+async function goesOut(page: Page, selector: string, close: () => Promise<void>, slides = true) {
   await close()
   const s = await nextFrame(page, selector)
-  expect(s.there, `${selector} stays for its exit`).toBe(true)
-  expect(s.n, `${selector} is fading`).toBeGreaterThan(0)
-  expect(s.moves, `${selector} only fades as it goes`).toBe(false)
-  expect(s.end, `${selector} goes quicker than it came`).toBeLessThanOrEqual(140)
+  expect(s.there, `${selector} stays to go`).toBe(true)
+  expect(s.n, `${selector} is going`).toBeGreaterThan(0)
+  expect(s.moves, `${selector} ${slides ? 'slides back up' : 'only fades'} as it goes`).toBe(slides)
+  expect(s.end, `${selector} goes within 220 ms`).toBeLessThanOrEqual(220)
   expect(s.clicks, `${selector} takes no clicks while it goes`).toBe(false)
   await expect(page.locator(selector)).toHaveCount(0, { timeout: 1000 })
 }
@@ -92,11 +103,11 @@ const row = (page: Page, text: string) => page.locator(`${MENU} > div > button`,
 // a press on the page outside any panel: the outside click that closes them
 const outside = (page: Page) => page.mouse.click(700, 500)
 
-test('opened by a pointer, the panels and the menu lists drop in; the panels fade out, the lists go at once', async ({ page }) => {
+test('opened by a pointer, the panels and the menu lists slide down; the panels slide back up as they go, the lists go at once', async ({ page }) => {
   await page.goto('/')
   await ready(page)
   await dropsIn(page, FILTERS, () => page.getByRole('button', { name: 'Filters' }).click())
-  await fadesOut(page, FILTERS, () => outside(page))
+  await goesOut(page, FILTERS, () => outside(page))
   await dropsIn(page, MENU, () => page.getByRole('button', { name: 'Menu' }).click())
   await dropsIn(page, SUB, () => row(page, 'Theme').hover())
   // from one list's row to the other's: never two lists at once
@@ -106,7 +117,7 @@ test('opened by a pointer, the panels and the menu lists drop in; the panels fad
   await expect(page.locator(SUB)).toContainText('Send a test notification')
   await settled(page, SUB)
   await atOnce(page, SUB, () => page.getByRole('button', { name: 'Add trade' }).hover(), false)
-  await fadesOut(page, MENU, () => outside(page))
+  await goesOut(page, MENU, () => outside(page))
 })
 
 test('what the keyboard opens or closes shows or goes at once', async ({ page }) => {
@@ -127,12 +138,46 @@ test('what the keyboard opens or closes shows or goes at once', async ({ page })
   await atOnce(page, MENU, () => page.keyboard.press('Escape'), false)
 })
 
+test("the menu's rows sliding under a still pointer open no list until it has arrived", async ({ page }) => {
+  await page.goto('/')
+  await ready(page)
+  // where the Theme row comes to rest, found first on the settled menu
+  await page.getByRole('button', { name: 'Menu' }).click()
+  await settled(page, MENU)
+  const box = (await row(page, 'Theme').boundingBox())!
+  const [x, y] = [box.x + box.width / 2, box.y + box.height / 2]
+  await outside(page)
+  await expect(page.locator(MENU)).toHaveCount(0)
+  // the pointer rests there, then the menu opens and slides under it; the Notifications
+  // row, just below, passes beneath it on the way
+  await page.mouse.move(x, y)
+  const most = mostAtOnce(page, SUB, 300) // within the 340 ms slide
+  await page.evaluate(() => (document.querySelector('button[aria-label="Menu"]') as HTMLButtonElement).click())
+  expect(await most, 'no list while the menu slides under a still pointer').toBe(0)
+  await expect(page.locator(MENU)).toHaveCount(1)
+  await settled(page, MENU)
+  // once it has arrived, the row the pointer rests on opens its own list, and no other
+  await page.mouse.move(x + 3, y)
+  await expect(page.locator(SUB)).toContainText('Midnight')
+  await expect(page.locator(SUB)).toHaveCount(1)
+})
+
+test("opened from the keyboard, the menu's lists still open under the pointer", async ({ page }) => {
+  await page.goto('/')
+  await ready(page)
+  await page.getByRole('button', { name: 'Menu' }).focus()
+  await page.keyboard.press('Enter')
+  await expect(page.locator(MENU)).toHaveCount(1)
+  await row(page, 'Theme').hover()
+  await expect(page.locator(SUB)).toContainText('Midnight')
+})
+
 test('with less motion asked for, the panels and the lists only fade', async ({ page }) => {
   await page.emulateMedia({ reducedMotion: 'reduce' })
   await page.goto('/')
   await ready(page)
   await dropsIn(page, FILTERS, () => page.getByRole('button', { name: 'Filters' }).click(), false)
-  await fadesOut(page, FILTERS, () => outside(page))
+  await goesOut(page, FILTERS, () => outside(page), false)
   await dropsIn(page, MENU, () => page.getByRole('button', { name: 'Menu' }).click(), false)
   await dropsIn(page, SUB, () => row(page, 'Theme').hover(), false)
 })

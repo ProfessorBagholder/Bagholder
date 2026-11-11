@@ -142,7 +142,9 @@ jobs:
         run: gh release upload "$TAG" dist/bagholder-* --clobber
 
   # The suites on macOS and Windows, run once, here, as a release's final step on the commit it is
-  # cut from: a pull request runs them on Linux alone (`tests.yml`). The release stays a draft,
+  # cut from: a pull request runs them on Linux alone (`tests.yml`). The capacity measurements
+  # are not in this suite: `capacity.yml` runs them on this same push, and again when a release
+  # is rebuilt by hand. The release stays a draft,
   # which no installed copy is offered, unless both pass. On a merge that makes no release each
   # compiles its suite and runs nothing, and only when master's cache lacks it, so a release's run
   # starts from compiled dependencies.
@@ -179,7 +181,7 @@ jobs:
           CI: "true"
         run: |
           cargo nextest list --workspace --locked > /dev/null
-          ../bin/check-test-leftovers.sh cargo nextest run --workspace --locked --no-fail-fast -E 'not test(/^capacity::tests::/)'
+          ../bin/check-test-leftovers.sh cargo nextest run --workspace --locked --no-fail-fast
           ../bin/check-test-leftovers.sh cargo test --workspace --locked --doc
         working-directory: rust
       # the test a sandboxed local run cannot hold: the notification applet, built with
@@ -222,6 +224,12 @@ jobs:
           ../bin/check-test-leftovers.sh cargo test --locked -p bagholder-model
         working-directory: rust
 
+  # The capacity measurements, on every master push and on a release rebuilt by hand.
+  # One call, so a release is not measured twice; publish waits for it.
+  capacity:
+    needs: release
+    uses: ./.github/workflows/capacity.yml
+
   # the release's image, made from the Linux archives' own binaries
   docker:
     needs: [release, rust]
@@ -263,7 +271,7 @@ jobs:
   # passed, so no copy is ever offered a release it cannot take. A draft is
   # published on this run's own commit, which tags it.
   publish:
-    needs: [release, rust, docker, image-check, suite-macos, suite-windows]
+    needs: [release, rust, docker, image-check, suite-macos, suite-windows, capacity]
     if: needs.release.outputs.tag != ''
     runs-on: ubuntu-latest
     env:

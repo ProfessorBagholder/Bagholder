@@ -1,18 +1,19 @@
-# The server held to its cost budget (docs/architecture.md §16). Its own workflow so it runs only
-# when the Rust code it builds and measures changed, or this file.
+# The server held to its cost budget (docs/architecture.md §16).
+#
+# On a pull request the reference-size run starts only when a changed path is one the
+# measurements actually exercise (`bin/ci-gates.sh`, capacity): a sign-in does not build
+# the reference book. The job still reports, on a small runner, so a required check is
+# not left waiting. A push to master does not start this file itself: `release.yml` calls
+# it, once, whatever the paths, and a release waits for it before it is published. A run
+# by hand does the same. A filter that was too narrow is still caught there. The in-suite
+# measurements (`#[ignore]` in `capacity.rs`) run in that call; a pull request runs them
+# in `tests.yml`.
 name: Capacity
 
 on:
   pull_request:
-    paths:
-      - 'rust/**'
-      - '.github/workflows/capacity.yml'
-  push:
-    branches: [master]
-    paths:
-      - 'rust/**'
-      - '.github/workflows/capacity.yml'
   workflow_dispatch:
+  workflow_call:
 
 permissions:
   contents: read
@@ -22,6 +23,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  # Whether this run measures. A pull request consults the paths; everything else measures.
+  gate:
+    runs-on: ubuntu-latest
+    outputs:
+      run: ${{ steps.g.outputs.run }}
+      runner: ${{ steps.g.outputs.runner }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - id: g
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$CI_EVENT" = "pull_request" ]; then
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD > "$RUNNER_TEMP/changed" || { echo "run=true" >> "$GITHUB_OUTPUT"; echo "runner=ubuntu-24.04-arm" >> "$GITHUB_OUTPUT"; exit 0; }
+          else
+            : > "$RUNNER_TEMP/changed"
+          fi
+          run=$(CI_EVENT="$CI_EVENT" sh bin/ci-gates.sh capacity < "$RUNNER_TEMP/changed")
+          echo "gate: capacity $run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+          if [ "$run" = true ]; then echo "runner=ubuntu-24.04-arm" >> "$GITHUB_OUTPUT"; else echo "runner=ubuntu-latest" >> "$GITHUB_OUTPUT"; fi
+
   # The server held to its cost budget (docs/architecture.md §16) at the reference size and four
   # times it, on the arm64 machine the budget is stated against: `bagholder capacity run` builds
   # the books, measures every operation (seven times, once for one listed over budget), prints the
@@ -29,36 +54,69 @@ jobs:
   # on it now meets both. In three parts, each on a runner of its own (`--part K/3`): a part builds
   # the books its measurements need, at once, then makes its measurements one after another, so no
   # two measurements share a machine. The books are built on each run: saved to the Actions cache,
-  # their 1.2 GB had not finished uploading after two hours. It runs only when what it builds or
-  # measures changed.
+  # their 1.2 GB had not finished uploading after two hours.
   capacity:
-    runs-on: ubuntu-24.04-arm
+    needs: gate
+    runs-on: ${{ needs.gate.outputs.runner }}
     strategy:
       fail-fast: false
       matrix:
         part: [1, 2, 3]
     steps:
+      - name: This change does not move what the run measures
+        if: needs.gate.outputs.run != 'true'
+        run: echo "capacity run not started"
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        if: needs.gate.outputs.run == 'true'
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
-      # saved by the first part alone, on master
+        if: needs.gate.outputs.run == 'true'
+      # master's cache, saved by the first part. A pull request reads it and does not save.
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
-        id: cache
+        if: needs.gate.outputs.run == 'true'
         with:
           workspaces: rust
           shared-key: capacity
-          save-if: ${{ matrix.part == 1 }}
-      # on master, after a merge, the build alone, by the first part, and only when master's cache
-      # lacks it: the pull request measured this code, and its run starts from master's compiled
-      # dependencies
+          save-if: ${{ matrix.part == 1 && github.ref == 'refs/heads/master' }}
       - name: The server, as released
-        if: github.event_name != 'push' || (matrix.part == 1 && steps.cache.outputs.cache-hit != 'true')
+        if: needs.gate.outputs.run == 'true'
         run: cargo build --locked --release --bin bagholder
         working-directory: rust
+      # a master push measures too: the pull request's path filter can be wrong, and this is
+      # the run that catches it, including the commit a release is cut from
       - name: The cost budget, its part ${{ matrix.part }} of 3
-        if: github.event_name != 'push'
+        if: needs.gate.outputs.run == 'true'
         env:
           PART: ${{ matrix.part }}
         run: |
           set -o pipefail
           target/release/bagholder capacity run "$RUNNER_TEMP/capacity" --part "$PART/3" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"
+        working-directory: rust
+
+  # The in-suite measurements, on a master push and on a run by hand. A pull request runs
+  # them in tests.yml, so this step does not, and the job still reports.
+  cases:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - name: A pull request runs these beside its suite
+        if: github.event_name == 'pull_request'
+        run: echo "capacity cases run in Tests"
+      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        if: github.event_name != 'pull_request'
+      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        if: github.event_name != 'pull_request'
+        with:
+          workspaces: rust
+          shared-key: suite
+          save-if: ${{ github.ref == 'refs/heads/master' }}
+      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+        if: github.event_name != 'pull_request'
+        with:
+          tool: cargo-nextest@0.9.148
+      - name: The capacity measurements
+        if: github.event_name != 'pull_request'
+        env:
+          CI: "true"
+          RUSTFLAGS: "-D warnings"
+        run: cargo nextest run --locked -p bagholder-server --bin bagholder --no-fail-fast --run-ignored ignored-only -E 'test(/^capacity::tests::/)'
         working-directory: rust
