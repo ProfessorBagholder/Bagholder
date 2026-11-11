@@ -11,6 +11,28 @@
     "expect": {"positions": [{"account": "A", "instrument": "X", "qty": "100", "book": "1000.00", "avg": "10", "market": "1200.00", "unrealized": "200.00", "market_cad": "1200.00"}]}
   },
   {
+    "name": "units bought today move from what they cost, units held overnight from the previous close",
+    "spec": "SPEC.md portfolio-26 (the two Change columns), portfolio-10 (1d change)",
+    "working": [
+      "The quote: 20.50, up 0.60 on the day (the previous close 19.90).",
+      "A held 100 bought on 2026-03-02 for 1,000 and bought 100 more today at 20.80 (2,080): the 100 held overnight moved 100 x 0.60 = 60.00; the 100 bought today moved 100 x (20.50 - 20.80) = -30.00. Day change 30.00, not 200 x 0.60 = 120.00.",
+      "B bought 100 today at 20.55 (2,055) and held none before: day change 100 x (20.50 - 20.55) = -5.00, not +60.00. Market 2,050.00 against a book of 2,055.00, as a position bought today shows it."
+    ],
+    "today": "2026-03-10",
+    "accounts": [{"id": "A"}, {"id": "B"}],
+    "instruments": [{"id": "X"}],
+    "quotes": {"X": {"price": "20.50", "change": "0.60"}},
+    "transactions": [
+      {"id": "t1", "account": "A", "day": "2026-03-02", "at": "2026-03-02T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "cash": "-1000"},
+      {"id": "t2", "account": "A", "day": "2026-03-10", "at": "2026-03-10T15:00:00Z", "kind": "buy", "instrument": "X", "qty": "100", "price": "20.80", "cash": "-2080"},
+      {"id": "t3", "account": "B", "day": "2026-03-10", "at": "2026-03-10T15:30:00Z", "kind": "buy", "instrument": "X", "qty": "100", "price": "20.55", "cash": "-2055"}
+    ],
+    "expect": {"positions": [
+      {"account": "A", "instrument": "X", "qty": "200", "market": "4100.00", "day_change": "30.00", "day_change_cad": "30.00"},
+      {"account": "B", "instrument": "X", "qty": "100", "book": "2055.00", "market": "2050.00", "day_change": "-5.00", "day_change_cad": "-5.00"}
+    ]}
+  },
+  {
     "name": "a quote from another kind's source prices nothing; the last close stands; with neither there is no price",
     "spec": "SPEC.md §2 Position, Price: taken only when its source is the position's kind's; docs/plans/stage-2-engine.md: the person's own fill price is never a market price",
     "working": [
