@@ -1,25 +1,15 @@
-# Every suite, once, on every pull request that touches anything but markdown, or the markdown a
-# test reads: never again on master for the same code once merged (the owner, 2026-10-26: "you should
-# not be re-running duplicate and triplicate things ever, only when absolutely required as a final
-# step"). The suites on Windows and macOS are that final step, run on the commit a release is cut
-# from (`release.yml`), and nothing is published without them. Nothing ran on a pull request before this: a branch was only ever as
-# tested as whoever remembered to run it. The server and the page are one product -- the page is
-# built into the server -- so a pull request is green only when both are. The tests read the
-# markdown files the paths below name (SPEC.md for its rule ids, docs/spec-ids.md, docs/architecture.md
-# for the cost budget, the recorded statement forms' README), so a change to one of them runs
-# everything; any other documentation runs nothing.
+# Every suite, once, on every pull request: never again on master for the same code once merged
+# (the owner, 2026-10-26: "you should not be re-running duplicate and triplicate things ever, only
+# when absolutely required as a final step"). The suites on Windows and macOS are that final step,
+# run on the commit a release is cut from (`release.yml`), and nothing is published without them.
+# The workflow itself always starts, so a required check reports on a pull request whose change
+# the jobs have nothing to do with; each job then runs only when a changed path is one it reads
+# (`bin/ci-gates.sh`). A markdown file a test reads runs the Rust suite; any other documentation
+# runs the result only.
 name: Tests
 
 on:
   pull_request:
-    paths:
-      - '**'
-      - '!**.md'
-      - 'SPEC.md'
-      - 'docs/spec-ids.md'
-      - 'docs/architecture.md'
-      - 'CLAUDE.md'
-      - 'rust/crates/wealthsimple/tests/replies/wealthsimple-statements/README.md'
   workflow_dispatch:
 
 permissions:
@@ -43,11 +33,25 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - id: gate
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$CI_EVENT" = "pull_request" ]; then
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD > "$RUNNER_TEMP/changed" || { echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          else
+            : > "$RUNNER_TEMP/changed"
+          fi
+          run=$(CI_EVENT="$CI_EVENT" sh bin/ci-gates.sh rust < "$RUNNER_TEMP/changed")
+          echo "gate: rust $run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
       # the compiled dependencies, which master saves after each merge (`release.yml`,
       # `suite-cache`): a pull request reads only its own caches and master's, and no suite
       # runs on master, so a pull request saves none
-      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+      - if: steps.gate.outputs.run == 'true'
+        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
           shared-key: suite
@@ -55,24 +59,28 @@ jobs:
       # a start is traced to show it opens no store but the book and the market
       # cache (`server/tests/start_failures.rs`)
       - name: strace
+        if: steps.gate.outputs.run == 'true'
         run: sudo apt-get update && sudo apt-get install -y strace
       # cargo-nextest runs each test in a process of its own, as many at once as the
       # runner has cores: the suite's tests no longer wait in line on one shared lock
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+      - if: steps.gate.outputs.run == 'true'
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-nextest@0.9.148
       # a warning fails the build: the workspace is kept warning-free; the suite runs
       # on a temp folder of its own, and a test that leaves anything there fails it;
       # each part takes every third test, counted in the suite's own order; nextest
-      # runs no doc test, so the first part runs them apart
+      # runs no doc test, so the first part runs them apart. The capacity measurements
+      # are #[ignore]d and run by capacity-cases, only when what they measure changed.
       - name: The Rust suite, its part ${{ matrix.part }} of 3
+        if: steps.gate.outputs.run == 'true'
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
           PART: ${{ matrix.part }}
         run: |
           cargo nextest list --workspace --locked > /dev/null
-          ../bin/check-test-leftovers.sh cargo nextest run --workspace --locked --no-fail-fast --partition "count:$PART/3" -E 'not test(/^capacity::tests::/)'
+          ../bin/check-test-leftovers.sh cargo nextest run --workspace --locked --no-fail-fast --partition "count:$PART/3"
           if [ "$PART" = 1 ]; then ../bin/check-test-leftovers.sh cargo test --workspace --locked --doc; fi
         working-directory: rust
 
@@ -83,9 +91,23 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - id: gate
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$CI_EVENT" = "pull_request" ]; then
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD > "$RUNNER_TEMP/changed" || { echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          else
+            : > "$RUNNER_TEMP/changed"
+          fi
+          run=$(CI_EVENT="$CI_EVENT" sh bin/ci-gates.sh rust-checks < "$RUNNER_TEMP/changed")
+          echo "gate: rust-checks $run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
       # master's, as the suite's (above)
-      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+      - if: steps.gate.outputs.run == 'true'
+        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
           shared-key: suite
@@ -94,15 +116,22 @@ jobs:
       # image build `--locked`): one that cargo would rewrite fails here, before any
       # step can rewrite it
       - name: The lock file is current
+        if: steps.gate.outputs.run == 'true'
         run: cargo metadata --locked --format-version 1 > /dev/null
         working-directory: rust
       # which release a merge makes (release.yml's first step), over every case, with
       # `gh` stood in: it cannot be proven before a release
       - name: The release decision
+        if: steps.gate.outputs.run == 'true'
         run: sh bin/release-which.test.sh
+      # which change runs which job (bin/ci-gates.sh)
+      - name: The CI gates
+        if: steps.gate.outputs.run == 'true'
+        run: sh bin/ci-gates.test.sh
       # the developer's subcommands (`bagholder demo`, `pull-broker`), each behind a
       # feature no release build enables: their own tests, built with them
       - name: The developer's subcommands
+        if: steps.gate.outputs.run == 'true'
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
@@ -117,6 +146,7 @@ jobs:
       # symbols (release.yml checks the release binary the same way); a word it does
       # not know is refused one way (`crates/server/tests/commands.rs`, in the suite)
       - name: The server built without features carries no developer's subcommand
+        if: steps.gate.outputs.run == 'true'
         env:
           RUSTFLAGS: "-D warnings"
         run: |
@@ -132,14 +162,17 @@ jobs:
       # and the stand-in Wealthsimple (`standin.rs`, built only under its feature) in:
       # the gate CLAUDE.md names, run here so it is one
       - name: No discarded failure
+        if: steps.gate.outputs.run == 'true'
         env:
           RUSTFLAGS: "-D warnings"
         run: cargo clippy --locked --workspace --lib --bins --features bagholder-ws/standin
         working-directory: rust
 
-  # The server's capacity cases, each building made-up books (`capacity::tests`), beside the
-  # suite rather than inside it: the suite's slowest part, in three parts at once, each
-  # case in a process of its own (nextest).
+  # The capacity measurements (`#[ignore]` in `capacity.rs`): made-up books, many times
+  # a small one, and the growth rule. Beside the suite, and only when a changed path is
+  # one they measure (`bin/ci-gates.sh`, capacity). On a master push they run from
+  # `capacity.yml`, with the reference-size run. In three parts, each case in its own
+  # process (nextest). The job still reports when it has nothing to run.
   capacity-cases:
     runs-on: ubuntu-latest
     strategy:
@@ -150,22 +183,38 @@ jobs:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
         with:
           fetch-depth: 0
-      - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+      - id: gate
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$CI_EVENT" = "pull_request" ]; then
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD > "$RUNNER_TEMP/changed" || { echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          else
+            : > "$RUNNER_TEMP/changed"
+          fi
+          run=$(CI_EVENT="$CI_EVENT" sh bin/ci-gates.sh capacity < "$RUNNER_TEMP/changed")
+          echo "gate: capacity $run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.run == 'true'
+        uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
       # master's, as the suite's (above)
-      - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+      - if: steps.gate.outputs.run == 'true'
+        uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
         with:
           workspaces: rust
           shared-key: suite
           save-if: false
-      - uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
+      - if: steps.gate.outputs.run == 'true'
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-nextest@0.9.148
       - name: The capacity cases, their part ${{ matrix.part }} of 3
+        if: steps.gate.outputs.run == 'true'
         env:
           CI: "true"
           RUSTFLAGS: "-D warnings"
           PART: ${{ matrix.part }}
-        run: cargo nextest run --locked -p bagholder-server --bin bagholder --no-fail-fast --partition "count:$PART/3" -E 'test(/^capacity::tests::/)'
+        run: cargo nextest run --locked -p bagholder-server --bin bagholder --no-fail-fast --run-ignored ignored-only --partition "count:$PART/3" -E 'test(/^capacity::tests::/)'
         working-directory: rust
 
   # The pull request's plants (bin/plants.py): each a bug put in on purpose, one exact
@@ -241,6 +290,8 @@ jobs:
         if: matrix.kind == 'vitest' && steps.read.outputs.count != '0'
         run: python3 bin/plants.py run "$RUNNER_TEMP/body.md" vitest
 
+  # The page's check, tests and bundle. They read web/ only, so a Rust change that
+  # does not touch the page does not run them. The job still reports.
   web:
     runs-on: ubuntu-latest
     defaults:
@@ -248,26 +299,47 @@ jobs:
         working-directory: web
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          fetch-depth: 0
+      - id: gate
+        working-directory: .
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$CI_EVENT" = "pull_request" ]; then
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD > "$RUNNER_TEMP/changed" || { echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          else
+            : > "$RUNNER_TEMP/changed"
+          fi
+          run=$(CI_EVENT="$CI_EVENT" sh bin/ci-gates.sh web < "$RUNNER_TEMP/changed")
+          echo "gate: web $run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
+      - if: steps.gate.outputs.run == 'true'
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - run: npm ci
+      - if: steps.gate.outputs.run == 'true'
+        run: npm ci
       # the types and the components, then the tests, then the bundle the server carries:
       # the bundle is built here and at release, never committed
       - name: Types and components
+        if: steps.gate.outputs.run == 'true'
         run: npm run check
       - name: The page's tests
+        if: steps.gate.outputs.run == 'true'
         run: npm test
       - name: The bundle builds
+        if: steps.gate.outputs.run == 'true'
         run: npm run build
 
-  # The image the release publishes, built on every pull request and not pushed, then
-  # started on the made-up book (offline, dry orders) and driven in a real browser for
-  # one order through the page's own path (e2e/dryorder.spec.ts): docker.yml builds it
-  # only on a tag, so an image that no longer builds, starts or serves would otherwise
-  # first fail at a release.
+  # The image the release publishes, built on a pull request that changes what the image
+  # is built from, and not pushed, then started on the made-up book (offline, dry orders)
+  # and driven in a real browser for one order through the page's own path
+  # (e2e/dryorder.spec.ts): docker.yml builds it only on a tag, so an image that no longer
+  # builds, starts or serves would otherwise first fail at a release. A documentation
+  # change does not build it. The job still reports.
   # The image is built from binaries compiled here, as a release builds its image from
   # the binaries it compiled (`BINARIES=prebuilt`), never by a compile inside Docker,
   # which no cache carried from one change to the next. They are a debug build, on
@@ -281,39 +353,63 @@ jobs:
       CARGO_PROFILE_DEV_DEBUG: "0"
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - id: gate
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$CI_EVENT" = "pull_request" ]; then
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD > "$RUNNER_TEMP/changed" || { echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          else
+            : > "$RUNNER_TEMP/changed"
+          fi
+          run=$(CI_EVENT="$CI_EVENT" sh bin/ci-gates.sh container < "$RUNNER_TEMP/changed")
+          echo "gate: container $run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        if: steps.gate.outputs.run == 'true'
       - name: Build tools
+        if: steps.gate.outputs.run == 'true'
         run: sudo apt-get update && sudo apt-get install -y cmake clang libclang-dev pkg-config libssl-dev
       # master's (suite-cache.yml, image)
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        if: steps.gate.outputs.run == 'true'
         with:
           workspaces: rust
           shared-key: image
           save-if: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: steps.gate.outputs.run == 'true'
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+        if: steps.gate.outputs.run == 'true'
         working-directory: web
       - name: The browser the test drives
+        if: steps.gate.outputs.run == 'true'
         run: npx playwright install --with-deps chromium
         working-directory: web
       - name: The made-up book
+        if: steps.gate.outputs.run == 'true'
         working-directory: rust
         run: |
           cargo build --locked --bin bagholder --features demo
           target/debug/bagholder demo "$RUNNER_TEMP/book"
       - name: The image's binaries
+        if: steps.gate.outputs.run == 'true'
         working-directory: rust
         run: |
           cargo build --locked --bin bagholder --bin bagholder-browser --bin sedar
           mkdir -p prebuilt/amd64
           cp target/debug/bagholder target/debug/bagholder-browser target/debug/sedar prebuilt/amd64/
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3.12.0
+        if: steps.gate.outputs.run == 'true'
       # the system packages and the page from master's cache, the binaries from above
       - name: The image builds
+        if: steps.gate.outputs.run == 'true'
         uses: docker/build-push-action@10e90e3645eae34f1e60eeb005ba3a3d33f178e8 # v6.19.2
         with:
           context: .
@@ -328,6 +424,7 @@ jobs:
           cache-to: type=gha,scope=image,mode=max
       # the port the same inside and out, as docker-compose.yml publishes it
       - name: The image starts on the book
+        if: steps.gate.outputs.run == 'true'
         run: |
           docker run -d --name bagholder -p 127.0.0.1:8792:8792 -e BAGHOLDER_PORT=8792 \
             -e BAGHOLDER_DRY_ORDERS=1 -e BAGHOLDER_OFFLINE=1 -e BAGHOLDER_NOTIFY=browser \
@@ -338,6 +435,7 @@ jobs:
             sleep 1
           done
       - name: One dry order through the page
+        if: steps.gate.outputs.run == 'true'
         env:
           E2E_URL: http://127.0.0.1:8792
         run: npx playwright test --project=image
@@ -345,6 +443,7 @@ jobs:
       # #516: a store the image cannot open leaves the server up with its header
       # whole -- the version, the update on offer and the error line saying why
       - name: The image on a book whose market cache cannot be opened
+        if: steps.gate.outputs.run == 'true'
         run: |
           docker rm -f bagholder
           sudo cp -a "$RUNNER_TEMP/book" "$RUNNER_TEMP/broken"
@@ -365,6 +464,7 @@ jobs:
       # the powers its start needs, on a data folder root made; it takes the folder
       # over and runs as its own user
       - name: The image as shipped runs as its own user on a data folder root made
+        if: steps.gate.outputs.run == 'true'
         run: |
           docker rm -f bagholder
           sudo mkdir -m 700 "$RUNNER_TEMP/rooted"
@@ -398,6 +498,7 @@ jobs:
       # schedule; Bagholder makes the token it reads and offers the button (an update
       # from one image to the next, pressed in the page, is the last step)
       - name: The shipped updater runs on the button alone, with the token Bagholder made
+        if: steps.gate.outputs.run == 'true'
         run: |
           sudo mkdir -m 700 "$RUNNER_TEMP/updated"
           cat > "$RUNNER_TEMP/updated.yml" <<EOF
@@ -441,6 +542,7 @@ jobs:
       # its own user, its page, its version, and who it answers on a local network and
       # from the internet, directly and through Traefik, Caddy and nginx
       - name: The image checked as a release checks its own
+        if: steps.gate.outputs.run == 'true'
         run: |
           this=$(sed -n 's/^pub const APP_VERSION: &str = "\(.*\)";$/\1/p' rust/crates/server/src/app.rs)
           sh bin/image-check.sh bagholder:ci "$this"
@@ -454,6 +556,7 @@ jobs:
       # pulls from a registry on this runner, and GitHub's latest release is stood in,
       # one newer than any build, since nothing newer than this build is published.
       - name: The update button replaces the container, and the page comes back on the new one by itself
+        if: steps.gate.outputs.run == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -541,7 +644,9 @@ jobs:
   # (cargo audit's own exit status); an unmaintained or yanked crate is printed and
   # does not, as the project cannot always act on one. npm audit fails at any severity
   # on an advisory web/audit.toml does not list (each listed with why it cannot be
-  # reached and when it leaves), and on a listed one it no longer reports.
+  # reached and when it leaves), and on a listed one it no longer reports. It runs on
+  # every pull request: an advisory is published on its own, not because a path changed,
+  # so a green audit last week is not one today. The last step also reads every workflow.
   audit:
     runs-on: ubuntu-latest
     steps:
@@ -570,6 +675,9 @@ jobs:
   # The page driven in a real browser against the real server, on a made-up book
   # (docs/architecture.md, rule 8). Nothing leaves the runner: BAGHOLDER_OFFLINE. In
   # five parts at once (Playwright's `--shard`), each with its own servers and book.
+  # It runs when the page or a crate the server is built from changed. A change to the
+  # browser helper alone does not: the suite never starts it. The engine does: the page
+  # shows its figures. A test file does not: it is not in the binary. The job still reports.
   browser:
     runs-on: ubuntu-latest
     strategy:
@@ -578,34 +686,56 @@ jobs:
         shard: [1, 2, 3, 4, 5]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - id: gate
+        env:
+          CI_EVENT: ${{ github.event_name }}
+        run: |
+          if [ "$CI_EVENT" = "pull_request" ]; then
+            git diff --name-only "${{ github.event.pull_request.base.sha }}" HEAD > "$RUNNER_TEMP/changed" || { echo "run=true" >> "$GITHUB_OUTPUT"; exit 0; }
+          else
+            : > "$RUNNER_TEMP/changed"
+          fi
+          run=$(CI_EVENT="$CI_EVENT" sh bin/ci-gates.sh browser < "$RUNNER_TEMP/changed")
+          echo "gate: browser $run"
+          echo "run=$run" >> "$GITHUB_OUTPUT"
       - uses: dtolnay/rust-toolchain@89b12181fb390509a0842a86cc55eeb8eb928c1d # stable
+        if: steps.gate.outputs.run == 'true'
       # master's, as the suite's (the rust job)
       - uses: Swatinem/rust-cache@63fed3e2fecf6f7b51dc6f043341b79ef82a9ae7 # v2.9.2
+        if: steps.gate.outputs.run == 'true'
         with:
           workspaces: rust
           shared-key: demo-server
           save-if: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        if: steps.gate.outputs.run == 'true'
         with:
           node-version: "22"
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: npm ci
+        if: steps.gate.outputs.run == 'true'
         working-directory: web
       - name: The browser the tests drive
+        if: steps.gate.outputs.run == 'true'
         run: npx playwright install --with-deps chromium
         working-directory: web
       # the page first, so the server built next carries it and the tests' own build
       # of it has nothing left to do
       - name: The page
+        if: steps.gate.outputs.run == 'true'
         run: npx vite build
         working-directory: web
       - name: The server and the made-up book
+        if: steps.gate.outputs.run == 'true'
         run: cargo build --locked --bin bagholder --features demo
         working-directory: rust
       # not under bin/check-test-leftovers.sh yet: the end-to-end servers' temp
       # folders are their own matter, and the browser run failed under the check (#589)
       - name: The browser tests, their part ${{ matrix.shard }} of 5
+        if: steps.gate.outputs.run == 'true'
         env:
           SHARD: ${{ matrix.shard }}
         run: npx playwright test --shard="$SHARD/5"
