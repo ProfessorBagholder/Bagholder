@@ -161,24 +161,52 @@ pub fn build_positions(inputs: &Inputs, matched: &Matched, identity: &Identity, 
 }
 
 /// The day's change of a holding (`portfolio-26`): the quote's change on the units
-/// held since the previous close, and on each lot the journal opened today the move
-/// from what it cost, as Wealthsimple's Today's return counts a position bought that
-/// day (and Schwab's and Interactive Brokers' day change); its stated change where no lot was opened today, or a lot's cost is not in
-/// the holding's currency. Today's lots count to no more units than the holding holds.
+/// held since the previous close, and on each lot opened in the session the quote's
+/// change measures, the move from what it cost, as Wealthsimple's Today's return
+/// counts a position bought that day (and Schwab's and Interactive Brokers' day
+/// change). That session is the venue's that holds the quote's time, in the venue's
+/// own zone (`bagholder_core::sessions`), so a lot bought Friday counts from its cost
+/// until Monday's open; with no venue known, the person's day. A lot's cost is its
+/// value in the holding's currency, else its stated price there × its units (a US
+/// listing bought from a CAD account); with neither, the stated change stands. Those
+/// lots count to no more units than the holding holds.
 fn moved_today(inputs: &Inputs, h: &crate::stated::Holding, lots: &[Lot]) -> (Fig<Option<Money>>, Fig<Option<Money>>) {
     let kept = (h.day_change.clone(), h.day_change_cad.clone());
-    let fresh: Vec<&Lot> = lots.iter().filter(|l| l.day == inputs.clock.today).collect();
     let (Ok(Some(change)), Ok(mark), Ok(mult)) = (&h.day_change, &h.mark, &h.multiplier) else { return kept };
     let Some(per_unit) = mark.change else { return kept };
-    if fresh.is_empty() || fresh.iter().any(|l| l.value.as_ref().map_or(true, |v| v.currency != h.currency)) {
+    let option = h.kind == InstrumentKind::OptionContract;
+    let venue = inputs.ledger.instruments.get(&h.instrument).and_then(|i| i.current_name()).and_then(|n| n.venue_mic.as_deref()).and_then(|m| bagholder_core::sessions::venue_of(m, option));
+    let quoted_at = inputs.market.quotes.get(&h.instrument).and_then(|q| q.at).unwrap_or(inputs.clock.now);
+    let session = venue.and_then(|v| bagholder_core::sessions::session_opened_by(v, quoted_at));
+    let in_session = |l: &Lot| match session {
+        Some((day, open)) => l.at.map_or(l.day >= day, |at| at >= open),
+        None => l.day == inputs.clock.today,
+    };
+    let fresh: Vec<&Lot> = lots.iter().filter(|l| in_session(l)).collect();
+    if fresh.is_empty() {
         return kept;
     }
+    // each lot's cost in the holding's currency: its value, else its stated price
+    let costs: Option<Vec<Fig<Dec>>> = fresh
+        .iter()
+        .map(|l| match &l.value {
+            Ok(v) if v.currency == h.currency => Some(Ok(v.amount.abs())),
+            _ => inputs
+                .ledger
+                .transactions
+                .get(&l.opened_by)
+                .and_then(|t| t.price)
+                .filter(|p| p.currency == h.currency)
+                .map(|p| Ok(p.amount.checked_mul(l.qty)?.checked_mul(*mult)?.abs())),
+        })
+        .collect();
+    let Some(costs) = costs else { return kept };
     let moved = (|| -> Fig<Money> {
         let before = mark.price.checked_sub(per_unit)?;
         let (mut units, mut cost) = (Dec::ZERO, Dec::ZERO);
-        for l in &fresh {
+        for (l, c) in fresh.iter().zip(costs) {
             units = units.checked_add(l.qty.checked_mul(*mult)?)?;
-            cost = cost.checked_add(l.value.clone()?.amount.abs())?;
+            cost = cost.checked_add(c?)?;
         }
         let held = h.qty.checked_mul(*mult)?;
         if units > held {
