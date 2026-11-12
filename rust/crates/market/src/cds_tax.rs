@@ -21,8 +21,11 @@ use bagholder_core::Dec;
 use serde_json::Value;
 
 /// The boxes whose amounts make up a distribution: what the form's own check
-/// figure adds to 100%. Box 30 is part of box 21, and 33 and 34 are tax paid.
+/// figure adds to 100%. Box 30 is part of box 21.
 const ALLOCATED: [&str; 8] = ["21", "49", "23", "24", "25", "26", "42", "X"];
+/// The foreign tax the fund paid: boxes 24 and 25 state the foreign income before
+/// it, the cash is after it.
+const FOREIGN_TAX: [&str; 2] = ["33", "34"];
 
 /// One filing in a list.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -414,9 +417,11 @@ pub fn form_from_layout(text: &str) -> Result<Form, String> {
 }
 
 /// Each record date's return of capital and non-cash distribution per unit. On
-/// every record date the boxes' amounts per unit must add to its total, cash plus
-/// non-cash, within a cent: a form whose percentages are of something else is set
-/// aside whole, and the ledger places the slip's box 42 instead.
+/// every record date the boxes' amounts per unit, less the foreign tax paid, must
+/// add to what was paid, cash plus non-cash, within a cent (the ledger's own
+/// identity: what is paid is the income less foreign tax, plus return of capital):
+/// a form whose percentages are of something else is set aside whole, and the
+/// ledger places the slip's box 42 instead.
 pub fn per_unit(form: &Form) -> Result<Vec<PerUnit>, String> {
     let cent = Dec::new(1, 2).map_err(|e| e.to_string())?;
     let hundred = Dec::from_int(100);
@@ -429,6 +434,11 @@ pub fn per_unit(form: &Form) -> Result<Vec<PerUnit>, String> {
         for b in ALLOCATED {
             if let Some(v) = d.boxes.get(b) {
                 sum = sum.checked_add(amount(*v)?).map_err(|e| e.to_string())?;
+            }
+        }
+        for b in FOREIGN_TAX {
+            if let Some(v) = d.boxes.get(b) {
+                sum = sum.checked_sub(amount(*v)?).map_err(|e| e.to_string())?;
             }
         }
         let whole = d.cash.checked_add(d.non_cash).map_err(|e| e.to_string())?;

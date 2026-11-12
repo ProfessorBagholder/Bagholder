@@ -144,3 +144,16 @@ fn what_a_read_found_is_kept_with_its_cusip() {
     assert_eq!(kept[0].found, read);
     assert_eq!(fund_tax::cusip_of(&conn, "ZZB:XTSE").unwrap().as_deref(), Some("000000ZZ1"));
 }
+
+/// A fund that paid foreign tax states its foreign income before the tax and pays
+/// the cash after it: its boxes, less boxes 33 and 34, add to what was paid. By
+/// hand: 40% + 66% of 0.50 is 0.53, less the 6% tax 0.50, the cash paid; its return
+/// of capital 66% of 0.50, 0.33. Without the tax taken out it would be set aside.
+#[test]
+fn foreign_tax_paid_is_taken_out_before_the_boxes_are_matched_to_the_cash() {
+    let f = workbook("made-up-foreign-tax.xls");
+    assert_eq!(cds_tax::per_unit(&f).unwrap(), vec![
+        PerUnit { record: day("2024-05-29"), return_of_capital: d("0.33"), non_cash: d("0") },
+        PerUnit { record: day("2024-11-27"), return_of_capital: d("0.33"), non_cash: d("0") },
+    ]);
+}
