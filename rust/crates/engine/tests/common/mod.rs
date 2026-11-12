@@ -139,7 +139,7 @@ pub fn build(case: &Value) -> Built {
         let currency = ccy(s(&i, "currency").unwrap_or("CAD"));
         let name = Name {
             symbol: s(&i, "symbol").unwrap_or(label).to_string(),
-            venue_mic: None,
+            venue_mic: s(&i, "mic").map(str::to_string),
             venue_name: s(&i, "venue").map(str::to_string),
             name: s(&i, "name").map(str::to_string),
             first_seen: first_day,
@@ -291,7 +291,7 @@ pub fn build(case: &Value) -> Built {
             "option" => QuoteSource::OptionChain,
             _ => QuoteSource::Listing,
         };
-        market.quotes.insert(id, Quote { price: Money::new(dec(s(&q, "price").unwrap()), currency), change: s(&q, "change").map(dec), change_pct: None, at: None, source });
+        market.quotes.insert(id, Quote { price: Money::new(dec(s(&q, "price").unwrap()), currency), change: s(&q, "change").map(dec), change_pct: None, at: s(&q, "at").map(at), source });
     }
     // the ex-dividend date a listing's quote states: {instrument: day}
     for (i, d) in obj(case, "ex_dividends") {

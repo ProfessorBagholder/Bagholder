@@ -44,7 +44,7 @@ pub fn text(data: &[u8]) -> String {
         return String::new();
     }
     if let Some(exe) = which("pdftotext") {
-        if let Some(out) = run_pdftotext(&exe, data) {
+        if let Some(out) = run_pdftotext(&exe, data, false) {
             let got = out.trim().to_string();
             if !got.is_empty() {
                 return got;
@@ -60,12 +60,30 @@ pub fn text(data: &[u8]) -> String {
     }
 }
 
+/// A PDF's text with its columns where they stand (`pdftotext -layout`), for a
+/// form whose figures sit in columns (`cds_tax`); none where the bytes are not a
+/// PDF or `pdftotext` is not installed, which the log says once a run. The built-in
+/// reader lays no page out, and draws none of the form objects a filed form keeps
+/// its figures in.
+pub fn layout_text(data: &[u8]) -> Option<String> {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    if disabled() || !data.starts_with(b"%PDF-") {
+        return None;
+    }
+    let Some(exe) = which("pdftotext") else {
+        SAID.call_once(|| bagholder_core::log::line("bagholder: a fund's tax form from 2025 on is read with pdftotext, which is not installed: those years place return of capital by the slips"));
+        return None;
+    };
+    run_pdftotext(&exe, data, true).filter(|t| !t.trim().is_empty())
+}
+
 /// `pdftotext`'s text, or None where it could not give all of it (the PDF not
 /// written to it whole, its output not read whole, thirty seconds passed), and
 /// the built-in engine reads the PDF instead.
-fn run_pdftotext(exe: &std::path::Path, data: &[u8]) -> Option<String> {
+fn run_pdftotext(exe: &std::path::Path, data: &[u8], layout: bool) -> Option<String> {
+    let args: &[&str] = if layout { &["-q", "-nopgbrk", "-layout", "-", "-"] } else { &["-q", "-nopgbrk", "-", "-"] };
     let mut child = Command::new(exe)
-        .args(["-q", "-nopgbrk", "-", "-"])
+        .args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
