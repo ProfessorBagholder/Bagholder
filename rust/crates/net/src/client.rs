@@ -590,11 +590,12 @@ fn read_chunked(conn: &mut Conn, out: &mut Capped<'_>) -> Result<(), Error> {
 /// A body read to its end, however the reply frames it, into `out`; whether the
 /// connection can be kept.
 fn read_body(conn: &mut Conn, head: &Head, out: &mut Capped<'_>) -> Result<bool, Error> {
-    // an answer of 1xx, 204 or 304 has no body, whatever its head says of one (RFC
-    // 9112 §6.3): it ends with its head, its connection kept where the host keeps it.
+    // an answer of 204 or 304 has no body, whatever its head says of one (RFC 9112
+    // §6.3): it ends with its head, its connection kept where the host keeps it.
     // Read to the close, a host that keeps the connection open would hold it until
-    // the request's timeout (Cboe's 304 to a chain asked again with its stamp)
-    if (100..200).contains(&head.status) || head.status == 204 || head.status == 304 {
+    // the request's timeout (Cboe's 304 to a chain asked again with its stamp). An
+    // interim 1xx never reaches here (`send_into`)
+    if head.status == 204 || head.status == 304 {
         return Ok(head.get("connection").map(|v| !v.to_lowercase().contains("close")).unwrap_or(true));
     }
     let chunked = head.get("transfer-encoding").map(|v| v.to_lowercase().contains("chunked")).unwrap_or(false);
@@ -943,7 +944,7 @@ fn send_into(
         // up as a failed read rather than a failed write, so the first try is
         // allowed to fail and the second always opens a fresh one.
         let mut c;
-        let head;
+        let mut head;
         let mut attempt = 0;
         loop {
             // the second attempt is always on a fresh connection: another kept one
@@ -976,6 +977,15 @@ fn send_into(
             }
         }
 
+        // an interim answer (100 Continue, 103 Early Hints, which CDNs send) is not
+        // the answer: the final one follows on the same connection, and is read
+        // (RFC 9110 §15.2). A switch of protocols is nothing a request here asks for
+        while (100..200).contains(&head.status) {
+            if head.status == 101 {
+                return Err(Error::Transport("the host switched protocols, which no request asks for".into()));
+            }
+            head = read_head(&mut c).and_then(|(raw, _)| parse_head(&raw))?;
+        }
         let redirect = (301..=308).contains(&head.status) && !once && head.get("location").is_some();
         let mut raw: Vec<u8> = Vec::new();
         let mut written: Option<u64> = None;
@@ -1253,6 +1263,65 @@ mod ceiling_tests {
         let r = request_any("GET", &format!("http://127.0.0.1:{port}/chain.json"), &[("If-Modified-Since", "Wed, 11 Nov 2026 21:40:12 GMT")], None, Duration::from_secs(5)).unwrap();
         assert_eq!((r.status, r.body.len()), (304, 0));
         assert!(started.elapsed() < Duration::from_secs(2), "the request waited {:?} for a body a 304 never has", started.elapsed());
+    }
+
+    /// A host that serves one request after another on a connection it keeps
+    /// open, each answer in its turn; and how many connections it was opened.
+    fn kept_host(answers: &'static [&'static str]) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        let opened = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let o2 = opened.clone();
+        std::thread::spawn(move || {
+            for c in l.incoming() {
+                let Ok(mut c) = c else { return };
+                o2.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                std::thread::spawn(move || {
+                    for answer in answers {
+                        // one request's head, then its answer
+                        let mut seen = Vec::new();
+                        let mut byte = [0u8; 1];
+                        while !seen.ends_with(b"\r\n\r\n") {
+                            if c.read(&mut byte).unwrap_or(0) == 0 {
+                                return;
+                            }
+                            seen.push(byte[0]);
+                        }
+                        if c.write_all(answer.as_bytes()).is_err() {
+                            return;
+                        }
+                    }
+                    // held open after the last, as a host keeps it for the next
+                    let _ = c.read(&mut [0u8; 1]);
+                });
+            }
+        });
+        (port, opened)
+    }
+
+    /// An interim answer is not the answer (RFC 9110 §15.2): behind a 103 Early
+    /// Hints, the final answer is read and returned, and the kept connection
+    /// carries the next request's own answer, never what the first left unread.
+    #[test]
+    fn an_early_hint_is_passed_over_for_the_answer_behind_it() {
+        let (port, opened) = kept_host(&[
+            "HTTP/1.1 103 Early Hints\r\nLink: </made-up.css>; rel=preload\r\n\r\nHTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nfirst",
+            "HTTP/1.1 200 OK\r\nContent-Length: 6\r\n\r\nsecond",
+        ]);
+        let url = format!("http://127.0.0.1:{port}/hinted");
+        let first = request_any("GET", &url, &[], None, Duration::from_secs(5)).unwrap();
+        assert_eq!((first.status, first.body.as_slice()), (200, b"first".as_slice()));
+        let second = request_any("GET", &url, &[], None, Duration::from_secs(5)).unwrap();
+        assert_eq!((second.status, second.body.as_slice()), (200, b"second".as_slice()));
+        assert_eq!(opened.load(std::sync::atomic::Ordering::SeqCst), 1, "the second request went on the kept connection");
+    }
+
+    /// A switch of protocols is no answer a request here asks for: an error.
+    #[test]
+    fn a_switch_of_protocols_is_an_error() {
+        let (port, _) = kept_host(&["HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n"]);
+        let Err(e) = request_any("GET", &format!("http://127.0.0.1:{port}/switch"), &[], None, Duration::from_secs(5)) else { panic!("a switch of protocols was taken as an answer") };
+        assert!(e.to_string().contains("switched protocols"), "{e}");
     }
 
     #[test]
