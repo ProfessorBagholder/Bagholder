@@ -1243,26 +1243,18 @@ mod ceiling_tests {
     }
 
     /// An answer of 304 has no body (RFC 9112 §6.3): the request ends with its head,
-    /// though the host keeps the connection open for the next one, as Cboe's does.
+    /// and the connection the host keeps open carries the next request, which gets
+    /// its own answer. Read to the close, the 304 would wait out its timeout and its
+    /// connection would not be kept.
     #[test]
     fn a_304_ends_with_its_head_on_a_connection_the_host_keeps_open() {
-        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let port = l.local_addr().unwrap().port();
-        std::thread::spawn(move || {
-            let mut open = Vec::new();
-            for c in l.incoming() {
-                let Ok(mut c) = c else { return };
-                let mut buf = [0u8; 4096];
-                let _ = c.read(&mut buf);
-                let _ = c.write_all(b"HTTP/1.1 304 Not Modified\r\nETag: \"made-up\"\r\n\r\n");
-                // held open, as a host keeps a connection for the next request
-                open.push(c);
-            }
-        });
-        let started = std::time::Instant::now();
-        let r = request_any("GET", &format!("http://127.0.0.1:{port}/chain.json"), &[("If-Modified-Since", "Wed, 11 Nov 2026 21:40:12 GMT")], None, Duration::from_secs(5)).unwrap();
+        let (port, opened) = kept_host(&["HTTP/1.1 304 Not Modified\r\nETag: \"made-up\"\r\n\r\n", "HTTP/1.1 200 OK\r\nContent-Length: 4\r\n\r\nnext"]);
+        let url = format!("http://127.0.0.1:{port}/chain.json");
+        let r = request_any("GET", &url, &[("If-Modified-Since", "Wed, 11 Nov 2026 21:40:12 GMT")], None, Duration::from_secs(2)).unwrap();
         assert_eq!((r.status, r.body.len()), (304, 0));
-        assert!(started.elapsed() < Duration::from_secs(2), "the request waited {:?} for a body a 304 never has", started.elapsed());
+        let next = request_any("GET", &url, &[], None, Duration::from_secs(2)).unwrap();
+        assert_eq!((next.status, next.body.as_slice()), (200, b"next".as_slice()));
+        assert_eq!(opened.load(std::sync::atomic::Ordering::SeqCst), 1, "the next request went on the kept connection");
     }
 
     /// A host that serves one request after another on a connection it keeps
