@@ -178,7 +178,7 @@ export type OptionRow = {
  */
 occ: string, 
 /**
- * As the card titles it opened (`KO Dec 11 66 put`).
+ * As the card titles it opened (`KO Dec 11 66 put`, `KO Jan 15 '27 66 put`).
  */
 title: string, strike: Dec, 
 /**
@@ -209,7 +209,7 @@ export type OptionExpiry = {
  */
 day: string, 
 /**
- * As its button says it (`Dec 11`).
+ * As its button says it: `Dec 11`, and `Jan 15 '27` in a later year.
  */
 label: string, puts: OptionSide, calls: OptionSide, };
 

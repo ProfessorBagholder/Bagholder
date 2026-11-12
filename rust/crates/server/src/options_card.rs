@@ -48,7 +48,7 @@ pub const HELD: Duration = Duration::from_secs(15 * 60);
 pub struct OptionRow {
     /// Its OCC symbol, as Cboe states it (`KO261211P00066000`).
     pub occ: String,
-    /// As the card titles it opened (`KO Dec 11 66 put`).
+    /// As the card titles it opened (`KO Dec 11 66 put`, `KO Jan 15 '27 66 put`).
     pub title: String,
     pub strike: crate::wire::Dec,
     /// What one contract puts in play: the strike × 100 for a put, 100 × the
@@ -79,7 +79,7 @@ pub struct OptionSide {
 pub struct OptionExpiry {
     /// Its day, `YYYY-MM-DD`.
     pub day: String,
-    /// As its button says it (`Dec 11`).
+    /// As its button says it: `Dec 11`, and `Jan 15 '27` in a later year.
     pub label: String,
     pub puts: OptionSide,
     pub calls: OptionSide,
@@ -171,6 +171,16 @@ fn day_label(d: Date) -> String {
     format!("{} {}", MONTHS[(d.month() - 1) as usize], d.day())
 }
 
+/// An expiry as the card names it: `Dec 11` this year, and with its year in the
+/// app's short form in a later one (`Jan 15 '27`, `SPEC.md` formatting-10).
+fn expiry_label(d: Date, today: Date) -> String {
+    if d.year() > today.year() {
+        format!("{} '{:02}", day_label(d), d.year() % 100)
+    } else {
+        day_label(d)
+    }
+}
+
 /// A strike as the card writes it: whole, or to two decimals (`66`, `62.50`).
 fn strike_text(k: Dec) -> String {
     if k.round(0, Rounding::HalfEven) == k {
@@ -195,7 +205,7 @@ fn on_the_listing(c: &ChainContract, root: &str) -> bool {
     c.occ.len() > 15 && c.occ[..c.occ.len() - 15].eq_ignore_ascii_case(root)
 }
 
-fn row(symbol: &str, c: &ChainContract, price: Option<Dec>) -> Result<OptionRow, String> {
+fn row(symbol: &str, c: &ChainContract, price: Option<Dec>, today: Date) -> Result<OptionRow, String> {
     let e = |e: DecError| format!("{}'s figures: {e}", c.occ);
     let premium = if c.bid.is_positive() { Some(c.bid.checked_mul(hundred()).map_err(e)?) } else { None };
     let cost = match c.right {
@@ -206,12 +216,12 @@ fn row(symbol: &str, c: &ChainContract, price: Option<Dec>) -> Result<OptionRow,
         (Some(p), Some(k)) if k.is_positive() => Some(p.mul_div_rounded(hundred(), k, 2, Rounding::HalfUp).map_err(e)?),
         _ => None,
     };
-    Ok(OptionRow { occ: c.occ.clone(), title: title(symbol, c), strike: c.strike.into(), cost: cost.map(Into::into), premium: premium.map(Into::into), yield_pct: yield_pct.map(Into::into) })
+    Ok(OptionRow { occ: c.occ.clone(), title: title(symbol, c, today), strike: c.strike.into(), cost: cost.map(Into::into), premium: premium.map(Into::into), yield_pct: yield_pct.map(Into::into) })
 }
 
-fn side(symbol: &str, mut list: Vec<&ChainContract>, price: Option<Dec>) -> Result<OptionSide, String> {
+fn side(symbol: &str, mut list: Vec<&ChainContract>, price: Option<Dec>, today: Date) -> Result<OptionSide, String> {
     list.sort_by(|a, b| b.strike.cmp(&a.strike));
-    let rows = list.iter().map(|c| row(symbol, c, price)).collect::<Result<Vec<_>, _>>()?;
+    let rows = list.iter().map(|c| row(symbol, c, price, today)).collect::<Result<Vec<_>, _>>()?;
     let mut near: Option<(usize, Dec)> = None;
     if let Some(p) = price {
         for (i, c) in list.iter().enumerate() {
@@ -224,11 +234,11 @@ fn side(symbol: &str, mut list: Vec<&ChainContract>, price: Option<Dec>) -> Resu
     Ok(OptionSide { rows, near: near.map(|(i, _)| i) })
 }
 
-/// The card for one listing: each expiry the chain lists, nearest first, its
-/// puts and its calls, each figured on the listing's current price where it is
-/// read. A contract on something other than 100 of the listing's shares is not
-/// listed.
-pub fn card(chain: &Chain, symbol: &str, price: Option<Dec>) -> Result<Vec<OptionExpiry>, String> {
+/// The card for one listing on `today`: each expiry the chain lists, nearest
+/// first, its puts and its calls, each figured on the listing's current price
+/// where it is read. A contract on something other than 100 of the listing's
+/// shares is not listed.
+pub fn card(chain: &Chain, symbol: &str, price: Option<Dec>, today: Date) -> Result<Vec<OptionExpiry>, String> {
     let root = root_of(symbol);
     let mut by: BTreeMap<Date, (Vec<&ChainContract>, Vec<&ChainContract>)> = BTreeMap::new();
     for c in chain.contracts.iter().filter(|c| on_the_listing(c, &root)) {
@@ -238,16 +248,16 @@ pub fn card(chain: &Chain, symbol: &str, price: Option<Dec>) -> Result<Vec<Optio
             OptionRight::Call => e.1.push(c),
         }
     }
-    by.into_iter().map(|(day, (puts, calls))| Ok(OptionExpiry { day: day.to_string(), label: day_label(day), puts: side(symbol, puts, price)?, calls: side(symbol, calls, price)? })).collect()
+    by.into_iter().map(|(day, (puts, calls))| Ok(OptionExpiry { day: day.to_string(), label: expiry_label(day, today), puts: side(symbol, puts, price, today)?, calls: side(symbol, calls, price, today)? })).collect()
 }
 
-/// A contract's title: `KO Dec 11 66 put`.
-pub fn title(symbol: &str, c: &ChainContract) -> String {
+/// A contract's title on `today`: `KO Dec 11 66 put`, `KO Jan 15 '27 66 put`.
+pub fn title(symbol: &str, c: &ChainContract, today: Date) -> String {
     let right = match c.right {
         OptionRight::Put => "put",
         OptionRight::Call => "call",
     };
-    format!("{} {} {} {right}", symbol.to_ascii_uppercase(), day_label(c.expiry), strike_text(c.strike))
+    format!("{} {} {} {right}", symbol.to_ascii_uppercase(), expiry_label(c.expiry, today), strike_text(c.strike))
 }
 
 /// A contract's chart: each past day's close × 100, and today's Premium last.
@@ -331,6 +341,11 @@ fn stand_in() -> Option<String> {
     std::env::var("BAGHOLDER_OPTIONS_BASE").ok().map(|b| b.trim_end_matches('/').to_string()).filter(|b| !b.is_empty())
 }
 
+/// Today in New York, where US options trade: what makes an expiry's year a later one.
+fn market_today() -> Date {
+    TimeZone::get("America/New_York").map(|z| Timestamp::now().to_zoned(z).date()).unwrap_or_else(|_| Timestamp::now().to_zoned(TimeZone::UTC).date())
+}
+
 /// The listing's current price, as its page shows it: the book's quote where the
 /// book holds it (a holding's page), else the glance a listing's own page reads;
 /// none while neither is read.
@@ -358,7 +373,7 @@ pub fn options_payload(app: &Arc<App>, key: &ListingKey, exchange: &str, currenc
         Ok(None) => return none(),
         Err(e) => return OptionsAnswer::Refused(OkOr::err(e)),
     };
-    match card(&chain, key.symbol(), price_of(app, key, exchange, currency)) {
+    match card(&chain, key.symbol(), price_of(app, key, exchange, currency), market_today()) {
         Ok(expiries) => OptionsAnswer::Ok { ok: true, expiries },
         Err(e) => OptionsAnswer::Refused(OkOr::err(e)),
     }
@@ -380,7 +395,7 @@ pub fn contract_payload(app: &Arc<App>, key: &ListingKey, exchange: &str, curren
     let Some(c) = chain.contracts.iter().find(|c| c.occ == occ && on_the_listing(c, &root_of(key.symbol()))) else {
         return refused(format!("{occ} is not one of {}'s contracts the chain lists", key.symbol()));
     };
-    let r = match row(key.symbol(), c, price_of(app, key, exchange, currency)) {
+    let r = match row(key.symbol(), c, price_of(app, key, exchange, currency), market_today()) {
         Ok(r) => r,
         Err(e) => return refused(e),
     };
@@ -418,6 +433,11 @@ mod tests {
         Dec::parse(s).unwrap()
     }
 
+    /// The day the recorded chain was made.
+    fn today() -> Date {
+        "2026-11-11".parse().unwrap()
+    }
+
     const CHAIN: &str = include_str!("../tests/replies/options-card/chain-KO.json");
     const CHART: &str = include_str!("../tests/replies/options-card/chart-KO261211P00066000.json");
 
@@ -451,7 +471,7 @@ mod tests {
     /// over the other, in percent to two decimals.
     #[test]
     fn a_contract_s_cost_premium_and_yield_are_its_strike_or_price_its_bid_and_their_ratio() {
-        let card = card(&chain(), "KO", Some(d("68.42"))).unwrap();
+        let card = card(&chain(), "KO", Some(d("68.42")), today()).unwrap();
         let dec11 = expiry(&card, "2026-12-11");
         // bid 0.24: 24 / 6,600 = 0.3636…%
         assert_eq!(figures(of(&dec11.puts, "66")), some("6600", "24", "0.36"));
@@ -469,7 +489,7 @@ mod tests {
     /// No bid, or a bid of zero, is no Premium and no Yield; the Cost stands.
     #[test]
     fn a_contract_with_no_bid_has_no_premium_and_no_yield() {
-        let card = card(&chain(), "KO", Some(d("68.42"))).unwrap();
+        let card = card(&chain(), "KO", Some(d("68.42")), today()).unwrap();
         let nov13 = expiry(&card, "2026-11-13");
         assert_eq!(figures(of(&nov13.puts, "60")), (Some(d("6000").to_text()), None, None));
         assert_eq!(figures(of(&nov13.calls, "76")), (Some(d("6842").to_text()), None, None));
@@ -479,7 +499,7 @@ mod tests {
     /// no Cost and no Yield, and the card opens on no row.
     #[test]
     fn a_call_has_no_cost_while_the_listing_s_price_is_not_read() {
-        let card = card(&chain(), "KO", None).unwrap();
+        let card = card(&chain(), "KO", None, today()).unwrap();
         let dec11 = expiry(&card, "2026-12-11");
         assert_eq!(figures(of(&dec11.calls, "66")), (None, Some(d("266").to_text()), None));
         assert_eq!(figures(of(&dec11.puts, "66")), some("6600", "24", "0.36"));
@@ -492,7 +512,7 @@ mod tests {
     fn an_adjusted_contract_is_not_listed() {
         let chain = chain();
         assert!(chain.contracts.iter().any(|c| c.occ.starts_with("KO1")), "the recorded chain lists one");
-        let card = card(&chain, "KO", Some(d("68.42"))).unwrap();
+        let card = card(&chain, "KO", Some(d("68.42")), today()).unwrap();
         let occs: Vec<&str> = card.iter().flat_map(|e| e.puts.rows.iter().chain(e.calls.rows.iter())).map(|r| r.occ.as_str()).collect();
         assert!(!occs.is_empty() && occs.iter().all(|o| !o.starts_with("KO1")));
         // every other contract is
@@ -503,8 +523,9 @@ mod tests {
     /// highest first; the card opens on the strike nearest the price.
     #[test]
     fn expiries_run_nearest_first_and_strikes_highest_first() {
-        let card = card(&chain(), "KO", Some(d("68.42"))).unwrap();
-        assert_eq!(card.iter().map(|e| e.label.as_str()).collect::<Vec<_>>(), vec!["Nov 13", "Nov 20", "Dec 11", "Jan 15"]);
+        let card = card(&chain(), "KO", Some(d("68.42")), today()).unwrap();
+        // this year's by month and day; a later year's with its year (`SPEC.md` formatting-10)
+        assert_eq!(card.iter().map(|e| e.label.as_str()).collect::<Vec<_>>(), vec!["Nov 13", "Nov 20", "Dec 11", "Jan 15 '27"]);
         let dec11 = expiry(&card, "2026-12-11");
         let strikes: Vec<Dec> = dec11.puts.rows.iter().map(|r| r.strike.0).collect();
         assert!(strikes.windows(2).all(|w| w[0] > w[1]), "{strikes:?}");
@@ -517,9 +538,13 @@ mod tests {
     fn a_contract_s_title_names_its_listing_expiry_strike_and_side() {
         let chain = chain();
         let find = |occ: &str| chain.contracts.iter().find(|c| c.occ == occ).unwrap();
-        assert_eq!(title("KO", find("KO261211P00066000")), "KO Dec 11 66 put");
-        assert_eq!(title("KO", find("KO261211C00062500")), "KO Dec 11 62.50 call");
-        assert_eq!(title("ko", find("KO270115P00072500")), "KO Jan 15 72.50 put");
+        assert_eq!(title("KO", find("KO261211P00066000"), today()), "KO Dec 11 66 put");
+        assert_eq!(title("KO", find("KO261211C00062500"), today()), "KO Dec 11 62.50 call");
+        assert_eq!(title("ko", find("KO270115P00072500"), today()), "KO Jan 15 '27 72.50 put");
+        // seen in the expiry's own year, it is this year's
+        let new_year: Date = "2027-01-04".parse().unwrap();
+        assert_eq!(title("KO", find("KO270115P00072500"), new_year), "KO Jan 15 72.50 put");
+        assert_eq!(card(&chain, "KO", None, new_year).unwrap().iter().map(|e| e.label.as_str()).collect::<Vec<_>>(), vec!["Nov 13", "Nov 20", "Dec 11", "Jan 15"]);
     }
 
     /// The chart: each past day's close × 100 as Yahoo states it (a day with no
@@ -717,7 +742,7 @@ mod tests {
     /// A row is sent as the card reads it, `yield` by that name.
     #[test]
     fn a_row_is_sent_with_its_yield_by_that_name() {
-        let card = card(&chain(), "KO", Some(d("68.42"))).unwrap();
+        let card = card(&chain(), "KO", Some(d("68.42")), today()).unwrap();
         let row = of(&expiry(&card, "2026-12-11").puts, "66");
         assert_eq!(serde_json::to_value(row).unwrap(), json!({"occ": "KO261211P00066000", "title": "KO Dec 11 66 put", "strike": "66", "cost": "6600", "premium": "24", "yield": "0.36"}));
     }

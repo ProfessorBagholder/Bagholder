@@ -20,7 +20,9 @@ test("a US listing's card: Puts first, its expiries, a row a strike, and a row o
   expect(order.indexOf('options')).toBeLessThan(order.indexOf('disclosures'))
   await expect(card(page).getByRole('heading', { name: 'Options' })).toBeVisible()
   await expect(card(page).getByRole('button', { name: 'Puts' })).toHaveAttribute('aria-pressed', 'true')
-  await expect(card(page).getByRole('group', { name: 'Expiry' }).getByRole('button')).toHaveText(['Nov 13', 'Nov 20', 'Dec 11', 'Jan 15'])
+  // an expiry in a later year than today's carries its year (formatting-10)
+  const jan = new Date().getFullYear() < 2027 ? "Jan 15 '27" : 'Jan 15'
+  await expect(card(page).getByRole('group', { name: 'Expiry' }).getByRole('button')).toHaveText(['Nov 13', 'Nov 20', 'Dec 11', jan])
   await expect(card(page).locator('.oc-head span')).toHaveText(['Strike', 'Cost', 'Premium', 'Yield'])
   await card(page).getByRole('button', { name: 'Dec 11' }).click()
   const puts = await rows(page)

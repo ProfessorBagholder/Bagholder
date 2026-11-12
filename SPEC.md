@@ -655,7 +655,7 @@
 <a id="markets-19"></a>A tile a card folds into `Other (N)` is several listings and opens none.
 
 <a id="markets-123"></a>**Options.** A card titled `Options` on a listing's page, directly under the price chart and before short interest and disclosures, for a US listing Cboe lists options for (market-data-9). Any other listing has no card at all.
-<a id="markets-124"></a>`Puts · Calls`, Puts first; then one button per expiry the chain lists, nearest first, labelled by its month and day (`Dec 11`).
+<a id="markets-124"></a>`Puts · Calls`, Puts first; then one button per expiry the chain lists, nearest first, labelled by its month and day (`Dec 11`), and by its year too in the app's short form where it falls in a later year than today's (`Jan 15 '27`, formatting-10). A contract's title names its expiry the same way.
 <a id="markets-125"></a>A table with four columns, exactly: `Strike`, `Cost`, `Premium`, `Yield`. One row per strike the chain lists for that expiry and side, highest first. The list scrolls inside the card at 436 px (the News card's cap), opened with the strike nearest the listing's price in view.
 <a id="markets-126"></a>The figures, for one contract: the Premium is the bid × 100; the Cost is the strike × 100 for a put, and 100 × the listing's current price for a call; the Yield is the Premium over the Cost, as a percent to two decimals. In dollars, whole (`$6,600`, `$49`, `0.74%`). A contract with no bid, or a bid of zero, reads `—` for its Premium and Yield; a call while the listing's price is not read reads `—` for its Cost and Yield.
 <a id="markets-127"></a>A contract whose deliverable is not 100 shares (an adjusted contract, whose OCC root is not the listing's symbol) is not listed.
