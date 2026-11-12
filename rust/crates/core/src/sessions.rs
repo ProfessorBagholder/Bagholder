@@ -122,6 +122,24 @@ pub fn in_session(v: Venue, at: Timestamp) -> Option<bool> {
     Some(session_on(&c, &zone, date)?.is_some_and(|(open, close)| at >= open && at < close))
 }
 
+/// The venue's latest session to have opened at or before `at`, its day and its
+/// open: the session a quote stamped `at` states the change of. None past what the
+/// exchange has published.
+pub fn session_opened_by(v: Venue, at: Timestamp) -> Option<(Date, Timestamp)> {
+    let c = calendar(v);
+    let zone = TimeZone::get(c.zone).ok()?;
+    let mut date = at.to_zoned(zone.clone()).date();
+    for _ in 0..LOOK {
+        if let Some((open, _)) = session_on(&c, &zone, date)? {
+            if open <= at {
+                return Some((date, open));
+            }
+        }
+        date = date.yesterday().ok()?;
+    }
+    None
+}
+
 /// When the venue's session next opens after `at`; none where that is past what the
 /// exchange has published.
 pub fn next_open(v: Venue, at: Timestamp) -> Option<Timestamp> {

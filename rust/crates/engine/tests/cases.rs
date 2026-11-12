@@ -242,6 +242,16 @@ fn run(path: &Path) -> Vec<String> {
             if let Some(v) = want.get("market_cad") {
                 c.money(&w("market_cad"), v, &p.market_cad);
             }
+            // the day's change, where the quote states one
+            for (k, f) in [("day_change", &p.day_change), ("day_change_cad", &p.day_change_cad)] {
+                if let Some(v) = want.get(k) {
+                    match f {
+                        Ok(None) => c.fail(format!("{}: expected {v}, got none", w(k))),
+                        Ok(Some(m)) => c.money(&w(k), v, &Ok(*m)),
+                        Err(g) => c.money(&w(k), v, &Err(g.clone())),
+                    }
+                }
+            }
             if let Some(v) = want.get("gaps") {
                 c.words(&w("gaps"), v, gaps_words(&p.gaps));
             }

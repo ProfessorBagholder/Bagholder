@@ -260,10 +260,23 @@ fn ratio(d: bagholder_core::Dec) -> f64 {
     d.to_f64()
 }
 
+/// A holding's day change as a fraction of what it was worth at the day's start: its
+/// units held overnight at the previous close, those bought today at their cost
+/// (`portfolio-26`); the quote's own percent where the holding states no change.
+pub(crate) fn day_change_ratio(direction: Direction, day_change: &bagholder_engine::gap::Fig<Option<Money>>, market: &bagholder_engine::gap::Fig<Money>, quote_pct: Option<bagholder_core::Dec>) -> Option<f64> {
+    match (day_change, market) {
+        (Ok(Some(d)), Ok(m)) => {
+            let before = if direction == Direction::Short { m.amount.checked_add(d.amount) } else { m.amount.checked_sub(d.amount) };
+            before.ok().filter(|b| !b.is_zero()).map(|b| ratio(d.amount) / ratio(b))
+        }
+        _ => quote_pct.map(|c| ratio(c) / 100.0),
+    }
+}
+
 pub(crate) fn position(inputs: &Inputs, names: &Names, p: &PositionFig, trade: String) -> Position {
     let s = shown(inputs, p.instrument);
     let last = Fig::of(&p.mark, |m| Dec(m.price));
-    let percent_change = p.mark.as_ref().ok().and_then(|m| m.change_pct).map(|c| ratio(c) / 100.0);
+    let percent_change = day_change_ratio(p.direction, &p.day_change, &p.market, p.mark.as_ref().ok().and_then(|m| m.change_pct));
     Position {
         id: position_id(p),
         trade,
@@ -1181,6 +1194,26 @@ mod tests {
     /// The document built from a real month of one account: every list's rows
     /// told apart by their ids, every open trade naming its holding, every
     /// holding its trade.
+    /// A holding's percent is its own day's change over what it was worth at the
+    /// day's start: the quote's percent for units all held overnight, and a loss for
+    /// units bought today above where they now trade, whatever the quote's percent.
+    #[test]
+    fn a_holdings_percent_is_its_own_day_over_its_worth_at_the_start() {
+        let d = |s: &str| bagholder_core::Dec::parse(s).unwrap();
+        let cad = |s: &str| Money::new(d(s), bagholder_core::Currency::CAD);
+        // 100 held overnight at 19.90, now 20.50: +60.00 over 1,990.00, the quote's 3.02%
+        let r = day_change_ratio(Direction::Long, &Ok(Some(cad("60.00"))), &Ok(cad("2050.00")), Some(d("3.02"))).unwrap();
+        assert!((r - 60.0 / 1990.0).abs() < 1e-9);
+        // 100 bought today at 20.55, now 20.50: -5.00 over 2,055.00, not the quote's +3.02%
+        let r = day_change_ratio(Direction::Long, &Ok(Some(cad("-5.00"))), &Ok(cad("2050.00")), Some(d("3.02"))).unwrap();
+        assert!((r + 5.0 / 2055.0).abs() < 1e-9);
+        // a short gains as the price falls: 100 short from 19.90 to 20.50 lost 60.00 of 1,990.00
+        let r = day_change_ratio(Direction::Short, &Ok(Some(cad("-60.00"))), &Ok(cad("2050.00")), None).unwrap();
+        assert!((r + 60.0 / 1990.0).abs() < 1e-9);
+        // no change stated: the quote's own percent
+        assert_eq!(day_change_ratio(Direction::Long, &Ok(None), &Ok(cad("2050.00")), Some(d("3.02"))), Some(0.0302));
+    }
+
     #[test]
     fn the_document_from_a_real_month_names_every_row_by_its_id() {
         let _g = crate::tests_common::guard();
