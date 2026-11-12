@@ -36,7 +36,9 @@ fn wanted(inputs: &bagholder_engine::input::Inputs) -> Vec<Wanted> {
         if !canadian {
             continue;
         }
-        let listing = format!("{}:{}", n.symbol, n.venue_mic.clone().unwrap_or_default());
+        // kept under the listing's own key, as every market-cache table is
+        let Ok(key) = bagholder_core::ListingKey::on(&n.symbol, n.venue_mic.as_deref().unwrap_or("")) else { continue };
+        let listing = key.to_string();
         let w = out.entry(listing.clone()).or_insert_with(|| Wanted { listing, name: n.name.clone().unwrap_or_else(|| n.symbol.clone()), symbol: n.symbol.clone(), years: BTreeSet::new() });
         w.years.insert(t.trade_date.year());
     }

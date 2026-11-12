@@ -80,6 +80,9 @@ pub const CACHE_TABLES: &[(&str, Place)] = &[
     ("read_failures", Place::Of(Kind::Market)),
     // the Canadian index's sectors, each asked again a month on (migration 10)
     ("universe_sectors", Place::Of(Kind::Market)),
+    // each listing's tax form for a year as its issuer filed it with CDS, read again
+    // when due (migration 11)
+    ("fund_tax_forms", Place::Of(Kind::Market)),
     // the tickers the filings were kept under before migration 6, for carrying the
     // book's told marks once
     ("meta", Place::Meta),
