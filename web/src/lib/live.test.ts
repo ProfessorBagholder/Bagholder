@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { applyOps, isUpdate, numbering, reconcile, whenFree, type Op } from './live.svelte'
+import { applyOps, isUpdate, keptIn, numbering, reconcile, watchDoc, whenFree, type Holder, type Op } from './live.svelte'
 import { ROW_KEYS } from './generated/keys'
 
 // The page holds each entity as one object for as long as the entity lives, and a
@@ -182,3 +182,42 @@ describe('waiting for a dialog to close', () => {
   })
 })
 
+
+describe('a document taken over by the screen that replaces its own', () => {
+  // the same address opened again mounts the screen anew: its watch of a key the page
+  // never stopped following starts from what the page holds, which is what the server,
+  // never told the key went, sends its changes against
+  it('starts from what the page holds of it, in the same moment, under the same parameters', () => {
+    const first: Holder<{ rows: string[] }> = { data: null }
+    const stop = watchDoc('options:symbol=KO', {}, first)
+    first.data = { rows: ['a'] }
+    first.v = '7'
+    stop()
+    let told = 0
+    const second: Holder<{ rows: string[] }> = { data: null }
+    const stopSecond = watchDoc('options:symbol=KO', {}, second, () => told++)
+    expect(second.data).toEqual({ rows: ['a'] })
+    expect(second.data).not.toBe(first.data)
+    expect(told).toBe(1)
+    expect(second.v).toBe('7')
+    stopSecond()
+  })
+
+  it('starts empty once the page has said it let the key go, or under other parameters', async () => {
+    const first: Holder<{ rows: string[] }> = { data: null }
+    const stop = watchDoc('options:symbol=PEP', {}, first)
+    first.data = { rows: ['a'] }
+    stop()
+    const other: Holder<{ rows: string[] }> = { data: null }
+    const stopOther = watchDoc('options:symbol=PEP', { filters: 1 }, other)
+    expect(other.data).toBeNull()
+    stopOther()
+    // the page says what it shows once what it draws from the browser is in
+    await keptIn
+    await new Promise((r) => setTimeout(r, 0))
+    const later: Holder<{ rows: string[] }> = { data: null }
+    const stopLater = watchDoc('options:symbol=PEP', {}, later)
+    expect(later.data).toBeNull()
+    stopLater()
+  })
+})

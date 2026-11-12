@@ -35,6 +35,7 @@
   import EventEntry from './EventEntry.svelte'
   import ShortInterest from './trade/ShortInterest.svelte'
   import Disclosures from './trade/Disclosures.svelte'
+  import Options from './trade/Options.svelte'
 
   // `asOf`: the past day a holding opened from the Portfolio is as of, if any
   let { trade, asOf = null }: { trade: Trade; asOf?: string | null } = $props()
@@ -358,6 +359,9 @@
       </div>
     {/if}
   </div>
+
+  <!-- a listing's options, on the listing's page and a holding's (SPEC.md markets-123) -->
+  {#if (trade.listing || trade.holding) && trade.kind === 'Shares'}<Options {trade} />{/if}
 
   {#if !trade.listing}
     <!-- facts + executions | thesis/grade/tags -->

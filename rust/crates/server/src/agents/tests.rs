@@ -1579,6 +1579,8 @@ fn each_page_read_answers_as_the_page() {
         ("filing-text", "source=SEDAR%2B&id=sedar:1".into(), Box::new(|| page.page("/api/filings/text", &at(&[("source", "SEDAR+"), ("id", "sedar:1")])))),
         ("short-interest", format!("{listing}&trend=true"), Box::new(|| page.page("/api/shorts", &at(&[("symbol", &symbol), ("exchange", &exchange), ("trend", "1")])))),
         ("short-interest-feed", String::new(), Box::new(|| page.page("/api/shorts/feed", &[]))),
+        ("options", listing.clone(), Box::new(|| page.page("/api/options", &at(&[("symbol", &symbol), ("exchange", &exchange)])))),
+        ("option-contract", format!("{listing}&occ=KO261211P00066000"), Box::new(|| page.page("/api/options/contract", &at(&[("symbol", &symbol), ("exchange", &exchange), ("occ", "KO261211P00066000")])))),
         ("heatmap", "universe=holdings&size=equal".into(), Box::new(|| page.view("heatmap", json!({ "universe": "holdings", "size": "equal" })))),
         ("fear-greed", "index=stocks".into(), Box::new(|| page.page("/api/fear", &at(&[("index", "stocks")])))),
         ("price-history", format!("{listing}&from=2026-01-01&to=2026-02-01&tf=1D"), Box::new(|| page.page("/api/history", &at(&[("symbol", &symbol), ("exchange", &exchange), ("from", "2026-01-01"), ("to", "2026-02-01"), ("tf", "1D")])))),
@@ -2164,7 +2166,7 @@ fn a_tunnel_refused_for_a_clash_in_tailscale_s_settings_is_started_again() {
 #[test]
 fn the_sign_in_page_says_everything_an_agent_reads() {
     // what each tool reads, in the words the sign-in page uses
-    const READS: [(&str, &str); 30] = [
+    const READS: [(&str, &str); 32] = [
         ("trades", "trades"),
         ("trade", "trades"),
         ("positions", "holdings"),
@@ -2183,6 +2185,8 @@ fn the_sign_in_page_says_everything_an_agent_reads() {
         ("filing_text", "disclosures"),
         ("short_interest", "short interest"),
         ("short_interest_feed", "short interest"),
+        ("options", "quotes"),
+        ("option_contract", "quotes"),
         ("heatmap", "charts"),
         ("fear_greed", "market gauges"),
         ("price_history", "charts"),

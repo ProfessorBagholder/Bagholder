@@ -39,6 +39,7 @@ mod market_context;
 mod mcp;
 mod login;
 mod notify;
+mod options_card;
 mod orders;
 mod session;
 mod status;

@@ -453,7 +453,7 @@ fn test_a_checkout_builds_in_the_rust_workspace_and_pulls_at_the_repository_root
 /// not here fails the build: a new one is either replaced by waiting for the thing
 /// itself (`events::park_until`, a deadline that is known) or argued for in
 /// here, with the reason it stays: this list is the one place timers are argued for.
-const TIMED_WAITS: [(&str, usize, &str); 24] = [
+const TIMED_WAITS: [(&str, usize, &str); 25] = [
     ("market/src/localmodel.rs", 2, "a child process coming up: it has no readiness signal"),
     ("market/src/pdftext.rs", 1, "a child process with a deadline: std has no wait with one"),
     ("net/src/client.rs", 1, "a test's stand-in peer that answers a byte at a time, slower than the fetch is given, to show the fetch ends at its deadline"),
@@ -463,7 +463,7 @@ const TIMED_WAITS: [(&str, usize, &str); 24] = [
     ("server/src/agents/tunnel.rs", 1, "a way's setup command (Cloudflare's sign-in and tunnel, ngrok's authtoken, unpacking a program Bagholder installs) with a deadline: std has no wait with one"),
     ("server/src/app.rs", 4, "`wait` itself, measured on the wall clock (`Wall`) so a deadline a sleeping machine passed is met on waking, looking at that clock once a minute as cron does; three in its test"),
     ("server/src/broker_reads.rs", 1, "Wealthsimple's reads: until the next pull window (weekdays 2 PM Mountain), the next balances read while a page is open, or a failed read's rest ending"),
-    ("server/src/docs.rs", 1, "a ticket's quote, every five seconds while a page shows that ticket and not a moment longer: Wealthsimple offers no quote push"),
+    ("server/src/docs.rs", 2, "a ticket's quote, every five seconds while a page shows that ticket and not a moment longer: Wealthsimple offers no quote push; a listing's Options card, its chain read every fifteen minutes while a page shows it (brief 83), looked at every five seconds so a card no longer shown is let go and one shown again is read again: Cboe offers no push"),
     ("server/src/due.rs", 1, "the figure path's reads: until the next known deadline (the day turning in the person's zone, the Bank's 16:30, a close settling, a payer's window, a source's rest ending, a minute for quotes while the app runs, and with no page open a quiet market's next open or `QUIET_RECHECK`, each a deadline its own source or calendar states)"),
     ("server/src/events.rs", 7, "`park_until_or` itself, the 40 ms gather; four in its tests (the day turning is the scheduler's, `due.rs`; signals that never stop, bounded so the old gathering fails rather than hangs)"),
     ("server/src/feeds.rs", 11, "outside sources that offer no push, each only while wanted; known deadlines; the market universes kept fresh every half hour while the app runs (the owner, 2026-11-02)"),
@@ -473,6 +473,7 @@ const TIMED_WAITS: [(&str, usize, &str); 24] = [
     ("server/src/http/stream.rs", 1, "the event stream's keep-alive comment, every fifteen seconds while it is idle, so a connection that died is noticed: the transport's, not a poll"),
     ("server/src/login.rs", 8, "the sign-in browser: frames and a DevTools socket, only during a sign-in"),
     ("server/src/notify.rs", 4, "its stream's heartbeat (folded into /api/events in stage 6, with the page's structure); three in its tests"),
+    ("server/src/options_card.rs", 1, "its test's look for the card's loop to have read and to have let go, every 20 ms for at most twenty seconds: the loop says neither to anyone but the page's stream"),
     ("server/src/orders/brackets.rs", 1, "the bracket engine, parked until a bracket is live: a stop's five-second cadence (SPEC §6)"),
     ("server/src/orders/readback.rs", 1, "Wealthsimple offers no order push: read only while an order is live or shown"),
     ("server/src/orders/ticket.rs", 2, "a ticket's sale waits on Wealthsimple confirming a bracket's exit cancelled, and on the sale's own answer, a second at a time for at most thirty: Wealthsimple pushes neither"),
