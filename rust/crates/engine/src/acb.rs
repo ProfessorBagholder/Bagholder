@@ -13,7 +13,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use bagholder_core::account::{AccountType, Registration};
 use bagholder_core::sessions::Venue;
-use bagholder_core::jiff::civil::{Date, Weekday};
+use bagholder_core::jiff::civil::Date;
 use bagholder_core::transaction::{Kind, Transaction};
 use bagholder_core::{AccountId, Currency, Dec, DecError, InstrumentId, Money, Rounding, TransactionId};
 
@@ -169,6 +169,9 @@ pub enum Missing {
     Units(TransactionId),
     /// An earlier year is not complete, and this year's cost carries it.
     EarlierYear(i16),
+    /// A row states no settlement, and the app holds no settlement calendar of
+    /// its listing's market for that year.
+    Calendar(i16),
     /// A figure too large to state.
     Arithmetic,
 }
@@ -202,7 +205,10 @@ impl Holding {
     }
 }
 
-/// T+1 from these trade dates, T+2 before (`tax-cost-of-an-etf-2`).
+/// T+2 from this trade date in both markets, T+3 before (`tax-cost-of-an-etf-2`).
+const T_PLUS_TWO_FROM: Date = Date::constant(2017, 9, 5);
+
+/// T+1 from these trade dates (`tax-cost-of-an-etf-2`).
 fn t_plus_one_from(listed: Listed) -> Date {
     match listed {
         Listed::Canada => Date::constant(2024, 5, 27),
@@ -214,30 +220,32 @@ fn t_plus_one_from(listed: Listed) -> Date {
 const PERIOD_DAYS: i64 = 30;
 
 /// A row's settlement: as the row states it, else its trade date plus the
-/// business days of its time, on its venue's calendar as the app holds it
-/// (`bagholder_core::sessions`); before the years that calendar holds, weekdays
-/// other than the Bank of Canada's holidays (`tax-cost-of-an-etf-2`).
-pub fn settlement(t: &Transaction, listed: Listed, venue: Option<Venue>, holidays: &BTreeSet<Date>) -> Date {
+/// business days of its time, counted on the settlement calendar of its listing's
+/// market as the app holds it (`bagholder_core::sessions::settles_on`). None where
+/// that calendar does not hold the year: nothing is guessed (`tax-cost-of-an-etf-2`).
+pub fn settlement(t: &Transaction, listed: Listed, venue: Option<Venue>) -> Option<Date> {
     if let Some(d) = t.settle_date {
-        return d;
+        return Some(d);
     }
     let venue = venue.unwrap_or(match listed {
         Listed::Canada => Venue::Tsx,
         Listed::UnitedStates => Venue::UsEquities,
     });
-    let business = |d: Date| bagholder_core::sessions::trades_on(venue, d).unwrap_or_else(|| !matches!(d.weekday(), Weekday::Saturday | Weekday::Sunday) && !holidays.contains(&d));
-    let mut n = if t.trade_date >= t_plus_one_from(listed) { 1 } else { 2 };
+    let mut n = if t.trade_date >= t_plus_one_from(listed) {
+        1
+    } else if t.trade_date >= T_PLUS_TWO_FROM {
+        2
+    } else {
+        3
+    };
     let mut d = t.trade_date;
     while n > 0 {
-        d = match d.tomorrow() {
-            Ok(x) => x,
-            Err(_) => return d,
-        };
-        if business(d) {
+        d = d.tomorrow().ok()?;
+        if bagholder_core::sessions::settles_on(venue, d)? {
             n -= 1;
         }
     }
-    d
+    Some(d)
 }
 
 fn cents(d: Dec) -> Dec {
@@ -336,11 +344,10 @@ impl Cad<'_> {
 }
 
 fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed, rows: &[&Transaction]) -> Result<Holding, DecError> {
-    let holidays = &inputs.facts.rates.holidays;
     let cad = Cad { inputs };
     let mut missing: Vec<(i16, Missing)> = Vec::new();
     let venue = inputs.ledger.instruments.get(&fund).and_then(|i| i.current_name()).and_then(|n| n.venue_mic.as_deref()).and_then(|m| bagholder_core::sessions::venue_of(m, false));
-    let settle = |t: &Transaction| settlement(t, listed, venue, holidays);
+    let settle = |t: &Transaction| settlement(t, listed, venue);
     let in_holding = |a: AccountId| place(inputs, a) == Place::Holding;
     let links = &inputs.ledger.transfer_links;
     let other_side = |t: &Transaction| -> Option<AccountId> {
@@ -377,7 +384,14 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
             _ => {}
         }
         let qty = t.quantity.unwrap_or(Dec::ZERO);
-        let day = settle(t);
+        let day = match settle(t) {
+            Some(d) => d,
+            None => {
+                // no settlement calendar of its market for that year: the year waits
+                missing.push((year_of(t.trade_date), Missing::Calendar(year_of(t.trade_date))));
+                t.trade_date
+            }
+        };
         let moves_units = matches!(t.kind, Kind::Buy | Kind::Sell | Kind::TransferIn | Kind::TransferOut);
         if moves_units && !qty.is_zero() {
             all_units.push((day, qty));

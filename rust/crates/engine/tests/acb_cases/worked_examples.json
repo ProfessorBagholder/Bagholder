@@ -6,7 +6,7 @@
    "CRA's chart: 100 at $15 in 2001 = 1,500; 150 at $20 in 2006 = +3,000 -> 4,500 on 250 units, 18.00 each.",
    "Sale in 2008 of 200 at $18: cost 4,500 x 200/250 = 3,600 off -> 900 on 50, 18.00 each. Proceeds 3,600, no commission: gain 0.00.",
    "Purchase in 2025 of 350 at $21 = +7,350 -> 8,250 on 400 units, 20.625 each (CRA prints 20.63).",
-   "Days are made up inside CRA's years; each settles T+2 before 2024-05-27, T+1 after (a Wednesday: the next business day)."
+   "Days are made up inside CRA's years. The three before 2010, years the app holds no exchange calendar for, state their settlement, T+3 as it then was; 2025's is worked out: a Wednesday, T+1, the next business day."
   ],
   "today": "2026-03-01",
   "accounts": [
@@ -27,7 +27,8 @@
     "kind": "buy",
     "instrument": "STU",
     "qty": "100",
-    "cash": "-1500"
+    "cash": "-1500",
+    "settle": "2001-03-12"
    },
    {
     "id": "t2",
@@ -36,7 +37,8 @@
     "kind": "buy",
     "instrument": "STU",
     "qty": "150",
-    "cash": "-3000"
+    "cash": "-3000",
+    "settle": "2006-03-13"
    },
    {
     "id": "t3",
@@ -45,7 +47,8 @@
     "kind": "sell",
     "instrument": "STU",
     "qty": "-200",
-    "cash": "3600"
+    "cash": "3600",
+    "settle": "2008-03-10"
    },
    {
     "id": "t4",
@@ -70,16 +73,16 @@
      "cost": "8250",
      "complete_through": "2025",
      "rows": [
-      "2001-03-09 bought 100 1500 1500",
-      "2006-03-10 bought 150 3000 4500",
-      "2008-03-07 sold -200 -3600 900",
+      "2001-03-12 bought 100 1500 1500",
+      "2006-03-13 bought 150 3000 4500",
+      "2008-03-10 sold -200 -3600 900",
       "2025-03-06 bought 350 7350 8250"
      ],
      "years": {
       "2008": {
        "gains": [
         {
-         "day": "2008-03-07",
+         "day": "2008-03-10",
          "units": "200",
          "proceeds": "3600",
          "cost": "3600",
@@ -437,7 +440,7 @@
   "name": "A US-listed fund's cost and proceeds are in CAD at the rate of each settlement, and its distributions leave its cost alone",
   "spec": "SPEC.md tax-cost-of-an-etf-2, tax-cost-of-an-etf-8; CRA T4037 (2025), Foreign currencies",
   "working": [
-   "Bought 100 units on Thursday 2024-05-23 for USD 1,000.00 paid: T+2, settled Monday 2024-05-27, at that day's 1.3600 (the trade day's 1.3700 not taken) -> 1,360.00.",
+   "Bought 100 units on Thursday 2024-05-23 for USD 1,000.00 paid: T+2 on the NYSE's calendar, Memorial Day 05-27 skipped, settled Tuesday 2024-05-28 at that day's 1.3600 (the trade day's 1.3700 and 05-27's 1.3650 not taken) -> 1,360.00.",
    "A USD 12.00 distribution in 2024: a US-listed fund's never touch the cost, and no slip is needed for its cost.",
    "Sold 100 on Monday 2025-03-03 for USD 1,195.00 received, USD 5.00 commission: T+1, settled 2025-03-04 at 1.4400 -> received 1,720.80, outlays 7.20, proceeds 1,728.00.",
    "Gain = 1,728.00 - 1,360.00 - 7.20 = 360.80."
@@ -458,7 +461,8 @@
   "rates": {
    "USD": {
     "2024-05-23": "1.3700",
-    "2024-05-27": "1.3600",
+    "2024-05-27": "1.3650",
+    "2024-05-28": "1.3600",
     "2024-06-28": "1.3650",
     "2025-03-03": "1.4300",
     "2025-03-04": "1.4400"
@@ -522,7 +526,7 @@
      "cost": "0",
      "complete_through": "2025",
      "rows": [
-      "2024-05-27 bought 100 1360.00 1360.00",
+      "2024-05-28 bought 100 1360.00 1360.00",
       "2025-03-04 sold -100 -1360.00 0"
      ],
      "years": {
@@ -547,8 +551,8 @@
   "name": "A loss partly replaced within the period is denied in proportion and added to the new units' cost",
   "spec": "SPEC.md tax-cost-of-an-etf-7; adjustedcostbase.ca, Applying the superficial loss rule for a partial disposition of shares, Example 1",
   "working": [
-   "Bought 100 for 300.00 on 2015-01-02; sold 100 for 200.00 on Thursday 2015-04-09 (settled Monday 04-13); bought 25 for 55.00 on Friday 04-10 (settled 04-14), held past the period.",
-   "Loss = 200 - 300 = -100. Period 2015-03-14 to 2015-05-13: bought in it P = 25, held at its end B = 25, sold S = 100: denied = 100 x min(100, 25, 25) / 100 = 25.00; allowed loss 75.00.",
+   "Bought 100 for 300.00 on 2015-01-02; sold 100 for 200.00 on Thursday 2015-04-09 (T+3 then: settled Tuesday 04-14); bought 25 for 55.00 on Friday 04-10 (settled 04-15), held past the period.",
+   "Loss = 200 - 300 = -100. Period 2015-03-15 to 2015-05-14: bought in it P = 25, held at its end B = 25, sold S = 100: denied = 100 x min(100, 25, 25) / 100 = 25.00; allowed loss 75.00.",
    "The 25.00 goes on the holding's cost the day of the sale (no units then), the 25 units bring 55.00: cost 80.00 on 25 units, as the example's $80.00."
   ],
   "today": "2026-03-01",
@@ -603,16 +607,16 @@
      "units": "25",
      "cost": "80.00",
      "rows": [
-      "2015-01-06 bought 100 300.00 300.00",
-      "2015-04-13 sold -100 -300.00 0",
-      "2015-04-13 loss-added 0 25.00 25.00",
-      "2015-04-14 bought 25 55.00 80.00"
+      "2015-01-07 bought 100 300.00 300.00",
+      "2015-04-14 sold -100 -300.00 0",
+      "2015-04-14 loss-added 0 25.00 25.00",
+      "2015-04-15 bought 25 55.00 80.00"
      ],
      "years": {
       "2015": {
        "gains": [
         {
-         "day": "2015-04-13",
+         "day": "2015-04-14",
          "units": "100",
          "proceeds": "200.00",
          "cost": "300.00",
@@ -630,7 +634,7 @@
   "name": "A loss on units bought within the period is denied for those still held",
   "spec": "SPEC.md tax-cost-of-an-etf-7; adjustedcostbase.ca, Applying the superficial loss rule for a partial disposition of shares, Example 2",
   "working": [
-   "Bought 100 for 300.00 on Thursday 2015-04-09 (settled Monday 04-13); sold 80 for 160.00 on Friday 04-10 (settled 04-14).",
+   "Bought 100 for 300.00 on Thursday 2015-04-09 (T+3 then: settled Tuesday 04-14); sold 80 for 160.00 on Friday 04-10 (settled 04-15).",
    "Cost of the 80 = 300 x 80/100 = 240.00; loss = 160 - 240 = -80. P = 100 bought in the period, B = 20 held at its end, S = 80: denied = 80 x 20/80 = 20.00; allowed 60.00.",
    "The 20 units left: 60.00 + 20.00 = 80.00, as the example's $80.00."
   ],
@@ -677,15 +681,15 @@
      "units": "20",
      "cost": "80.00",
      "rows": [
-      "2015-04-13 bought 100 300.00 300.00",
-      "2015-04-14 sold -80 -240.00 60.00",
-      "2015-04-14 loss-added 0 20.00 80.00"
+      "2015-04-14 bought 100 300.00 300.00",
+      "2015-04-15 sold -80 -240.00 60.00",
+      "2015-04-15 loss-added 0 20.00 80.00"
      ],
      "years": {
       "2015": {
        "gains": [
         {
-         "day": "2015-04-14",
+         "day": "2015-04-15",
          "units": "80",
          "gain": "-60.00",
          "denied": "20.00"
@@ -760,14 +764,14 @@
      "units": "0",
      "cost": "0",
      "rows": [
-      "2015-01-06 bought 100 300.00 300.00",
-      "2015-04-13 sold -100 -300.00 0"
+      "2015-01-07 bought 100 300.00 300.00",
+      "2015-04-14 sold -100 -300.00 0"
      ],
      "years": {
       "2015": {
        "gains": [
         {
-         "day": "2015-04-13",
+         "day": "2015-04-14",
          "gain": "-75.00",
          "denied": "25.00"
         }
@@ -782,7 +786,7 @@
   "name": "A loss whose period has not ended leaves its year open",
   "spec": "SPEC.md tax-cost-of-an-etf-7, tax-cost-of-an-etf-9",
   "working": [
-   "Sold at a loss, settled 2026-02-17; the period ends 2026-03-19, after today 2026-03-01: whether units bought by then replace it is not known, so 2026 is not complete."
+   "Sold at a loss on Tuesday 2026-02-17, settled 2026-02-18; the period ends 2026-03-20, after today 2026-03-01: whether units bought by then replace it is not known, so 2026 is not complete."
   ],
   "today": "2026-03-01",
   "accounts": [
@@ -808,7 +812,7 @@
    {
     "id": "s",
     "account": "A",
-    "day": "2026-02-16",
+    "day": "2026-02-17",
     "kind": "sell",
     "instrument": "X",
     "qty": "-10",
@@ -830,11 +834,11 @@
      "years": {
       "2026": {
        "missing": [
-        "period-open 2026-03-19"
+        "period-open 2026-03-20"
        ],
        "gains": [
         {
-         "day": "2026-02-17",
+         "day": "2026-02-18",
          "gain": "-10.00",
          "denied": "0"
         }

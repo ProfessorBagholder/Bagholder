@@ -12,7 +12,8 @@ use jiff::Timestamp;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Venue {
     /// NYSE and Nasdaq listings (NYSE, "Hours & Calendars", read 2026-10-04: core
-    /// session 9:30 a.m. to 4:00 p.m. ET; holidays and 1:00 p.m. early closes 2026-2028).
+    /// session 9:30 a.m. to 4:00 p.m. ET; holidays and 1:00 p.m. early closes 2026-2028;
+    /// holidays 2010 to 2025 from its archived tables, read 2026-11-09).
     UsEquities,
     /// US listed options (Cboe, "US Options Hours", read 2026-10-04: 9:30 a.m. to 4:15
     /// p.m. ET, the widest of its classes, so the session is never taken as closed
@@ -21,7 +22,8 @@ pub enum Venue {
     UsOptions,
     /// TSX and TSX Venture listings (TMX, "Trading Hours", read 2026-10-04: 9:30 AM to
     /// 4:00 PM ET; TMX "Calendar", read 2026-10-04 and again 2026-11-04: the 2026 and
-    /// 2027 holidays and each year's 1:00 PM Christmas Eve close).
+    /// 2027 holidays and each year's 1:00 PM Christmas Eve close; holidays 2010 to 2025
+    /// from its archived calendars, read 2026-11-09).
     Tsx,
     /// CSE listings (the CSE, "Trading Resources", Trading Hours and Holidays, read
     /// 2026-11-04: CSE-listed securities trade continuously 9:30 am ET to 4 pm ET; its
@@ -48,15 +50,110 @@ struct Calendar {
 }
 
 const US_HOLIDAYS: &[(i16, i8, i8)] = &[
+    // 2010 to 2025: the NYSE's own holiday tables as archived each year (web.archive.org
+    // copies of nyse.com and nyx.com, read 2026-11-09), and its unscheduled closures from
+    // its statements: Hurricane Sandy 2012-10-29 and 30, the days of mourning 2018-12-05
+    // and 2025-01-09
+    (2010, 1, 1), (2010, 1, 18), (2010, 2, 15), (2010, 4, 2), (2010, 5, 31), (2010, 7, 5), (2010, 9, 6), (2010, 11, 25), (2010, 12, 24),
+    (2011, 1, 17), (2011, 2, 21), (2011, 4, 22), (2011, 5, 30), (2011, 7, 4), (2011, 9, 5), (2011, 11, 24), (2011, 12, 26),
+    (2012, 1, 2), (2012, 1, 16), (2012, 2, 20), (2012, 4, 6), (2012, 5, 28), (2012, 7, 4), (2012, 9, 3), (2012, 10, 29), (2012, 10, 30), (2012, 11, 22), (2012, 12, 25),
+    (2013, 1, 1), (2013, 1, 21), (2013, 2, 18), (2013, 3, 29), (2013, 5, 27), (2013, 7, 4), (2013, 9, 2), (2013, 11, 28), (2013, 12, 25),
+    (2014, 1, 1), (2014, 1, 20), (2014, 2, 17), (2014, 4, 18), (2014, 5, 26), (2014, 7, 4), (2014, 9, 1), (2014, 11, 27), (2014, 12, 25),
+    (2015, 1, 1), (2015, 1, 19), (2015, 2, 16), (2015, 4, 3), (2015, 5, 25), (2015, 7, 3), (2015, 9, 7), (2015, 11, 26), (2015, 12, 25),
+    (2016, 1, 1), (2016, 1, 18), (2016, 2, 15), (2016, 3, 25), (2016, 5, 30), (2016, 7, 4), (2016, 9, 5), (2016, 11, 24), (2016, 12, 26),
+    (2017, 1, 2), (2017, 1, 16), (2017, 2, 20), (2017, 4, 14), (2017, 5, 29), (2017, 7, 4), (2017, 9, 4), (2017, 11, 23), (2017, 12, 25),
+    (2018, 1, 1), (2018, 1, 15), (2018, 2, 19), (2018, 3, 30), (2018, 5, 28), (2018, 7, 4), (2018, 9, 3), (2018, 11, 22), (2018, 12, 5), (2018, 12, 25),
+    (2019, 1, 1), (2019, 1, 21), (2019, 2, 18), (2019, 4, 19), (2019, 5, 27), (2019, 7, 4), (2019, 9, 2), (2019, 11, 28), (2019, 12, 25),
+    (2020, 1, 1), (2020, 1, 20), (2020, 2, 17), (2020, 4, 10), (2020, 5, 25), (2020, 7, 3), (2020, 9, 7), (2020, 11, 26), (2020, 12, 25),
+    (2021, 1, 1), (2021, 1, 18), (2021, 2, 15), (2021, 4, 2), (2021, 5, 31), (2021, 7, 5), (2021, 9, 6), (2021, 11, 25), (2021, 12, 24),
+    (2022, 1, 17), (2022, 2, 21), (2022, 4, 15), (2022, 5, 30), (2022, 6, 20), (2022, 7, 4), (2022, 9, 5), (2022, 11, 24), (2022, 12, 26),
+    (2023, 1, 2), (2023, 1, 16), (2023, 2, 20), (2023, 4, 7), (2023, 5, 29), (2023, 6, 19), (2023, 7, 4), (2023, 9, 4), (2023, 11, 23), (2023, 12, 25),
+    (2024, 1, 1), (2024, 1, 15), (2024, 2, 19), (2024, 3, 29), (2024, 5, 27), (2024, 6, 19), (2024, 7, 4), (2024, 9, 2), (2024, 11, 28), (2024, 12, 25),
+    (2025, 1, 1), (2025, 1, 9), (2025, 1, 20), (2025, 2, 17), (2025, 4, 18), (2025, 5, 26), (2025, 6, 19), (2025, 7, 4), (2025, 9, 1), (2025, 11, 27), (2025, 12, 25),
     (2026, 1, 1), (2026, 1, 19), (2026, 2, 16), (2026, 4, 3), (2026, 5, 25), (2026, 6, 19), (2026, 7, 3), (2026, 9, 7), (2026, 11, 26), (2026, 12, 25),
     (2027, 1, 1), (2027, 1, 18), (2027, 2, 15), (2027, 3, 26), (2027, 5, 31), (2027, 6, 18), (2027, 7, 5), (2027, 9, 6), (2027, 11, 25), (2027, 12, 24),
     (2028, 1, 17), (2028, 2, 21), (2028, 4, 14), (2028, 5, 29), (2028, 6, 19), (2028, 7, 4), (2028, 9, 4), (2028, 11, 23), (2028, 12, 25),
 ];
 const US_EARLY: &[(i16, i8, i8)] = &[(2026, 11, 27), (2026, 12, 24), (2027, 11, 26), (2028, 7, 3), (2028, 11, 24)];
 const TSX_HOLIDAYS: &[(i16, i8, i8)] = &[
+    // 2010 to 2025: TMX's own calendars as archived each year (web.archive.org copies of
+    // tmx.com and tsx.com, read 2026-11-09); no unscheduled full-day closure in those years
+    (2010, 1, 1), (2010, 2, 15), (2010, 4, 2), (2010, 5, 24), (2010, 7, 1), (2010, 8, 2), (2010, 9, 6), (2010, 10, 11), (2010, 12, 27), (2010, 12, 28),
+    (2011, 1, 3), (2011, 2, 21), (2011, 4, 22), (2011, 5, 23), (2011, 7, 1), (2011, 8, 1), (2011, 9, 5), (2011, 10, 10), (2011, 12, 26), (2011, 12, 27),
+    (2012, 1, 2), (2012, 2, 20), (2012, 4, 6), (2012, 5, 21), (2012, 7, 2), (2012, 8, 6), (2012, 9, 3), (2012, 10, 8), (2012, 12, 25), (2012, 12, 26),
+    (2013, 1, 1), (2013, 2, 18), (2013, 3, 29), (2013, 5, 20), (2013, 7, 1), (2013, 8, 5), (2013, 9, 2), (2013, 10, 14), (2013, 12, 25), (2013, 12, 26),
+    (2014, 1, 1), (2014, 2, 17), (2014, 4, 18), (2014, 5, 19), (2014, 7, 1), (2014, 8, 4), (2014, 9, 1), (2014, 10, 13), (2014, 12, 25), (2014, 12, 26),
+    (2015, 1, 1), (2015, 2, 16), (2015, 4, 3), (2015, 5, 18), (2015, 7, 1), (2015, 8, 3), (2015, 9, 7), (2015, 10, 12), (2015, 12, 25), (2015, 12, 28),
+    (2016, 1, 1), (2016, 2, 15), (2016, 3, 25), (2016, 5, 23), (2016, 7, 1), (2016, 8, 1), (2016, 9, 5), (2016, 10, 10), (2016, 12, 26), (2016, 12, 27),
+    (2017, 1, 2), (2017, 2, 20), (2017, 4, 14), (2017, 5, 22), (2017, 7, 3), (2017, 8, 7), (2017, 9, 4), (2017, 10, 9), (2017, 12, 25), (2017, 12, 26),
+    (2018, 1, 1), (2018, 2, 19), (2018, 3, 30), (2018, 5, 21), (2018, 7, 2), (2018, 8, 6), (2018, 9, 3), (2018, 10, 8), (2018, 12, 25), (2018, 12, 26),
+    (2019, 1, 1), (2019, 2, 18), (2019, 4, 19), (2019, 5, 20), (2019, 7, 1), (2019, 8, 5), (2019, 9, 2), (2019, 10, 14), (2019, 12, 25), (2019, 12, 26),
+    (2020, 1, 1), (2020, 2, 17), (2020, 4, 10), (2020, 5, 18), (2020, 7, 1), (2020, 8, 3), (2020, 9, 7), (2020, 10, 12), (2020, 12, 25), (2020, 12, 28),
+    (2021, 1, 1), (2021, 2, 15), (2021, 4, 2), (2021, 5, 24), (2021, 7, 1), (2021, 8, 2), (2021, 9, 6), (2021, 10, 11), (2021, 12, 27), (2021, 12, 28),
+    (2022, 1, 3), (2022, 2, 21), (2022, 4, 15), (2022, 5, 23), (2022, 7, 1), (2022, 8, 1), (2022, 9, 5), (2022, 10, 10), (2022, 12, 26), (2022, 12, 27),
+    (2023, 1, 2), (2023, 2, 20), (2023, 4, 7), (2023, 5, 22), (2023, 7, 3), (2023, 8, 7), (2023, 9, 4), (2023, 10, 9), (2023, 12, 25), (2023, 12, 26),
+    (2024, 1, 1), (2024, 2, 19), (2024, 3, 29), (2024, 5, 20), (2024, 7, 1), (2024, 8, 5), (2024, 9, 2), (2024, 10, 14), (2024, 12, 25), (2024, 12, 26),
+    (2025, 1, 1), (2025, 2, 17), (2025, 4, 18), (2025, 5, 19), (2025, 7, 1), (2025, 8, 4), (2025, 9, 1), (2025, 10, 13), (2025, 12, 25), (2025, 12, 26),
     (2026, 1, 1), (2026, 2, 16), (2026, 4, 3), (2026, 5, 18), (2026, 7, 1), (2026, 8, 3), (2026, 9, 7), (2026, 10, 12), (2026, 12, 25), (2026, 12, 28),
     (2027, 1, 1), (2027, 2, 15), (2027, 3, 26), (2027, 5, 24), (2027, 7, 1), (2027, 8, 2), (2027, 9, 6), (2027, 10, 11), (2027, 12, 27), (2027, 12, 28),
 ];
+/// Days the TSX trades and CDS does not settle: Remembrance Day, and from 2021 the
+/// National Day for Truth and Reconciliation, on the Monday after where either falls
+/// on a weekend. CDS's holiday processing schedules and TMX's settlement notices as
+/// archived each year to 2025 (read 2026-11-09); Cboe Canada's and the CSE's 2026 and
+/// 2027 calendars, which mark both "settlement holiday only" (read 2026-11-04).
+const CANADA_SETTLEMENT_ONLY: &[(i16, i8, i8)] = &[
+    (2010, 11, 11),
+    (2011, 11, 11),
+    (2012, 11, 12),
+    (2013, 11, 11),
+    (2014, 11, 11),
+    (2015, 11, 11),
+    (2016, 11, 11),
+    (2017, 11, 13),
+    (2018, 11, 12),
+    (2019, 11, 11),
+    (2020, 11, 11),
+    (2021, 9, 30), (2021, 11, 11),
+    (2022, 9, 30), (2022, 11, 11),
+    (2023, 10, 2), (2023, 11, 13),
+    (2024, 9, 30), (2024, 11, 11),
+    (2025, 9, 30), (2025, 11, 11),
+    (2026, 9, 30), (2026, 11, 11),
+    (2027, 9, 30), (2027, 11, 11),
+];
+/// The last day the Canadian settlement calendar is held to.
+const CANADA_SETTLEMENT_TO: (i16, i8, i8) = (2027, 12, 31);
+/// Days the NYSE trades and DTC does not settle: Columbus Day and Veterans Day, when
+/// the Federal Reserve is closed (none for a Saturday holiday). The Federal Reserve's
+/// holiday tables as archived (read 2026-11-09), DTCC's notices for 2020 to 2023, and
+/// its 2026 holiday schedule.
+const US_SETTLEMENT_ONLY: &[(i16, i8, i8)] = &[
+    (2010, 10, 11), (2010, 11, 11),
+    (2011, 10, 10), (2011, 11, 11),
+    (2012, 10, 8), (2012, 11, 12),
+    (2013, 10, 14), (2013, 11, 11),
+    (2014, 10, 13), (2014, 11, 11),
+    (2015, 10, 12), (2015, 11, 11),
+    (2016, 10, 10), (2016, 11, 11),
+    (2017, 10, 9),
+    (2018, 10, 8), (2018, 11, 12),
+    (2019, 10, 14), (2019, 11, 11),
+    (2020, 10, 12), (2020, 11, 11),
+    (2021, 10, 11), (2021, 11, 11),
+    (2022, 10, 10), (2022, 11, 11),
+    (2023, 10, 9),
+    (2024, 10, 14), (2024, 11, 11),
+    (2025, 10, 13), (2025, 11, 11),
+    (2026, 10, 12), (2026, 11, 11),
+    (2027, 10, 11), (2027, 11, 11),
+];
+/// Days the NYSE closed unscheduled and DTC settled as on any business day (DTCC's
+/// statements of each day, read 2026-11-09).
+const US_SETTLES_THOUGH_CLOSED: &[(i16, i8, i8)] = &[(2012, 10, 29), (2012, 10, 30), (2018, 12, 5), (2025, 1, 9)];
+/// The last day the US settlement calendar is held to: the Federal Reserve's published
+/// holidays run to 2027.
+const US_SETTLEMENT_TO: (i16, i8, i8) = (2027, 12, 31);
 const TSX_EARLY: &[(i16, i8, i8)] = &[(2026, 12, 24), (2027, 12, 24)];
 const CSE_HOLIDAYS: &[(i16, i8, i8)] = &[(2026, 1, 1), (2026, 2, 16), (2026, 4, 3), (2026, 5, 18), (2026, 7, 1), (2026, 8, 3), (2026, 9, 7), (2026, 10, 12), (2026, 12, 25), (2026, 12, 28), (2027, 1, 1)];
 const CBOE_CANADA_HOLIDAYS: &[(i16, i8, i8)] = &[
@@ -134,6 +231,39 @@ pub fn trades_on(v: Venue, date: Date) -> Option<bool> {
     Some(session_on(&c, &zone, date)?.is_some())
 }
 
+/// Whether trades in the venue's market settle on `date`: a day its listing exchange
+/// trades (the TSX's for every Canadian venue, through CDS; the NYSE's for the US,
+/// through DTC) other than a day the market trades and does not settle, and in the US
+/// also a day the NYSE closed unscheduled while DTC settled. None outside the years the
+/// app holds that market's settlement calendar for (2010 to 2027).
+pub fn settles_on(v: Venue, date: Date) -> Option<bool> {
+    let (exchange, settlement_only, though_closed, to) = match v {
+        Venue::Tsx | Venue::Cse | Venue::CboeCanada => (Venue::Tsx, CANADA_SETTLEMENT_ONLY, &[][..], CANADA_SETTLEMENT_TO),
+        Venue::UsEquities | Venue::UsOptions => (Venue::UsEquities, US_SETTLEMENT_ONLY, US_SETTLES_THOUGH_CLOSED, US_SETTLEMENT_TO),
+    };
+    if date > day(to)? {
+        return None;
+    }
+    let on = |list: &[(i16, i8, i8)]| list.iter().any(|h| day(*h) == Some(date));
+    if on(though_closed) {
+        return Some(true);
+    }
+    Some(trades_on(exchange, date)? && !on(settlement_only))
+}
+
+/// The last day the app holds the venue's trading calendar for.
+pub fn trading_held_to(v: Venue) -> Option<Date> {
+    day(calendar(v).published_to)
+}
+
+/// The last day the app holds the settlement calendar of the venue's market for.
+pub fn settlement_held_to(v: Venue) -> Option<Date> {
+    day(match v {
+        Venue::Tsx | Venue::Cse | Venue::CboeCanada => CANADA_SETTLEMENT_TO,
+        Venue::UsEquities | Venue::UsOptions => US_SETTLEMENT_TO,
+    })
+}
+
 /// The venue's latest session to have opened at or before `at`, its day and its
 /// open: the session a quote stamped `at` states the change of. None past what the
 /// exchange has published.
@@ -192,6 +322,33 @@ mod tests {
 
     fn at(s: &str) -> Timestamp {
         s.parse().unwrap()
+    }
+
+    /// Settlement days are the market's own: a day the exchange trades and the
+    /// settlement system does not (Columbus Day, Remembrance Day) is none, an
+    /// unscheduled NYSE closure DTC settled through is one, and a year the app holds no
+    /// settlement calendar for is not known.
+    #[test]
+    fn settlement_days_are_each_markets_own() {
+        let d = |s: &str| s.parse::<Date>().unwrap();
+        // US Thanksgiving 2025 and Good Friday: neither trades nor settles
+        assert_eq!(settles_on(Venue::UsEquities, d("2025-11-27")), Some(false));
+        assert_eq!(settles_on(Venue::UsEquities, d("2025-04-18")), Some(false));
+        assert_eq!(settles_on(Venue::Tsx, d("2025-11-27")), Some(true));
+        // Columbus Day: the NYSE trades, DTC does not settle
+        assert_eq!(trades_on(Venue::UsEquities, d("2025-10-13")), Some(true));
+        assert_eq!(settles_on(Venue::UsEquities, d("2025-10-13")), Some(false));
+        // the NYSE closed for President Carter's day of mourning; DTC settled
+        assert_eq!(trades_on(Venue::UsEquities, d("2025-01-09")), Some(false));
+        assert_eq!(settles_on(Venue::UsEquities, d("2025-01-09")), Some(true));
+        // Remembrance Day: the TSX trades, CDS does not settle, on every Canadian venue
+        assert_eq!(trades_on(Venue::Tsx, d("2025-11-11")), Some(true));
+        assert_eq!(settles_on(Venue::Tsx, d("2025-11-11")), Some(false));
+        assert_eq!(settles_on(Venue::CboeCanada, d("2025-11-11")), Some(false));
+        assert_eq!(settles_on(Venue::Tsx, d("2017-11-13")), Some(false), "Nov 11 a Saturday: the Monday after");
+        // years before and after what is held: not known
+        assert_eq!(settles_on(Venue::Tsx, d("2009-06-01")), None);
+        assert_eq!(settles_on(Venue::UsEquities, d("2028-03-01")), None);
     }
 
     #[test]
