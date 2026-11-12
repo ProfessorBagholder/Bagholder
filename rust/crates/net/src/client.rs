@@ -590,6 +590,13 @@ fn read_chunked(conn: &mut Conn, out: &mut Capped<'_>) -> Result<(), Error> {
 /// A body read to its end, however the reply frames it, into `out`; whether the
 /// connection can be kept.
 fn read_body(conn: &mut Conn, head: &Head, out: &mut Capped<'_>) -> Result<bool, Error> {
+    // an answer of 1xx, 204 or 304 has no body, whatever its head says of one (RFC
+    // 9112 §6.3): it ends with its head, its connection kept where the host keeps it.
+    // Read to the close, a host that keeps the connection open would hold it until
+    // the request's timeout (Cboe's 304 to a chain asked again with its stamp)
+    if (100..200).contains(&head.status) || head.status == 204 || head.status == 304 {
+        return Ok(head.get("connection").map(|v| !v.to_lowercase().contains("close")).unwrap_or(true));
+    }
     let chunked = head.get("transfer-encoding").map(|v| v.to_lowercase().contains("chunked")).unwrap_or(false);
     let length: Option<usize> = head.get("content-length").and_then(|v| v.trim().parse().ok());
     if chunked {
@@ -1143,7 +1150,7 @@ mod coding_tests {
 
 #[cfg(test)]
 mod ceiling_tests {
-    use super::download;
+    use super::{download, request_any};
     use std::io::{Read, Write};
     use std::time::Duration;
 
@@ -1223,6 +1230,29 @@ mod ceiling_tests {
         assert!(super::get_at(&clock, to, "https://localhost/doc", &[], Duration::from_millis(500), 1024).is_err());
         let took = clock.now().duration_since(started);
         assert!(took < jiff::SignedDuration::from_secs(3), "{took:?}");
+    }
+
+    /// An answer of 304 has no body (RFC 9112 §6.3): the request ends with its head,
+    /// though the host keeps the connection open for the next one, as Cboe's does.
+    #[test]
+    fn a_304_ends_with_its_head_on_a_connection_the_host_keeps_open() {
+        let l = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let port = l.local_addr().unwrap().port();
+        std::thread::spawn(move || {
+            let mut open = Vec::new();
+            for c in l.incoming() {
+                let Ok(mut c) = c else { return };
+                let mut buf = [0u8; 4096];
+                let _ = c.read(&mut buf);
+                let _ = c.write_all(b"HTTP/1.1 304 Not Modified\r\nETag: \"made-up\"\r\n\r\n");
+                // held open, as a host keeps a connection for the next request
+                open.push(c);
+            }
+        });
+        let started = std::time::Instant::now();
+        let r = request_any("GET", &format!("http://127.0.0.1:{port}/chain.json"), &[("If-Modified-Since", "Wed, 11 Nov 2026 21:40:12 GMT")], None, Duration::from_secs(5)).unwrap();
+        assert_eq!((r.status, r.body.len()), (304, 0));
+        assert!(started.elapsed() < Duration::from_secs(2), "the request waited {:?} for a body a 304 never has", started.elapsed());
     }
 
     #[test]
