@@ -122,6 +122,18 @@ pub fn in_session(v: Venue, at: Timestamp) -> Option<bool> {
     Some(session_on(&c, &zone, date)?.is_some_and(|(open, close)| at >= open && at < close))
 }
 
+/// Whether the venue trades on `date`, by the calendar the app holds: none before
+/// the first year its holidays are held for, or past what the exchange has published.
+pub fn trades_on(v: Venue, date: Date) -> Option<bool> {
+    let c = calendar(v);
+    let first = c.holidays.first().and_then(|h| day((h.0, 1, 1)))?;
+    if date < first {
+        return None;
+    }
+    let zone = TimeZone::get(c.zone).ok()?;
+    Some(session_on(&c, &zone, date)?.is_some())
+}
+
 /// The venue's latest session to have opened at or before `at`, its day and its
 /// open: the session a quote stamped `at` states the change of. None past what the
 /// exchange has published.
