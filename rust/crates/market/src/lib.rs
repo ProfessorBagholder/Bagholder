@@ -1,6 +1,7 @@
 //! The public market sources: what each one sends, how it is read, and the
 //! top-ups that keep the stored series current.
 
+pub mod cds_tax;
 pub mod http;
 pub mod interlisted;
 pub mod parse;

@@ -5,6 +5,7 @@
 //! what was told, in the book (`bagholder_book::notices`).
 
 pub mod bars;
+pub mod fund_tax;
 pub mod charts;
 pub mod feeds;
 pub mod gens;

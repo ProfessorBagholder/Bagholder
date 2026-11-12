@@ -221,6 +221,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `market-data-35`
 - `market-data-36`
 - `market-data-37` retired
+- `market-data-38`
 - `versions-and-the-update-check-1`
 - `versions-and-the-update-check-2`
 - `versions-and-the-update-check-3`
