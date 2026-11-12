@@ -127,6 +127,9 @@ pub struct InstrumentDraft {
     /// Where the source states whether its own id for the instrument is still
     /// the one it trades under.
     pub standing: Option<StandingDraft>,
+    /// Whether the record's source states the instrument is a fund (an ETF): none
+    /// where it does not say.
+    pub fund: Option<bool>,
 }
 
 /// What a source states of one of its own ids: still traded under, retired by

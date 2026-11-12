@@ -245,16 +245,17 @@ impl Book {
     // ------------------------------------------------------------------
 
     pub fn instrument(&self, id: InstrumentId) -> Result<Instrument> {
-        let row: Option<(String, String, Option<String>)> = self
+        let row: Option<(String, String, Option<String>, Option<i64>)> = self
             .conn()
-            .query_row("SELECT kind, currency, issuer_id FROM instruments WHERE id = ?", [id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+            .query_row("SELECT kind, currency, issuer_id, fund FROM instruments WHERE id = ?", [id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))
             .optional()?;
-        let (kind, currency, issuer) = row.ok_or_else(|| BookError::Refused(format!("no instrument {id}")))?;
+        let (kind, currency, issuer, fund) = row.ok_or_else(|| BookError::Refused(format!("no instrument {id}")))?;
         Ok(Instrument {
             id,
             kind: text::parsed("instruments", "kind", &kind, InstrumentKind::parse)?,
             currency: text::currency("instruments", "currency", &currency)?,
             issuer: text::opt_parsed("instruments", "issuer_id", issuer, IssuerId::parse)?,
+            fund: fund.map(|f| f != 0),
         })
     }
 
@@ -501,8 +502,8 @@ impl Book {
             [] => {
                 let id = InstrumentId::from_uuid(new_uuid(at));
                 self.conn().execute(
-                    "INSERT INTO instruments(id, kind, currency, created_at) VALUES (?, ?, ?, ?)",
-                    params![id.to_string(), draft.kind.as_str(), draft.currency.as_str(), at_text(at)],
+                    "INSERT INTO instruments(id, kind, currency, fund, created_at) VALUES (?, ?, ?, ?, ?)",
+                    params![id.to_string(), draft.kind.as_str(), draft.currency.as_str(), draft.fund, at_text(at)],
                 )?;
                 id
             }
@@ -517,6 +518,10 @@ impl Book {
                     return Ok((Err(Problem::new("instrument-currency-conflict", format!(
                         "the record prices instrument {id} in {}, but it is priced in {}", draft.currency, existing.currency
                     ))), notes));
+                }
+                // its fund type as the latest record to state one states it
+                if draft.fund.is_some() && draft.fund != existing.fund {
+                    self.conn().execute("UPDATE instruments SET fund = ? WHERE id = ?", params![draft.fund, id.to_string()])?;
                 }
                 *id
             }

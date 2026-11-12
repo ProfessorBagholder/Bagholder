@@ -360,7 +360,7 @@ pub(crate) mod tests {
         let ws = Broker::named("wealthsimple");
         let conn = book.add_connection(&ws, "Wealthsimple", now).unwrap();
         let a = book.add_account(conn, &[AccountRef::new(ws.clone(), "crypto-1")], &bagholder_wealthsimple::account_types::account_type("CRYPTO"), AccountStatus::Open, None, now).unwrap();
-        let draft = bagholder_book::mapping::InstrumentDraft { refs: vec![Reference::new(RefScheme::BrokerSecurity(ws), "sec-z-x")], kind: InstrumentKind::Crypto, currency: Currency::CAD, name: None, option: None, standing: None };
+        let draft = bagholder_book::mapping::InstrumentDraft { fund: None, refs: vec![Reference::new(RefScheme::BrokerSecurity(ws), "sec-z-x")], kind: InstrumentKind::Crypto, currency: Currency::CAD, name: None, option: None, standing: None };
         let i = book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), now).unwrap().unwrap();
         let read = book.broker_read(conn, "units", now).unwrap();
         let q = Dec::parse("0.0000005").unwrap();
