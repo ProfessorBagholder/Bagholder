@@ -1,0 +1,42 @@
+                                                                                          Statement of Trust Income Allocations and Designations
+
+               T3       R16            AMENDED POSTING                        TAXATION YEAR/ANNÉE D'IMPOSITION : 2025
+
+    TRUST NAME/NOM DE LA FIDUCIE :           Made Up Covered Call Utilities ETF           SYMBOL/SYMBOLE : ZZC
+                     CUSIP/CUSIP#:           000000ZZ2
+       POSTAL CODE/CODE POSTAL :             A0A 0A0          CALCULATION METHOD/MÉTHODE DE CALCUL : PERCENT
+
+                                                                                                          Distribution 1               Distribution 2               Distribution 3
+    Total Distribution ($) Per Unit
+                                                                                                          0.30000                      0.30000                      0.40000
+    Distribution totale par part ($)
+    Record Date
+                                                                                                          2025-04-28                   2025-08-27                   2025-12-29
+     T3 BOX NO.   R16 Box No.          Date de clôture des registres
+    Payment Date
+                                                                                                          2025-05-05                   2025-09-03                   2026-01-06
+     Num.Case T3  Num.Case R16          Date de paiement
+    Total Cash Distribution ($) Per Unit
+                                                                                                          0.30000                      0.30000                      0.30000
+    Distribution totale en espèces ($) par part
+    Total Non Cash Distribution ($) Per Unit
+                                                                                                                                                                    0.10000
+    Distribution totale autre qu’en espèces ($) par part
+    Total Income ($) per unit being allocated
+                                                                                                          0.30000                      0.30000                      0.40000
+    Revenu total ($) par part alloué
+     21          A                   Capital gain
+                                                                                                          20.00000                     20.00000                     45.00000
+                                     Gain en capital
+     49          C1                  Actual Amount of Eligible Dividends
+                                                                                                          30.00000                     30.00000                     30.00000
+                                     Montant réel des dividendes déterminés
+     23          C2                  Actual Amount of Non Eligible Dividend
+                                     Montant réel des dividendes non déterminés
+     42          M                   Return of Capital
+                                                                                                          50.00000                     50.00000                     25.00000
+                                     Remboursement de capital
+     33          K                   Foreign business income tax paid
+                                     Impôt étranger payé sur un revenu tiré d’une entreprise
+    Total Income Allocation / Total des revenus répartis
+                                                                                                          100.00000                    100.00000                    100.00000

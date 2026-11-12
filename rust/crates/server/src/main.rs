@@ -32,6 +32,7 @@ mod events;
 mod exit_with;
 mod webpush;
 mod feeds;
+mod fund_tax;
 mod filings;
 mod http;
 mod market_context;

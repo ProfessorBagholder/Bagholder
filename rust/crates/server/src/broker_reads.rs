@@ -319,7 +319,20 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
     // (a failed one is read again after its rest)
     *served = opened;
     let outcome = match read {
-        Some(Due::Pull) => Some(pull_now(app, f, &book, conn, file, now, true)?),
+        Some(Due::Pull) => {
+            let read = pull_now(app, f, &book, conn, file, now, true)?;
+            if matches!(read, Read::Done) {
+                // the year's tax forms, on their own work: they wait on CDS, not the pull
+                let a = app.clone();
+                let today = now.to_zoned(zone.clone()).date();
+                app.kick("fund-tax-forms", move || {
+                    if let Err(e) = crate::fund_tax::refresh(&a, today) {
+                        log(&format!("bagholder: the funds' tax forms could not be read: {e}"));
+                    }
+                });
+            }
+            Some(read)
+        }
         Some(Due::Balances) => match balances_now(app, f, &book, conn, file, now)? {
             // cash moved at Wealthsimple since its activity was last read: the
             // movement (a distribution paid, interest, a deposit) is read now, the
