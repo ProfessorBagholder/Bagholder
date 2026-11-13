@@ -938,6 +938,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `remote-4`
 - `remote-5`
 - `remote-6`
+- `remote-7`
 - `filters-1`
 - `filters-2`
 - `filters-3`

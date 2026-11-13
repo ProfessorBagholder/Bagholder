@@ -642,16 +642,36 @@ fn tunnel_up_trying(app: &Arc<App>, provider: Provider, tries: u32) -> Result<()
     }
     // ended on its own after Tailscale refused it for a clash: started again, while
     // tries are left, never once the person stopped it (`Tunnels::ended`)
+    // and any other that ended on its own while Agents are on: started again after its
+    // wait (`Tunnels::again_after`), once the wait is over only if not stopped meanwhile
     let weak = Arc::downgrade(app);
     let ended = move |run: u64| {
         let Some(app) = weak.upgrade() else { return };
-        let again = app.agents.tunnels().get_mut(&provider).is_some_and(|t| t.start_again(run));
-        if again && tries > 1 {
-            if let Err(e) = tunnel_up_trying(&app, provider, tries - 1) {
-                crate::app::log(&format!("bagholder: the {provider:?} tunnel could not start again: {e}"));
+        let clash = app.agents.tunnels().get(&provider).is_some_and(|t| tunnel::clashed(&t.state().lines));
+        if clash && tries > 1 {
+            if app.agents.tunnels().get_mut(&provider).is_some_and(|t| t.start_again(run)) {
+                if let Err(e) = tunnel_up_trying(&app, provider, tries - 1) {
+                    crate::app::log(&format!("bagholder: the {provider:?} tunnel could not start again: {e}"));
+                }
             }
+            app.events.signal();
+            return;
         }
+        let wait = app.agents.tunnels().get_mut(&provider).and_then(|t| t.again_after(run));
         app.events.signal();
+        let Some(wait) = wait.filter(|_| app.agents.port().is_some()) else { return };
+        crate::app::log(&format!("bagholder: the {provider:?} tunnel ended on its own; started again in {}s", wait.as_secs()));
+        drop(app);
+        let weak = weak.clone();
+        tunnel::after(wait, move || {
+            let Some(app) = weak.upgrade() else { return };
+            let wanted = app.agents.tunnels().get(&provider).is_some_and(tunnel::Tunnels::still_wanted);
+            if wanted && app.agents.port().is_some() {
+                if let Err(e) = tunnel_up(&app, provider) {
+                    crate::app::log(&format!("bagholder: the {provider:?} tunnel could not start again: {e}"));
+                }
+            }
+        });
     };
     app.agents.tunnels().entry(provider).or_default().start(provider, (argv, env), Arc::new(on_line), Arc::new(ended))?;
     app.agents.set_ready(provider, None);

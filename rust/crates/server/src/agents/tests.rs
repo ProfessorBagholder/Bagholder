@@ -1936,13 +1936,14 @@ esac"#,
     // run: the tunnel Bagholder made, from its folder
     let s = Setup { provider: Provider::Cloudflare, name: "agents.example.com".into(), funnel_port: None, sends_host: None, take_over: None };
     let run = tunnel::command(&s, &program, 4321, home.path()).unwrap();
+    // its self-update off, before `tunnel`, as Cloudflare's own service runs it
     assert_eq!(run[1..], [
-        "--config".to_string(), format!("{folder}/config.yml"), "tunnel".into(), "--origincert".into(), format!("{folder}/.cloudflared/cert.pem"),
+        "--no-autoupdate".to_string(), "--config".into(), format!("{folder}/config.yml"), "tunnel".into(), "--origincert".into(), format!("{folder}/.cloudflared/cert.pem"),
         "run".into(), "--credentials-file".into(), format!("{folder}/tunnel.json"), "--url".into(), "http://127.0.0.1:4321".into(), name,
     ]);
     // a Cloudflare the person set up themselves, as 2.13 had them: run as before
     let theirs = tempfile::tempdir().unwrap();
-    assert_eq!(tunnel::command(&s, "cloudflared", 4321, theirs.path()).unwrap()[1..4], ["tunnel".to_string(), "run".into(), "--url".into()]);
+    assert_eq!(tunnel::command(&s, "cloudflared", 4321, theirs.path()).unwrap()[1..5], ["--no-autoupdate".to_string(), "tunnel".into(), "run".into(), "--url".into()]);
 }
 
 #[cfg(unix)]
@@ -2160,6 +2161,55 @@ fn a_tunnel_refused_for_a_clash_in_tailscale_s_settings_is_started_again() {
     assert!(!t.start_again(run), "stopped");
     // an earlier start's end, told after another started: not this one's
     assert!(!t.start_again(run.wrapping_sub(1)));
+}
+
+/// A tunnel that ends on its own while wanted is started again: five seconds after,
+/// as Cloudflare's own service restarts its connector, the wait doubled each time it
+/// ends again soon after starting, never past five minutes, and back to five seconds
+/// once one has run long; one the person stopped, and an earlier start's end, never.
+#[cfg(unix)]
+#[test]
+fn a_tunnel_that_ends_on_its_own_is_started_again_after_a_growing_wait() {
+    use std::time::Duration;
+    let s = Duration::from_secs;
+    // the wait over every count of ends soon after starting, and after a long run
+    let mut soon = 0;
+    let mut waits = Vec::new();
+    for _ in 0..12 {
+        let (w, n) = tunnel::again_wait(soon, Some(s(1)));
+        waits.push(w.as_secs());
+        soon = n;
+    }
+    assert_eq!(waits, vec![5, 10, 20, 40, 80, 160, 300, 300, 300, 300, 300, 300]);
+    assert_eq!(tunnel::again_wait(soon, Some(tunnel::RAN_LONG)), (s(5), 1), "one that had run long waits the first wait");
+    assert_eq!(tunnel::again_wait(u32::MAX, None).0, s(300), "never past five minutes");
+    // a tunnel that ends: wanted, its wait said, and not running
+    let ends = |t: &mut tunnel::Tunnels| -> u64 {
+        let (tx, rx) = std::sync::mpsc::channel::<u64>();
+        let tx = Mutex::new(tx);
+        t.start(tunnel::Provider::Cloudflare, (vec!["sh".into(), "-c".into(), "echo 'update failed to apply' >&2; exit 10".into()], vec![]), Arc::new(|| {}), Arc::new(move |run| tx.lock().unwrap().send(run).unwrap())).unwrap();
+        rx.recv().unwrap()
+    };
+    let mut t = tunnel::Tunnels::default();
+    let run = ends(&mut t);
+    assert_eq!(t.again_after(run), Some(s(5)));
+    assert!(t.still_wanted());
+    assert!(t.state().exited.as_deref().is_some_and(|e| e.contains("10")), "{:?}", t.state().exited);
+    // it ends again soon after: a longer wait
+    let run = ends(&mut t);
+    assert_eq!(t.again_after(run), Some(s(10)));
+    // an earlier start's end, told after another started: none
+    assert_eq!(t.again_after(run.wrapping_sub(1)), None);
+    // stopped by the person meanwhile: not wanted, and never started again
+    t.stop();
+    assert!(!t.still_wanted());
+    let (tx, rx) = std::sync::mpsc::channel::<u64>();
+    let tx = Mutex::new(tx);
+    let mut t = tunnel::Tunnels::default();
+    t.start(tunnel::Provider::Cloudflare, (vec!["sh".into(), "-c".into(), "sleep 30".into()], vec![]), Arc::new(|| {}), Arc::new(move |run| tx.lock().unwrap().send(run).unwrap())).unwrap();
+    t.stop();
+    let run = rx.recv().unwrap();
+    assert_eq!(t.again_after(run), None, "stopped");
 }
 
 /// The sign-in page says everything an agent reads: each tool has its words, and
