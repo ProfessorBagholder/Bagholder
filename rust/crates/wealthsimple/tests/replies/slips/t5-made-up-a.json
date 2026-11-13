@@ -1,0 +1,29 @@
+{
+ "year": 2024,
+ "rows": [
+  {
+   "security": "Example Global Covered Call Income ETF",
+   "amounts": {
+    "roc": "0.00",
+    "18": "0.00",
+    "34": "0.00",
+    "24": "0.00",
+    "10": "0.00",
+    "13": "0.00",
+    "15": "216.21"
+   }
+  },
+  {
+   "security": "Northwind US Dividend Leaders Index ETF",
+   "amounts": {
+    "roc": "0.00",
+    "18": "0.00",
+    "34": "0.00",
+    "24": "0.00",
+    "10": "0.00",
+    "13": "0.00",
+    "15": "547.88"
+   }
+  }
+ ]
+}

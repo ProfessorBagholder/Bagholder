@@ -1,0 +1,407 @@
+{
+ "year": 2025,
+ "report_code": null,
+ "rows": [
+  {
+   "day": "2025-03-19",
+   "type": "SHS",
+   "quantity": "2033.4179",
+   "security": "Example Covered Call Canadian Banks ETF",
+   "cost": "25455.63",
+   "proceeds": "68915.60",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-11-13",
+   "type": "SHS",
+   "quantity": "907.3439",
+   "security": "Northwind Enhanced Income ETF",
+   "cost": "2537.62",
+   "proceeds": "1464.49",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-07-20",
+   "type": "SHS",
+   "quantity": "1.7297",
+   "security": "Lakeview Monthly Yield Shares ETF",
+   "cost": "5.92",
+   "proceeds": "39.75",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-02-11",
+   "type": "SHS",
+   "quantity": "1.0365",
+   "security": "Placeholder Utilities Income Trust",
+   "cost": "1.83",
+   "proceeds": "9.01",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-07-22",
+   "type": "SHS",
+   "quantity": "4.6915",
+   "security": "Maple Canadian Dividend Plus ETF",
+   "cost": "1.67",
+   "proceeds": "38.97",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-08-16",
+   "type": "SHS",
+   "quantity": "9.3818",
+   "security": "Cedar Equal Weight Banks Index ETF",
+   "cost": "6.29",
+   "proceeds": "96.28",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-08-10",
+   "type": "SHS",
+   "quantity": "1.6818",
+   "security": "Example Covered Call Canadian Banks ETF",
+   "cost": "9.82",
+   "proceeds": "22.23",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-11-24",
+   "type": "SHS",
+   "quantity": "5.1980",
+   "security": "Northwind Enhanced Income ETF",
+   "cost": "6.92",
+   "proceeds": "9.54",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-09-27",
+   "type": "SHS",
+   "quantity": "4.4970",
+   "security": "Lakeview Monthly Yield Shares ETF",
+   "cost": "46.75",
+   "proceeds": "8.64",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-07-19",
+   "type": "SHS",
+   "quantity": "1.7868",
+   "security": "Placeholder Utilities Income Trust",
+   "cost": "4.95",
+   "proceeds": "61.53",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-11-06",
+   "type": "SHS",
+   "quantity": "6.8991",
+   "security": "Maple Canadian Dividend Plus ETF",
+   "cost": "6.11",
+   "proceeds": "66.84",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-09-04",
+   "type": "SHS",
+   "quantity": "3.8535",
+   "security": "Cedar Equal Weight Banks Index ETF",
+   "cost": "7.47",
+   "proceeds": "72.93",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-01-16",
+   "type": "SHS",
+   "quantity": "1.5054",
+   "security": "Example Covered Call Canadian Banks ETF",
+   "cost": "7.82",
+   "proceeds": "31.21",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-09-08",
+   "type": "SHS",
+   "quantity": "1.3268",
+   "security": "Northwind Enhanced Income ETF",
+   "cost": "9.70",
+   "proceeds": "39.51",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-09-12",
+   "type": "SHS",
+   "quantity": "6.7522",
+   "security": "Lakeview Monthly Yield Shares ETF",
+   "cost": "5.84",
+   "proceeds": "80.77",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-12-01",
+   "type": "SHS",
+   "quantity": "7.8396",
+   "security": "Placeholder Utilities Income Trust",
+   "cost": "3.66",
+   "proceeds": "81.26",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-07-02",
+   "type": "SHS",
+   "quantity": "8.5975",
+   "security": "Maple Canadian Dividend Plus ETF",
+   "cost": "9.25",
+   "proceeds": "74.52",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-08-27",
+   "type": "SHS",
+   "quantity": "6.6789",
+   "security": "Cedar Equal Weight Banks Index ETF",
+   "cost": "6.00",
+   "proceeds": "78.69",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-10-26",
+   "type": "SHS",
+   "quantity": "6.7506",
+   "security": "Example Covered Call Canadian Banks ETF",
+   "cost": "1.29",
+   "proceeds": "91.22",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-09-19",
+   "type": "SHS",
+   "quantity": "3.1500",
+   "security": "Northwind Enhanced Income ETF",
+   "cost": "80.32",
+   "proceeds": "1.86",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-02-03",
+   "type": "SHS",
+   "quantity": "1.7421",
+   "security": "Lakeview Monthly Yield Shares ETF",
+   "cost": "1.96",
+   "proceeds": "45.31",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-05-04",
+   "type": "SHS",
+   "quantity": "3.5643",
+   "security": "Placeholder Utilities Income Trust",
+   "cost": "5.08",
+   "proceeds": "31.20",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-05-17",
+   "type": "SHS",
+   "quantity": "3.4471",
+   "security": "Maple Canadian Dividend Plus ETF",
+   "cost": "92.91",
+   "proceeds": "5.58",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-12-11",
+   "type": "SHS",
+   "quantity": "8.7762",
+   "security": "Cedar Equal Weight Banks Index ETF",
+   "cost": "2.03",
+   "proceeds": "49.49",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-06-14",
+   "type": "SHS",
+   "quantity": "4.4233",
+   "security": "Example Covered Call Canadian Banks ETF",
+   "cost": "2.32",
+   "proceeds": "9.26",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-10-14",
+   "type": "SHS",
+   "quantity": "1.3692",
+   "security": "Northwind Enhanced Income ETF",
+   "cost": "12.50",
+   "proceeds": "3.04",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-12-06",
+   "type": "SHS",
+   "quantity": "8.8295",
+   "security": "Lakeview Monthly Yield Shares ETF",
+   "cost": "7.69",
+   "proceeds": "952.28",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-11-26",
+   "type": "SHS",
+   "quantity": "9.7386",
+   "security": "Placeholder Utilities Income Trust",
+   "cost": "4.67",
+   "proceeds": "764.03",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-07-22",
+   "type": "SHS",
+   "quantity": "6.6984",
+   "security": "Maple Canadian Dividend Plus ETF",
+   "cost": "1.94",
+   "proceeds": "405.16",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-04-02",
+   "type": "SHS",
+   "quantity": "5.1158",
+   "security": "Cedar Equal Weight Banks Index ETF",
+   "cost": "2.39",
+   "proceeds": "405.95",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-03-14",
+   "type": "SHS",
+   "quantity": "5.2136",
+   "security": "Example Covered Call Canadian Banks ETF",
+   "cost": "1.71",
+   "proceeds": "14.75",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-04-19",
+   "type": "SHS",
+   "quantity": "8.2810",
+   "security": "Northwind Enhanced Income ETF",
+   "cost": "9.04",
+   "proceeds": "58.25",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-06-04",
+   "type": "SHS",
+   "quantity": "4.9394",
+   "security": "Lakeview Monthly Yield Shares ETF",
+   "cost": "790.55",
+   "proceeds": "4.63",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-02-22",
+   "type": "SHS",
+   "quantity": "7.4850",
+   "security": "Placeholder Utilities Income Trust",
+   "cost": "9.63",
+   "proceeds": "12.41",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-10-28",
+   "type": "SHS",
+   "quantity": "7.4609",
+   "security": "Maple Canadian Dividend Plus ETF",
+   "cost": "118.20",
+   "proceeds": "4.41",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-10-26",
+   "type": "SHS",
+   "quantity": "3.5555",
+   "security": "Cedar Equal Weight Banks Index ETF",
+   "cost": "539.27",
+   "proceeds": "5.86",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-02-27",
+   "type": "SHS",
+   "quantity": "7.8972",
+   "security": "Example Covered Call Canadian Banks ETF",
+   "cost": "6.87",
+   "proceeds": "78.62",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-09-08",
+   "type": "SHS",
+   "quantity": "2.0661",
+   "security": "Northwind Enhanced Income ETF",
+   "cost": "2.17",
+   "proceeds": "273.21",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-09-07",
+   "type": "SHS",
+   "quantity": "5.5443",
+   "security": "Lakeview Monthly Yield Shares ETF",
+   "cost": "86.64",
+   "proceeds": "5.47",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-06-11",
+   "type": "SHS",
+   "quantity": "2866.4771",
+   "security": "Placeholder Utilities Income Trust",
+   "cost": "40826.77",
+   "proceeds": "74067.17",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-10-18",
+   "type": "SHS",
+   "quantity": "23.5254",
+   "security": "Maple Canadian Dividend Plus ETF",
+   "cost": "1.52",
+   "proceeds": "2199.48",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-03-27",
+   "type": "SHS",
+   "quantity": "26.5585",
+   "security": "Cedar Equal Weight Banks Index ETF",
+   "cost": "2879.78",
+   "proceeds": "7.09",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-10-18",
+   "type": "SHS",
+   "quantity": "38.9272",
+   "security": "Example Covered Call Canadian Banks ETF",
+   "cost": "2.34",
+   "proceeds": "6978.37",
+   "currency": "CAD"
+  },
+  {
+   "day": "2025-10-18",
+   "type": "SHS",
+   "quantity": "24.7500",
+   "security": "Northwind Enhanced Income ETF",
+   "cost": "5541.13",
+   "proceeds": "1.37",
+   "currency": "CAD"
+  }
+ ],
+ "totals": {
+  "proceeds": "157667.24",
+  "cost": "79163.97",
+  "gain": "78503.27"
+ }
+}
