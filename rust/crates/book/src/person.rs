@@ -147,7 +147,7 @@ impl Named {
         let option = match &self.contract {
             None => None,
             Some(c) => Some(crate::mapping::OptionDraft {
-                underlying: Box::new(InstrumentDraft {
+                underlying: Box::new(InstrumentDraft { fund: None,
                     refs: refs(&c.underlying)?,
                     kind: InstrumentKind::parse(&c.underlying_kind).map_err(|e| e.to_string())?,
                     currency,
@@ -162,7 +162,7 @@ impl Named {
                 multiplier: None,
             }),
         };
-        Ok(InstrumentDraft {
+        Ok(InstrumentDraft { fund: None,
             refs: refs(&self.refs)?,
             kind: InstrumentKind::parse(&self.kind).map_err(|e| e.to_string())?,
             currency,

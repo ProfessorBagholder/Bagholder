@@ -91,6 +91,7 @@ fn instrument(v: &Value) -> InstrumentDraft {
         .map(|r| Reference::new(RefScheme::parse(r[0].as_str().unwrap()).unwrap(), r[1].as_str().unwrap()))
         .collect();
     InstrumentDraft {
+        fund: v.get("fund").and_then(Value::as_bool),
         refs,
         kind: InstrumentKind::parse(v["kind"].as_str().unwrap_or("security")).unwrap(),
         currency: Currency::parse(v["currency"].as_str().unwrap_or("CAD")).unwrap(),

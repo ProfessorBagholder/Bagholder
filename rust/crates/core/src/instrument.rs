@@ -44,6 +44,9 @@ pub struct Instrument {
     /// The currency it is priced in.
     pub currency: Currency,
     pub issuer: Option<IssuerId>,
+    /// Whether its source states it is a fund (an ETF): none where no source says,
+    /// never inferred from a name.
+    pub fund: Option<bool>,
 }
 
 /// What an instrument was called: the first and last days its records used the
