@@ -209,6 +209,18 @@ pub struct ShortsArgs {
 }
 
 #[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema, Default, Clone, Debug)]
+pub struct OptionContractArgs {
+    /// The listing's symbol, as the trades and holdings show it.
+    pub symbol: String,
+    /// Its venue, as the trades and holdings show it (`exchange`).
+    pub exchange: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub currency: Option<String>,
+    /// The contract's OCC symbol, as `options` names it (`occ`).
+    pub occ: String,
+}
+
+#[derive(serde::Deserialize, serde::Serialize, schemars::JsonSchema, Default, Clone, Debug)]
 pub struct HeatmapArgs {
     /// `holdings`, `watchlist`, `both`, `ca`, `us` or `intl`, as the heatmap's picker.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -418,6 +430,19 @@ pub fn short_interest(r: &ReadOnly, a: ShortsArgs) -> Result<Value, String> {
     let mut q = ListingArgs { symbol: a.symbol, exchange: a.exchange, currency: a.currency, name: a.name }.query();
     q.push(("trend", a.trend.filter(|t| matches!(t.as_str(), "true" | "1" | "yes")).map(|_| "1".to_string()).unwrap_or_default()));
     r.page("/api/shorts", &q)
+}
+
+/// A US listing's Options card: each expiry's puts and calls, one contract's
+/// Cost, Premium and Yield a strike.
+pub fn options(r: &ReadOnly, a: ListingArgs) -> Result<Value, String> {
+    r.page("/api/options", &a.query())
+}
+
+/// One contract of a listing's Options card, with its premium each day.
+pub fn option_contract(r: &ReadOnly, a: OptionContractArgs) -> Result<Value, String> {
+    let mut q = ListingArgs { symbol: a.symbol, exchange: a.exchange, currency: a.currency, name: None }.query();
+    q.push(("occ", a.occ));
+    r.page("/api/options/contract", &q)
 }
 
 /// The Short interest card: the listings in scope, most shorted first.
@@ -723,6 +748,18 @@ impl Tools {
     async fn short_interest(&self, Parameters(a): Parameters<ShortsArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
         let args = json!(a);
         self.run(&ctx, "short_interest", args, move |r| short_interest(r, a)).await
+    }
+
+    #[tool(description = "A US listing's Options card, as its page shows it: for each expiry Cboe's delayed chain lists, nearest first, its puts and its calls, one row a strike, highest first: `cost` (what one contract on 100 shares puts in play: the strike × 100 for a put, 100 × the listing's current price for a call), `premium` (the bid × 100) and `yield` (the premium over the cost, in percent). None for a listing with no options.", annotations(title = "Options", read_only_hint = true))]
+    async fn options(&self, Parameters(a): Parameters<ListingArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let args = json!(a);
+        self.run(&ctx, "options", args, move |r| options(r, a)).await
+    }
+
+    #[tool(description = "One contract of a listing's Options card, by its OCC symbol (`occ` from `options`), as the card opens it: its title, `cost` and `premium`, and its premium each day since it began trading (Yahoo's daily close × 100, today's premium last).", annotations(title = "An option contract", read_only_hint = true))]
+    async fn option_contract(&self, Parameters(a): Parameters<OptionContractArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        let args = json!(a);
+        self.run(&ctx, "option_contract", args, move |r| option_contract(r, a)).await
     }
 
     #[tool(description = "The Short interest card: the holdings' and watchlist's listings, most shorted first.", annotations(title = "Short interest feed", read_only_hint = true))]

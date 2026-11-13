@@ -195,6 +195,32 @@ fn test_a_quote_tick_is_the_moved_fields_alone() {
     ]);
 }
 
+// --- a listing's options: one bid moving -----------------------------------
+
+fn options_card(premium: &str, yield_pct: &str) -> crate::options_card::OptionsAnswer {
+    use crate::options_card::{OptionExpiry, OptionRow, OptionSide};
+    let d = |s: &str| crate::wire::Dec(bagholder_core::Dec::parse(s).unwrap());
+    let row = |occ: &str, title: &str, strike: &str, cost: &str, premium: &str, y: &str| OptionRow { occ: occ.into(), title: title.into(), strike: d(strike), cost: Some(d(cost)), premium: Some(d(premium)), yield_pct: Some(d(y)) };
+    crate::options_card::OptionsAnswer::Ok {
+        ok: true,
+        expiries: vec![OptionExpiry {
+            day: "2026-12-11".into(),
+            label: "Dec 11".into(),
+            puts: OptionSide { rows: vec![row("KO261211P00066000", "KO Dec 11 66 put", "66", "6600", premium, yield_pct), row("KO261211P00065000", "KO Dec 11 65 put", "65", "6500", "17", "0.26")], near: Some(0) },
+            calls: OptionSide { rows: vec![row("KO261211C00066000", "KO Dec 11 66 call", "66", "6842", "266", "3.89")], near: Some(0) },
+        }],
+    }
+}
+
+/// A chain read again: the contract whose bid moved is sent its Premium and Yield,
+/// found by its expiry's day and its OCC symbol, and nothing else.
+#[test]
+fn test_a_bid_moving_is_that_contract_s_premium_and_yield_alone() {
+    let ops = tdiff(&options_card("24", "0.36"), &options_card("25", "0.38"));
+    let at = |field: &str| json!(["expiries", {"k": "day", "v": "2026-12-11"}, "puts", "rows", {"k": "occ", "v": "KO261211P00066000"}, field]);
+    assert_eq!(ops, vec![json!(["set", at("premium"), "25"]), json!(["set", at("yield"), "0.38"])]);
+}
+
 // --- a listing's disclosures: a filing row arriving ------------------------
 
 fn filing(id: &str, form: &str, date: &str) -> Filing {

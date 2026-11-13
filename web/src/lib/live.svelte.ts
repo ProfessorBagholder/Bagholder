@@ -201,15 +201,22 @@ export function bookShown(): string {
 }
 /**
  * Documents whose answer must not outlive the moment, never kept in the browser: the
- * order ticket's live quote, which is only ever the live one.
+ * order ticket's live quote, which is only ever the live one, and a listing's option
+ * chain, which is recorded nowhere (SPEC.md markets-129).
  */
-const NEVER_KEPT = ['quote:']
+const NEVER_KEPT = ['quote:', 'options:']
 // what was kept for it, read once now, so every screen opened later draws in the moment it opens;
 // the page is drawn once it is in, its first frame already the last state (main.ts)
 export const keptIn: Promise<void> = readKept(book)
 /** What is being drawn from what was kept: the page says what it shows once these are in. */
 const drawing = new Set<Promise<void>>()
 const wanted = new Map<string, { params: unknown; holder: Holder<unknown>; changed?: () => void; priming?: boolean }>()
+/**
+ * What a watch just let go held, until the page next says what it shows: a screen
+ * mounted again in the same moment (the same address opened again) takes it over.
+ * The server, never told the key went, sends only what changes from what it sent.
+ */
+const lettingGo = new Map<string, { params: unknown; data: unknown; v?: string }>()
 
 /**
  * Every tab's screen, as each would be followed now. One the browser has kept
@@ -312,6 +319,9 @@ function sayWanted(): void {
     // a screen drawn from what was kept says the version it holds
     while (drawing.size) await Promise.all([...drawing])
     saying = false
+    // what was let go is now followed again or told gone: with no stream, a stream
+    // that opens is told everything it is to show, whole
+    lettingGo.clear()
     if (!streamId) return
     const { docs, have } = shownNow()
     const now = JSON.stringify(docs)
@@ -334,8 +344,17 @@ export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, cha
   // this watch's own entry: a later watch of the key into the same slot (the
   // filters changed) replaces it, and stopping this one then leaves that alone
   const entry = { params, holder: holder as Holder<unknown>, changed }
+  const prior = wanted.get(key) ?? lettingGo.get(key)
+  const priorData = prior && 'holder' in prior ? prior.holder.data : prior?.data
   wanted.set(key, entry)
   followed.add(key)
+  // a key the page still follows, taken over under the same parameters: from what
+  // the page holds of it, which is what the server sends its changes against
+  if (holder.data == null && priorData != null && prior && JSON.stringify(prior.params) === JSON.stringify(params)) {
+    holder.data = $state.snapshot(priorData) as T
+    holder.v = prior && 'holder' in prior ? prior.holder.v : prior?.v
+    changed?.()
+  }
   if (holder.data == null) {
     // drawn at once from what was kept, before the server answers: in the same moment
     // once the page has read it, which it does as it opens
@@ -360,6 +379,7 @@ export function watchDoc<T>(key: string, params: unknown, holder: Holder<T>, cha
   return () => {
     if (wanted.get(key) === entry) {
       wanted.delete(key)
+      if (holder.data != null) lettingGo.set(key, { params, data: holder.data, v: holder.v })
       sayWanted()
     }
   }

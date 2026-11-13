@@ -33,6 +33,9 @@ use crate::orders::OrdersDoc;
 #[derive(Default)]
 pub struct DocsState {
     quotes: std::sync::Mutex<std::collections::HashMap<String, crate::orders::TicketQuote>>,
+    options: std::sync::Mutex<std::collections::HashMap<String, crate::options_card::OptionsAnswer>>,
+    /// The Options cards a page has just started showing, to be read now.
+    options_due: std::sync::Mutex<std::collections::HashSet<String>>,
 }
 
 const QUOTE_EVERY: std::time::Duration = std::time::Duration::from_secs(5);
@@ -56,6 +59,48 @@ fn quote_shown(app: Arc<App>, key: String) {
         });
     });
 }
+
+/// A listing's Options card, by document key: its chain read when a page shows
+/// the card and every fifteen minutes while one does (`SPEC.md` markets-129),
+/// here, by the server, and not a moment longer. The loop looks every few
+/// seconds: a card no page shows any more is let go, and a card shown again
+/// (`options_due`) is read again then.
+fn options_shown(app: Arc<App>, key: String) {
+    app.docs.options_due.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone());
+    crate::app::spawn("bagholder-options-card", move || {
+        let ran = app.clone().single_flight(&key.clone(), false, || {
+            let q = &key["options:".len()..];
+            'shown: while app.events.watched(&key) && !app.stopping() {
+                app.docs.options_due.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+                let v = match bagholder_core::ListingKey::on(&one(q, "symbol"), &one(q, "exchange")) {
+                    Ok(listing) => crate::options_card::options_payload(&app, &listing, &one(q, "exchange"), &one(q, "currency")),
+                    Err(e) => crate::options_card::OptionsAnswer::Refused(crate::http::OkOr::err(e.to_string())),
+                };
+                app.docs.options.lock().unwrap_or_else(|e| e.into_inner()).insert(key.clone(), v);
+                app.events.signal();
+                let read_at = std::time::Instant::now();
+                loop {
+                    if app.wait(OPTIONS_LOOK) {
+                        break 'shown;
+                    }
+                    let due = app.docs.options_due.lock().unwrap_or_else(|e| e.into_inner()).contains(&key);
+                    if !app.events.watched(&key) || due || read_at.elapsed() >= crate::options_card::HELD {
+                        break;
+                    }
+                }
+            }
+            app.docs.options.lock().unwrap_or_else(|e| e.into_inner()).remove(&key);
+            true
+        });
+        // shown again just as this loop let it go: read for the page that shows it now
+        if ran && app.events.watched(&key) && !app.stopping() {
+            options_shown(app, key);
+        }
+    });
+}
+
+/// How often the Options card's loop looks whether its card is still shown.
+const OPTIONS_LOOK: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// `filings:<symbol>`: a listing's disclosures, or the store's own refusal --
 /// answered as `filings_stored` returns it, never a JSON error shape improvised
@@ -110,6 +155,9 @@ pub enum Doc {
     /// `quote:<symbol=…&security=…&account=…&exchange=…>`: nothing until the
     /// first answer.
     Quote(crate::orders::TicketQuote),
+    /// `options:<symbol=…&exchange=…&currency=…>`: a listing's Options card,
+    /// nothing until the first answer.
+    Options(crate::options_card::OptionsAnswer),
     History(HistoryDoc),
     /// `universe:<key>`: what the last read of a market universe came to.
     Universe(UniverseDoc),
@@ -128,6 +176,7 @@ impl Diff for Doc {
             (FilingsFeed(a), FilingsFeed(b)) => a.diff(b, path, ops),
             (Fear(a), Fear(b)) => a.diff(b, path, ops),
             (Quote(a), Quote(b)) => a.diff(b, path, ops),
+            (Options(a), Options(b)) => a.diff(b, path, ops),
             (History(a), History(b)) => a.diff(b, path, ops),
             (Universe(a), Universe(b)) => a.diff(b, path, ops),
             (News(a), News(b)) => a.diff(b, path, ops),
@@ -145,7 +194,7 @@ pub fn sources(key: &str) -> &'static [crate::events::Source] {
     use crate::events::Source::*;
     match key.split(':').next().unwrap_or(key) {
         // the book's orders and what the broker reports of them: each change is said by hand
-        "orders" | "quote" => &[State],
+        "orders" | "quote" | "options" => &[State],
         // the notices, whose book connections are heard (`notify::book`)
         "notifications" => &[Store],
         _ => &[Store, State],
@@ -183,6 +232,7 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
         // `fear:<index>`: the fear and greed meter
         k if k.starts_with("fear:") => Some(Doc::Fear(crate::feeds::fear_stored(app, &k["fear:".len()..]))),
         k if k.starts_with("quote:") => app.docs.quotes.lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned().map(Doc::Quote),
+        k if k.starts_with("options:") => app.docs.options.lock().unwrap_or_else(|e| e.into_inner()).get(k).cloned().map(Doc::Options),
         k if k.starts_with("history:") => Some(Doc::History(crate::feeds::history_doc(app, &crate::feeds::HistoryQuery::parse(&k["history:".len()..])))),
         // `universe:<key>`: a market universe the heatmap shows
         k if k.starts_with("universe:") => crate::feeds::universe_stored(app, &k["universe:".len()..]).map(Doc::Universe),
@@ -208,6 +258,7 @@ pub fn opened(app: &Arc<App>, key: &str) {
         }
         k if k.starts_with("fear:") => crate::feeds::fear_shown(app.clone(), k.to_string(), k["fear:".len()..].to_string()),
         k if k.starts_with("quote:") => quote_shown(app.clone(), k.to_string()),
+        k if k.starts_with("options:") => options_shown(app.clone(), k.to_string()),
         k if k.starts_with("universe:") => crate::feeds::universe_shown(app.clone(), k.to_string(), k["universe:".len()..].to_string()),
         k if k.starts_with("filings:") => {
             if let Ok(key) = filings_listing(&k["filings:".len()..]) {

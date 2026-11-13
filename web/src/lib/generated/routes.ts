@@ -6,7 +6,7 @@ import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, Details, TradesDoc } from './figures'
 import type { Document, DocumentPart, EnrichAnswer, FilingTextAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
-import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, Resolve, ResolveAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
+import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, OptionContractAnswer, OptionContractQuery, OptionsAnswer, Resolve, ResolveAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
 import type { Clear, ClearAnswer, DebtAnswer, DebtAnswerRequest, EntryAnswer, EntryRequest, ImportAccepted, ImportQuery, ImportTold, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, TransactionsAnswer, TransactionsQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer, PushAnswer, PushEndpoint, PushSubscription } from './notifications'
 import type { Adjust, ListingNamed, ListingOf, Modify, Named, OrderActionAnswer, OrderListingAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
@@ -53,6 +53,8 @@ export interface Routes {
   'GET /api/fear': { query: Fear; answer: FearAnswer }
   'GET /api/shorts': { query: ShortsQuery; answer: ShortsAnswer }
   'GET /api/shorts/feed': { answer: ShortsFeed }
+  'GET /api/options': { query: Listing; answer: OptionsAnswer }
+  'GET /api/options/contract': { query: OptionContractQuery; answer: OptionContractAnswer }
   'GET /api/history': { query: HistoryQuery; answer: HistoryAnswer }
   'POST /api/watchlist/add': { body: WatchlistBody; answer: WatchlistAnswer }
   'POST /api/watchlist/remove': { body: WatchlistRemove; answer: WatchlistAnswer }

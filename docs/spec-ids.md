@@ -237,6 +237,7 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `market-data-36`
 - `market-data-37` retired
 - `market-data-38`
+- `market-data-39`
 - `versions-and-the-update-check-1`
 - `versions-and-the-update-check-2`
 - `versions-and-the-update-check-3`
@@ -658,6 +659,14 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `markets-120`
 - `markets-121`
 - `markets-122`
+- `markets-123`
+- `markets-124`
+- `markets-125`
+- `markets-126`
+- `markets-127`
+- `markets-128`
+- `markets-129`
+- `markets-130`
 - `cashflow-1`
 - `cashflow-2`
 - `cashflow-3`
