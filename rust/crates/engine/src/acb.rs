@@ -47,6 +47,23 @@ pub struct PerUnit {
     pub source: String,
 }
 
+/// What a slip itself states the person received for one of a fund's record
+/// dates, in dollars: a T3's breakdown of the person's distributions (Wealthsimple's,
+/// from 2024), every account of the holding's together.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Stated {
+    pub return_of_capital: Dec,
+    pub non_cash: Dec,
+}
+
+/// An amount for a record date: in dollars as a slip states it, or per unit, taken
+/// on the units held that day.
+#[derive(Clone, Copy, Debug)]
+enum Amount {
+    Dollars(Dec),
+    PerUnit(Dec),
+}
+
 /// What the ledger reads beside the book and the facts, each handed in.
 #[derive(Clone, Debug, Default)]
 pub struct TaxInputs {
@@ -56,6 +73,8 @@ pub struct TaxInputs {
     pub slips: BTreeMap<(InstrumentId, i16), Vec<Slip>>,
     /// Per fund, per record date.
     pub per_unit: BTreeMap<InstrumentId, BTreeMap<Date, PerUnit>>,
+    /// Per fund, per record date: what the person's own slips state they received.
+    pub stated: BTreeMap<InstrumentId, BTreeMap<Date, Stated>>,
     /// The day a year's non-cash distribution is dated, where its fund states
     /// one (a per-distribution field, or its year-end release).
     pub non_cash_on: BTreeMap<(InstrumentId, i16), Date>,
@@ -88,6 +107,9 @@ pub enum Source {
     Entered(TransactionId),
     /// The fund's own per-unit figure for that record date.
     Fund(String),
+    /// The slip's own figure for that record date: a T3's breakdown of the
+    /// person's distributions.
+    Breakdown,
     /// The year's slips, placed in proportion to the person's own cash (`tax-cost-of-an-etf-5`).
     Slip,
 }
@@ -532,22 +554,39 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
         let slip = slip.transpose()?;
         // the person's own entry for a distribution (`what-you-enter-9`), else the fund's figure
         let entered_roc = |t: &TransactionId| inputs.facts.adjustments.get(t).and_then(|a| a.legs.iter().find_map(|l| l.cash_per_unit.map(|c| c.amount)));
-        let per: Vec<Option<(Dec, Dec, Source)>> = rows
+        // what the slip itself states for the record date (a T3's breakdown) is in
+        // dollars already; a per-unit figure is taken on the units held that day
+        let stated = tax.stated.get(&fund);
+        let held_cents = |rd: Date, a: Amount| -> Result<Dec, DecError> {
+            match a {
+                Amount::Dollars(d) => Ok(d),
+                Amount::PerUnit(p) => Ok(cents(p.checked_mul(held_on(rd)?)?)),
+            }
+        };
+        let per: Vec<Option<(Amount, Amount, Source)>> = rows
             .iter()
-            .map(|(rd, _, t)| match entered_roc(t) {
-                Some(roc) => Some((roc, figures.and_then(|f| f.get(rd)).map_or(Dec::ZERO, |f| f.non_cash), Source::Entered(t.clone()))),
-                None => figures.and_then(|f| f.get(rd)).map(|f| (f.return_of_capital, f.non_cash, Source::Fund(f.source.clone()))),
+            .map(|(rd, _, t)| {
+                let on = stated.and_then(|s| s.get(rd));
+                let fund_figure = figures.and_then(|f| f.get(rd));
+                match (entered_roc(t), on) {
+                    // the person's own entry for its return of capital, its non-cash as stated
+                    (Some(roc), Some(s)) => Some((Amount::PerUnit(roc), Amount::Dollars(s.non_cash), Source::Entered(t.clone()))),
+                    (Some(roc), None) => Some((Amount::PerUnit(roc), Amount::PerUnit(fund_figure.map_or(Dec::ZERO, |f| f.non_cash)), Source::Entered(t.clone()))),
+                    (None, Some(s)) => Some((Amount::Dollars(s.return_of_capital), Amount::Dollars(s.non_cash), Source::Breakdown)),
+                    (None, None) => fund_figure.map(|f| (Amount::PerUnit(f.return_of_capital), Amount::PerUnit(f.non_cash), Source::Fund(f.source.clone()))),
+                }
             })
             .collect();
         if per.iter().all(Option::is_some) {
-            // per record date, the units the holding held that day, the slip the check
+            // per record date, as stated or on the units the holding held that day,
+            // the slip the check
             let mut rocs = Vec::new();
             for ((rd, _, _), f) in rows.iter().zip(&per) {
                 let (roc, nc, source) = f.clone().expect("all present");
-                let units = held_on(*rd)?;
-                rocs.push((*rd, cents(roc.checked_mul(units)?), source.clone()));
+                rocs.push((*rd, held_cents(*rd, roc)?, source.clone()));
+                let nc = held_cents(*rd, nc)?;
                 if !nc.is_zero() {
-                    steps.push((*rd, Step::NonCash { amount: cents(nc.checked_mul(units)?), source }, usize::MAX));
+                    steps.push((*rd, Step::NonCash { amount: nc, source }, usize::MAX));
                 }
             }
             if let Some(s) = &slip {
@@ -576,8 +615,9 @@ fn holding(inputs: &Inputs, tax: &TaxInputs, fund: InstrumentId, listed: Listed,
             let mut open = Vec::new();
             for (row, f) in rows.iter().zip(&per) {
                 match f {
-                    Some((roc, _, source @ Source::Entered(_))) => {
-                        let amount = cents(roc.checked_mul(held_on(row.0)?)?);
+                    // the person's entry, or the slip's own figure for the record date, kept
+                    Some((roc, _, source @ (Source::Entered(_) | Source::Breakdown))) => {
+                        let amount = held_cents(row.0, *roc)?;
                         rest = rest.checked_sub(amount)?;
                         steps.push((row.0, Step::Roc { amount, source: source.clone() }, usize::MAX));
                     }
