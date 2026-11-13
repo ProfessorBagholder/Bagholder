@@ -108,7 +108,8 @@
 </script>
 
 {#if expiries.length}
-  <section class="card elev-sm oc" aria-labelledby="oc-h" data-testid="options-card">
+  <!-- drawn from no kept answer: a chain is recorded nowhere (SPEC.md markets-129), so on a reload it waits for the server -->
+  <section class="card elev-sm oc" aria-labelledby="oc-h" data-testid="options-card" data-never-kept>
     {#if !open}
       <div class="oc-top">
         <h2 id="oc-h" class="lbl oc-h">Options</h2>
