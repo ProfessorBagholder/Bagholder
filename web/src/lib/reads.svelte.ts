@@ -29,9 +29,7 @@ type Input<K extends GetKey> = Omit<Routes[K], 'answer'>
  *   Watchlist: a minute's memory, nothing stored);
  * - what is asked as an action, not to be shown: the news read for a ticker typed, a
  *   forced re-read of a listing's disclosures;
- * - what an agent read, which the Agents panel shows as it is now;
- * - an option contract and its chart, read as the Options card opens it and recorded
- *   nowhere (SPEC.md markets-129).
+ * - what an agent read, which the Agents panel shows as it is now.
  */
 export const NEVER_KEPT: readonly GetKey[] = [
   'GET /api/symbols/search',
@@ -39,14 +37,14 @@ export const NEVER_KEPT: readonly GetKey[] = [
   'GET /api/news/symbol',
   'GET /api/filings',
   'GET /api/agents/log',
-  'GET /api/options/contract',
 ]
 /**
  * The ones asked of the server each time, never answered from this page load's memory:
  * an action, the glance quote, whose minute the watchlist keeps, and every trade (the
  * export and the rows a trade page is drawn from, each wanting the book as it is now;
  * the rows are kept, so a trade page opens on them at once), an agent's log, and an
- * option contract, read each time the Options card opens it.
+ * option contract, read each time the Options card opens it (kept, it is drawn at once
+ * while it is read).
  */
 const ASKED_EACH_TIME: readonly GetKey[] = ['GET /api/symbols/quote', 'GET /api/figures/trades', 'GET /api/news/symbol', 'GET /api/filings', 'GET /api/agents/log', 'GET /api/options/contract']
 

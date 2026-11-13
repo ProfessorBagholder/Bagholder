@@ -163,25 +163,12 @@ async function watchFromTheStart(page: Page): Promise<void> {
     }
     window.EventSource = Counted as unknown as typeof EventSource
     const LOADING = /^(Loading…|Reading…|Reading [^\s]+…)$/
-    // what is drawn from no kept answer (`data-never-kept`) arrives when the server answers:
-    // a change inside it, or one that only adds or removes it, is no answer moving the screen
-    const never = (n: Node): boolean => {
-      const e = n.nodeType === 1 ? (n as Element) : n.parentElement
-      return !!e?.closest('[data-never-kept]')
-    }
-    const onlyNever = (r: MutationRecord): boolean => {
-      const nodes = [...Array.from(r.addedNodes), ...Array.from(r.removedNodes)]
-      const blank = (n: Node) => n.nodeType !== 1 && !(n.textContent ?? '').trim()
-      return nodes.length > 0 && nodes.every((n) => blank(n) || (n.nodeType === 1 && ((n as Element).matches('[data-never-kept]'))))
-        && nodes.some((n) => n.nodeType === 1)
-    }
     new MutationObserver((records) => {
       // a relative time turning over with the clock (`read 2 min ago`) is the clock, not an answer
       if (w.__counting)
         for (const r of records) {
           const el = r.target.nodeType === 1 ? (r.target as Element) : r.target.parentElement
           if (/ ago\b|just now/.test(el?.textContent ?? '')) continue
-          if (never(r.target) || (r.type === 'childList' && onlyNever(r))) continue
           // what changed, said so a failure names it
           w.__changes.push(`${r.type} ${el?.nodeName ?? ''}.${String(el?.className ?? '').trim().replace(/\s+/g, '.')} ${r.attributeName ?? ''} +[${Array.from(r.addedNodes).map((n) => (n.textContent ?? '').slice(0, 30)).join('|')}] -[${Array.from(r.removedNodes).map((n) => (n.textContent ?? '').slice(0, 30)).join('|')}]`)
         }
@@ -198,21 +185,7 @@ async function watchFromTheStart(page: Page): Promise<void> {
 }
 
 /** What the page shows, a relative time (`3 min ago`, `just now`) read as the clock allows it to differ. */
-/**
- * What the screen says, less what is drawn from no kept answer (`data-never-kept`: an
- * option chain, recorded nowhere, SPEC.md markets-129), which a reload with the server
- * held back cannot show until the server answers.
- */
-const shownText = (page: Page) =>
-  page.evaluate(() => {
-    // read as the screen is without them: hidden while read, so they leave no line behind
-    const never = [...document.querySelectorAll<HTMLElement>('[data-never-kept]')]
-    const was = never.map((e) => e.style.display)
-    never.forEach((e) => (e.style.display = 'none'))
-    const text = document.body.innerText
-    never.forEach((e, i) => (e.style.display = was[i]))
-    return text.replace(/\d+ (s|min|h|d|mo|y) ago|just now/g, 'AGO')
-  })
+const shownText = (page: Page) => page.evaluate(() => document.body.innerText.replace(/\d+ (s|min|h|d|mo|y) ago|just now/g, 'AGO'))
 
 /** The page's reads, held until let through: what is drawn meanwhile can only be what was kept. */
 async function holdServer(page: Page): Promise<() => void> {

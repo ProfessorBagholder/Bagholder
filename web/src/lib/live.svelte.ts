@@ -201,10 +201,10 @@ export function bookShown(): string {
 }
 /**
  * Documents whose answer must not outlive the moment, never kept in the browser: the
- * order ticket's live quote, which is only ever the live one, and a listing's option
- * chain, which is recorded nowhere (SPEC.md markets-129).
+ * order ticket's live quote, which is only ever the live one. A listing's Options card
+ * is kept as every card is, and drawn at once on the next open (SPEC.md markets-129).
  */
-const NEVER_KEPT = ['quote:', 'options:']
+const NEVER_KEPT = ['quote:']
 // what was kept for it, read once now, so every screen opened later draws in the moment it opens;
 // the page is drawn once it is in, its first frame already the last state (main.ts)
 export const keptIn: Promise<void> = readKept(book)
