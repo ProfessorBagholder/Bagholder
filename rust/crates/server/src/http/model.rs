@@ -20,6 +20,7 @@ pub fn routes() -> Routed {
         get "/api/figures/trades" => figures_trades;
         get "/api/view" => view;
         get "/api/transactions" => transactions;
+        get "/api/tax" => tax;
         post "/api/data/clear" => data_clear;
         post "/api/journal" => journal;
         post "/api/debts/answer" => debts_answer;
@@ -46,6 +47,12 @@ pub fn routes() -> Routed {
 
 pub(crate) async fn status(State(state): State<AppState>) -> Api<crate::status::StatusAnswer> {
     Ok(Json(blocking(move || crate::status::answer(&state.app)).await?))
+}
+
+/// `GET /api/tax`: each ETF held outside registered plans, its tax-cost ledger, the
+/// years complete and each T5008 sale against the ledger's (`tax_doc`).
+pub(crate) async fn tax(State(state): State<AppState>) -> Api<crate::tax_doc::TaxAnswer> {
+    Ok(Json(blocking(move || crate::tax_doc::answer(&state.app)).await?))
 }
 
 /// `GET /api/figures/detail`: a trade's or a holding's fills, by its id.

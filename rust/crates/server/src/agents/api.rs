@@ -39,6 +39,7 @@ pub fn routes() -> Vec<(&'static str, &'static str, &'static str, Value)> {
         ("/api/agents/short-interest", "short_interest", "One listing's short interest, from FINRA or CIRO, and its series with trend.", schema(schemars::schema_for!(ShortsArgs))),
         ("/api/agents/options", "options", "A US listing's Options card: each expiry's puts and calls, a strike's Cost, Premium and Yield for one contract.", schema(schemars::schema_for!(ListingArgs))),
         ("/api/agents/option-contract", "option_contract", "One contract of a listing's Options card: its Cost, Premium and premium each day since it began trading.", schema(schemars::schema_for!(OptionContractArgs))),
+        ("/api/agents/tax", "tax", "The tax cost of each ETF held outside registered plans: its ledger, each year's gains and whether it is complete, and each T5008 sale against the ledger's. Amounts and codes, never a slip's text.", schema(schemars::schema_for!(NoArgs))),
         ("/api/agents/short-interest-feed", "short_interest_feed", "The Short interest card: the holdings' and watchlist's listings, most shorted first.", schema(schemars::schema_for!(NoArgs))),
         ("/api/agents/heatmap", "heatmap", "The Markets tab's heatmap.", schema(schemars::schema_for!(HeatmapArgs))),
         ("/api/agents/fear-greed", "fear_greed", "The Fear & Greed gauge, for stocks or crypto, and its history.", schema(schemars::schema_for!(FearArgs))),
@@ -236,6 +237,7 @@ read_with!(filing_summary, FilingArgs, tools::filing_summary);
 read_with!(filing_text, FilingTextArgs, tools::filing_text);
 read_with!(short_interest, ShortsArgs, tools::short_interest);
 read_alone!(short_interest_feed, tools::short_interest_feed);
+read_alone!(tax, tools::tax);
 read_with!(options, ListingArgs, tools::options);
 read_with!(option_contract, OptionContractArgs, tools::option_contract);
 read_with!(fear_greed, FearArgs, tools::fear_greed);

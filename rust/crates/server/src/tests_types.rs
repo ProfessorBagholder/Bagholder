@@ -131,6 +131,7 @@ fn markets_declarations() -> String {
         crate::http::markets::TileRef, crate::http::markets::OptionContractQuery,
         crate::options_card::OptionRow, crate::options_card::OptionSide, crate::options_card::OptionExpiry, crate::options_card::OptionsAnswer,
         crate::options_card::PremiumPoint, crate::options_card::PremiumChart, crate::options_card::OptionContract, crate::options_card::OptionContractAnswer,
+        crate::tax_doc::TaxWait, crate::tax_doc::TaxGain, crate::tax_doc::TaxYear, crate::tax_doc::TaxRow, crate::tax_doc::TaxHolding, crate::tax_doc::TaxNote, crate::tax_doc::TaxSale, crate::tax_doc::TaxDoc, crate::tax_doc::TaxAnswer,
     ];
     let mut out = String::from("// Generated from rust/crates/market/src/stored/feeds.rs and the server's market documents. Do not\n// edit: change the Rust type, then `BAGHOLDER_BLESS=1 cargo test -p bagholder-server the_pages_market_types`.\n\nimport type { Dec } from '../dec'\nimport type { OkOr } from './common'\nimport type { Fill } from './figures'\nimport type { SymbolMatch } from './wire'\n\n");
     for d in decls {
@@ -365,7 +366,7 @@ fn generated_file_of(name: &str) -> &'static str {
         "StatusAnswer" => "status",
         "TradeQuery" | "Clear" | "ClearAnswer" | "JournalEntryRequest" | "JournalAnswer" | "DebtAnswerRequest" | "DebtAnswer" | "EntryRequest" | "ChildShare" | "EntryAnswer" | "ImportQuery" | "ImportReport" | "ImportAccepted" | "ImportTold" | "WatchRequest" | "WatchStatus" => "model_api",
         "FilingsAnswer" | "EnrichAnswer" | "FilingText" | "FilingTextAnswer" | "Filings" | "Scope" | "Document" | "DocumentPart" | "FilingsFeed" => "filings",
-        "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "Resolve" | "ResolvedListing" | "ResolveAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" | "OptionsAnswer" | "OptionContractQuery" | "OptionContractAnswer" => "markets",
+        "FearAnswer" | "ShortsAnswer" | "Listing" | "Fear" | "ShortsQuery" | "GlanceAnswer" | "ShortsFeed" | "Search" | "SymbolSearchAnswer" | "Resolve" | "ResolvedListing" | "ResolveAnswer" | "ListingAnswer" | "NewsSymbolAnswer" | "WatchlistBody" | "WatchlistRemove" | "WatchlistAnswer" | "TilesSet" | "TilesAnswer" | "OptionsAnswer" | "OptionContractQuery" | "OptionContractAnswer" | "TaxAnswer" => "markets",
         "HistoryAnswer" | "HistoryQuery" => "chart",
         "TradesDoc" | "Detail" | "Details" => "figures",
         "TradesQuery" | "ViewQuery" | "ViewAnswer" | "Resync" | "TransactionsQuery" | "TransactionsAnswer" => "model_api",
@@ -511,6 +512,7 @@ fn keys_declarations() -> String {
         ("fear", keys_of::<crate::feeds::FearDoc>()),
         ("quote", keys_of::<crate::orders::TicketQuote>()),
         ("options", keys_of::<crate::options_card::OptionsAnswer>()),
+        ("tax", keys_of::<crate::tax_doc::TaxAnswer>()),
         ("history", keys_of::<crate::docs::HistoryDoc>()),
         ("universe", keys_of::<crate::feeds::UniverseDoc>()),
         ("news", keys_of::<crate::feeds::NewsDoc>()),

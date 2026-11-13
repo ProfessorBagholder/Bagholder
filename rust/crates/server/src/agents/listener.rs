@@ -138,6 +138,7 @@ pub const ROUTES: &[(&str, &[Method])] = &[
     ("/api/agents/filing-text", &[Method::GET]),
     ("/api/agents/short-interest", &[Method::GET]),
     ("/api/agents/short-interest-feed", &[Method::GET]),
+    ("/api/agents/tax", &[Method::GET]),
     ("/api/agents/options", &[Method::GET]),
     ("/api/agents/option-contract", &[Method::GET]),
     ("/api/agents/heatmap", &[Method::GET]),
@@ -212,6 +213,7 @@ pub fn router(ctx: Arc<Ctx>) -> Router {
         .route("/api/agents/filing-text", get(api::filing_text).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/short-interest", get(api::short_interest).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/short-interest-feed", get(api::short_interest_feed).route_layer(check_with(ctx.clone(), api_key)))
+        .route("/api/agents/tax", get(api::tax).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/options", get(api::options).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/option-contract", get(api::option_contract).route_layer(check_with(ctx.clone(), api_key)))
         .route("/api/agents/heatmap", get(api::heatmap).route_layer(check_with(ctx.clone(), api_key)))

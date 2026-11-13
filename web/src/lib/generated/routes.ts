@@ -6,7 +6,7 @@ import type { HistoryAnswer, HistoryQuery } from './chart'
 import type { OkOr } from './common'
 import type { Detail, Details, TradesDoc } from './figures'
 import type { Document, DocumentPart, EnrichAnswer, FilingTextAnswer, Filings, FilingsAnswer, FilingsFeed, Scope } from './filings'
-import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, OptionContractAnswer, OptionContractQuery, OptionsAnswer, Resolve, ResolveAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
+import type { Fear, FearAnswer, GlanceAnswer, Listing, ListingAnswer, NewsSymbolAnswer, OptionContractAnswer, OptionContractQuery, OptionsAnswer, Resolve, ResolveAnswer, Search, ShortsAnswer, ShortsFeed, ShortsQuery, SymbolSearchAnswer, TaxAnswer, TilesAnswer, TilesSet, WatchlistAnswer, WatchlistBody, WatchlistRemove } from './markets'
 import type { Clear, ClearAnswer, DebtAnswer, DebtAnswerRequest, EntryAnswer, EntryRequest, ImportAccepted, ImportQuery, ImportTold, JournalAnswer, JournalEntryRequest, TradeQuery, TradesQuery, TransactionsAnswer, TransactionsQuery, ViewAnswer, ViewQuery, WatchRequest, WatchStatus } from './model_api'
 import type { NotificationIds, NotificationsAnswer, NotificationsClearAnswer, NotificationsReadAnswer, NotificationsSeenAnswer, NotifySettingsAnswer, NotifySettingsPatch, NotifyTestAnswer, PushAnswer, PushEndpoint, PushSubscription } from './notifications'
 import type { Adjust, ListingNamed, ListingOf, Modify, Named, OrderActionAnswer, OrderListingAnswer, OrdersDoc, PlaceTicketAnswer, Preview, PreviewRequest, QuoteOf, RefreshAndOrders, Ticket, TicketQuote } from './orders'
@@ -65,6 +65,7 @@ export interface Routes {
   'GET /api/figures/trades': { query: TradesQuery; answer: TradesDoc }
   'GET /api/view': { query: ViewQuery; answer: ViewAnswer }
   'GET /api/transactions': { query: TransactionsQuery; answer: TransactionsAnswer }
+  'GET /api/tax': { answer: TaxAnswer }
   'POST /api/data/clear': { body: Clear; answer: ClearAnswer }
   'POST /api/journal': { body: JournalEntryRequest; answer: JournalAnswer }
   'POST /api/debts/answer': { body: DebtAnswerRequest; answer: DebtAnswer }

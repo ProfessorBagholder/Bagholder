@@ -158,6 +158,8 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `tax-slips-3`
 - `tax-slips-4`
 - `tax-slips-5`
+- `tax-slips-6`
+- `tax-slips-7`
 - `equity-and-returns-1`
 - `equity-and-returns-2`
 - `equity-and-returns-3`

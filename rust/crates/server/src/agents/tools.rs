@@ -446,6 +446,12 @@ pub fn option_contract(r: &ReadOnly, a: OptionContractArgs) -> Result<Value, Str
 }
 
 /// The Short interest card: the listings in scope, most shorted first.
+/// Each ETF held outside registered plans, its tax-cost ledger, the years complete
+/// and each T5008 sale against the ledger's.
+pub fn tax(r: &ReadOnly) -> Result<Value, String> {
+    r.page("/api/tax", &[])
+}
+
 pub fn short_interest_feed(r: &ReadOnly) -> Result<Value, String> {
     r.page("/api/shorts/feed", &[])
 }
@@ -760,6 +766,11 @@ impl Tools {
     async fn option_contract(&self, Parameters(a): Parameters<OptionContractArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
         let args = json!(a);
         self.run(&ctx, "option_contract", args, move |r| option_contract(r, a)).await
+    }
+
+    #[tool(description = "The tax cost of each ETF the person holds outside registered plans, in CAD: for each fund its units, its cost and cost per unit, every row of its ledger (each purchase, sale, return of capital and non-cash distribution, with where its figure comes from), each tax year's gains and whether the year is complete or what it waits on (codes: `slip`, `slip-differs`, `record-date`, `rate`, `period-open`, `earlier-year` and others); the years complete for every fund (`ready`); what the person's tax slips state that could not be taken in (`notes`, as codes); and each T5008 sale against the ledger's own, with what box 20 must say (`enter`) and whether the slip already says it (`state`: `right`, `change`, `unmatched` or `ambiguous`). What the slips state comes as amounts and codes, never as a slip's text.", annotations(title = "Tax", read_only_hint = true))]
+    async fn tax(&self, Parameters(_): Parameters<NoArgs>, ctx: RequestContext<RoleServer>) -> Result<CallToolResult, ErrorData> {
+        self.run(&ctx, "tax", json!({}), tax).await
     }
 
     #[tool(description = "The Short interest card: the holdings' and watchlist's listings, most shorted first.", annotations(title = "Short interest feed", read_only_hint = true))]
