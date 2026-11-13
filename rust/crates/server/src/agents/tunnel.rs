@@ -118,7 +118,8 @@ pub fn command(setup: &Setup, program: &str, port: u16, home: &std::path::Path) 
     let args: Vec<String> = match setup.provider {
         // in the foreground: `--bg` would keep it serving after Bagholder ends (§4.3a)
         Provider::Tailscale => vec!["funnel".into(), format!("--https={}", setup.funnel_port.unwrap_or(443)), target],
-        Provider::Cloudflare => vec!["tunnel".into(), "run".into(), "--url".into(), format!("http://{target}"), "bagholder-agents".into()],
+        // its self-update off: an update replacing it underneath ends the tunnel (`NO_AUTOUPDATE`)
+        Provider::Cloudflare => vec![super::cloudflare::NO_AUTOUPDATE.into(), "tunnel".into(), "run".into(), "--url".into(), format!("http://{target}"), "bagholder-agents".into()],
         Provider::Ngrok => vec!["http".into(), format!("--url={}", setup.name), target],
         // zrok v2.0.8: the reserved name in the public namespace, no terminal UI
         Provider::Zrok => vec!["share".into(), "public".into(), target, "--headless".into(), "-n".into(), format!("public:{}", setup.name)],
@@ -349,6 +350,39 @@ pub struct Tunnels {
     state: Arc<Mutex<TunnelState>>,
     /// Which start the child is: what its end is told by.
     run: u64,
+    /// Started and not stopped by the person: a tunnel that ends on its own while
+    /// wanted is started again (`again_after`).
+    wanted: bool,
+    /// When the child started, and how many times running it ended soon after it
+    /// started: how long the next start waits.
+    started: Option<std::time::Instant>,
+    ended_soon: u32,
+}
+
+/// A tunnel that ended on its own is started again this long after, as Cloudflare's
+/// own service for its connector restarts it (`RestartSec=5s`, the unit
+/// `cloudflared service install` writes), the wait doubled each time it ends again
+/// soon after starting, to at most five minutes: a tunnel that cannot start (its
+/// credentials gone, the network down) is tried again, never in a tight loop.
+pub const AGAIN_FIRST: std::time::Duration = std::time::Duration::from_secs(5);
+pub const AGAIN_MOST: std::time::Duration = std::time::Duration::from_secs(5 * 60);
+/// A tunnel that ran this long before it ended had come up: it is started again
+/// after the first wait.
+pub const RAN_LONG: std::time::Duration = std::time::Duration::from_secs(10 * 60);
+
+/// The wait before a tunnel that ended is started again, and how many times running
+/// it will then have ended soon after starting: `ended_soon` so far, the one that
+/// just ended having run for `ran`. One that ran `RAN_LONG` had come up, and counts
+/// from none again.
+pub fn again_wait(ended_soon: u32, ran: Option<std::time::Duration>) -> (std::time::Duration, u32) {
+    let soon = if ran.is_some_and(|r| r >= RAN_LONG) { 0 } else { ended_soon };
+    (AGAIN_FIRST.saturating_mul(1 << soon.min(16)).min(AGAIN_MOST), soon.saturating_add(1))
+}
+
+/// `then`, `delay` from now, on this thread: a tunnel's start again (`again_after`).
+pub fn after(delay: std::time::Duration, then: impl FnOnce()) {
+    std::thread::sleep(delay);
+    then();
 }
 
 /// Whether a tunnel's lines say Tailscale refused a change to its settings because
@@ -381,6 +415,8 @@ impl Tunnels {
             *s = TunnelState { running: Some(provider), command: argv.clone(), lines: Vec::new(), exited: None };
         }
         self.run += 1;
+        self.wanted = true;
+        self.started = Some(std::time::Instant::now());
         let run = self.run;
         let lines: Arc<Mutex<VecDeque<String>>> = Arc::default();
         let streams: Vec<Box<dyn std::io::Read + Send>> = [child.stdout.take().map(|o| Box::new(o) as Box<dyn std::io::Read + Send>), child.stderr.take().map(|e| Box::new(e) as Box<dyn std::io::Read + Send>)].into_iter().flatten().collect();
@@ -457,8 +493,28 @@ impl Tunnels {
         self.ended(run) && clashed(&self.state().lines)
     }
 
+    /// How long until start `run`, ended, is started again: none where the person
+    /// stopped it or a later start runs. `AGAIN_FIRST` after one that had run long,
+    /// doubled for each that ended soon after starting, to `AGAIN_MOST`.
+    pub fn again_after(&mut self, run: u64) -> Option<std::time::Duration> {
+        if !self.ended(run) || !self.wanted {
+            return None;
+        }
+        let (delay, ended_soon) = again_wait(self.ended_soon, self.started.map(|s| s.elapsed()));
+        self.ended_soon = ended_soon;
+        Some(delay)
+    }
+
+    /// Still wanted and not running: what a start again checks once its wait is over,
+    /// the person having perhaps stopped it meanwhile.
+    pub fn still_wanted(&self) -> bool {
+        self.wanted && self.state().running.is_none()
+    }
+
     /// Stop the tunnel: the guard ends its group.
     pub fn stop(&mut self) {
+        self.wanted = false;
+        self.ended_soon = 0;
         if let Some(mut c) = self.child.take() {
             #[cfg(unix)]
             // SAFETY: a signal to the guard this process started

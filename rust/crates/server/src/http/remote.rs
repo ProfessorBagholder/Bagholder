@@ -600,11 +600,26 @@ fn up(app: &Arc<App>) -> Result<(), String> {
     env.extend(files.env());
     let signal = app.events.clone();
     let on_line = move || signal.signal();
+    // ended on its own while on: started again after its wait (`Tunnels::again_after`),
+    // once the wait is over only if the person has not switched it off meanwhile
     let weak = Arc::downgrade(app);
     let ended = move |run: u64| {
         let Some(app) = weak.upgrade() else { return };
-        app.remote.tunnel.lock().unwrap_or_else(|e| e.into_inner()).ended(run);
+        let wait = app.remote.tunnel.lock().unwrap_or_else(|e| e.into_inner()).again_after(run);
         app.events.signal();
+        let Some(wait) = wait.filter(|_| app.remote.kept(&app.home).on) else { return };
+        crate::app::log(&format!("bagholder: the page's tunnel ended on its own; started again in {}s", wait.as_secs()));
+        drop(app);
+        let weak = weak.clone();
+        tunnel::after(wait, move || {
+            let Some(app) = weak.upgrade() else { return };
+            let wanted = app.remote.tunnel.lock().unwrap_or_else(|e| e.into_inner()).still_wanted();
+            if wanted && app.remote.kept(&app.home).on {
+                if let Err(e) = up(&app) {
+                    crate::app::log(&format!("bagholder: the page's tunnel could not start again: {e}"));
+                }
+            }
+        });
     };
     app.remote.tunnel.lock().unwrap_or_else(|e| e.into_inner()).start(Provider::Cloudflare, (argv, env), Arc::new(on_line), Arc::new(ended))?;
     app.remote.set_ready(None);

@@ -166,13 +166,20 @@ impl Files {
         Ok(())
     }
 
-    /// The command that runs the tunnel Bagholder made, to `target`.
+    /// The command that runs the tunnel Bagholder made, to `target`, its self-update
+    /// off (`NO_AUTOUPDATE`).
     pub fn run(&self, program: &str, target: &str) -> Option<Vec<String>> {
         let name = self.tunnel()?;
         let rest = vec!["run".into(), "--credentials-file".into(), self.credentials().display().to_string(), "--url".into(), format!("http://{target}"), name];
-        Some(std::iter::once(program.to_string()).chain(self.args(&rest)).collect())
+        Some([program.to_string(), NO_AUTOUPDATE.to_string()].into_iter().chain(self.args(&rest)).collect())
     }
 }
+
+/// cloudflared's own once-a-day update, off: it replaces the program underneath the
+/// running tunnel and ends it, and where it cannot replace it (`exit status: 10`) the
+/// tunnel ends all the same. Given before `tunnel`, as Cloudflare's own service runs
+/// it (`cloudflared --no-autoupdate tunnel run`).
+pub const NO_AUTOUPDATE: &str = "--no-autoupdate";
 
 /// The domain the sign-in was made for, its account, and the token cloudflared was
 /// given for Cloudflare's API.
