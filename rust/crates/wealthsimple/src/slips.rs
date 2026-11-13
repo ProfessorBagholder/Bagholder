@@ -488,3 +488,158 @@ pub fn t5(text: &str) -> Result<T5, String> {
     }
     Ok(T5 { year, rows: rows.into_iter().map(|r| r.1).collect() })
 }
+
+/// A slip read, of whichever kind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Slip {
+    T3(T3),
+    T5(T5),
+    T5008(T5008),
+}
+
+impl Slip {
+    /// The tax year the slip states.
+    pub fn year(&self) -> i16 {
+        match self {
+            Slip::T3(s) => s.year,
+            Slip::T5(s) => s.year,
+            Slip::T5008(s) => s.year,
+        }
+    }
+}
+
+/// A slip of `kind` read from its text, or why it is refused.
+pub fn read(kind: crate::documents::SlipKind, text: &str) -> Result<Slip, String> {
+    use crate::documents::SlipKind;
+    match kind {
+        SlipKind::T3 => t3(text).map(Slip::T3),
+        SlipKind::T5 => t5(text).map(Slip::T5),
+        SlipKind::T5008 => t5008(text).map(Slip::T5008),
+    }
+}
+
+// -- what is never kept of a slip ----------------------------------------------
+
+/// The version of `redact`: a slip it could not take the person out of is kept
+/// with no text under this number, and read again only once it changes. Raise it
+/// whenever `redact` learns to find what it could not.
+pub const REDACTOR: i64 = 1;
+
+/// Where the payer's side of a slip begins: in every layout read (the person's
+/// slips, 2023 to 2025), the recipient's name and address stand left of this
+/// column and Wealthsimple's own name, address and account line right of it.
+const PAYER_SIDE: usize = 110;
+
+/// The runs of text on a line, as character columns `[start, end)`: words apart by
+/// fewer than three spaces are one run (a name, an address line). A page's form
+/// feed is no text and ends a run, wherever it falls on the line.
+fn runs(line: &[char]) -> Vec<(usize, usize)> {
+    let mut out: Vec<(usize, usize)> = Vec::new();
+    let mut page_ended = false;
+    for (i, &c) in line.iter().enumerate() {
+        match c {
+            '\u{c}' => page_ended = true,
+            ' ' => {}
+            _ => {
+                match out.last_mut() {
+                    Some(r) if !page_ended && i - r.1 < 3 => r.1 = i + 1,
+                    _ => out.push((i, i + 1)),
+                }
+                page_ended = false;
+            }
+        }
+    }
+    out
+}
+
+/// A slip's text with what identifies the person taken out, column for column, so
+/// every reader reads it exactly as before: each number written as a social
+/// insurance number (`999 999 999`, `999-999-999`, `999999999`) has its digits
+/// written `#`, and the recipient's name and address, wherever they are printed,
+/// are written `#` throughout. The name and address are found under each label
+/// that heads them (`Recipient's name and address` on a T3's or a T5's slip, `Name
+/// and Address of` beside it on a T5008): the lines below it whose text starts
+/// at one column left of the payer's side, up to the first that starts at
+/// another. Every run of text elsewhere that is one of those lines whole (a
+/// statement's own address block) is taken out with them. A slip with no such
+/// label, or a label with no name and address under it, is refused: it is never
+/// kept with them in it.
+pub fn redact(text: &str) -> Result<String, String> {
+    let mut lines: Vec<Vec<char>> = text.split('\n').map(|l| l.chars().collect()).collect();
+    for line in &mut lines {
+        mask_sins(line);
+    }
+    let mut theirs: std::collections::BTreeSet<String> = std::collections::BTreeSet::new();
+    let mut labels = 0;
+    for i in 0..lines.len() {
+        let label: String = lines[i].iter().collect();
+        if !(label.contains("Recipient's name") || label.contains("Name and Address of")) {
+            continue;
+        }
+        labels += 1;
+        let mut column = None;
+        let mut block = Vec::new();
+        // a name and its address lines, never more than a few lines below the label
+        for (j, line) in lines.iter().enumerate().skip(i + 1).take(10) {
+            let Some(&(a, b)) = runs(line).iter().find(|r| r.0 < PAYER_SIDE) else { continue };
+            match column {
+                None => column = Some(a),
+                Some(c) if a.abs_diff(c) <= 1 => {}
+                Some(_) => break,
+            }
+            block.push((j, a, b));
+        }
+        if block.len() < 2 {
+            return Err(format!("no name and address under the label on line {}", i + 1));
+        }
+        for (j, a, b) in block {
+            theirs.insert(lines[j][a..b].iter().collect());
+        }
+    }
+    if labels == 0 {
+        return Err("no recipient's name and address found, so it cannot be taken out".into());
+    }
+    for line in &mut lines {
+        for (a, b) in runs(line) {
+            if theirs.contains(&line[a..b].iter().collect::<String>()) {
+                line[a..b].fill('#');
+            }
+        }
+    }
+    Ok(lines.iter().map(|l| l.iter().collect::<String>()).collect::<Vec<_>>().join("\n"))
+}
+
+/// Each number on a line written as a social insurance number, its digits `#`:
+/// nine digits in threes, apart by one space, one hyphen or nothing, the same
+/// between each, with no digit, point or comma on either side and no dollar sign
+/// before (an amount, a quantity or a date is never one).
+fn mask_sins(line: &mut [char]) {
+    let before = |c: Option<&char>| c.is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ',' | '$'));
+    let after = |c: Option<&char>| c.is_some_and(|c| c.is_ascii_digit() || matches!(c, '.' | ','));
+    let three = |line: &[char], at: usize| line.get(at..at + 3).is_some_and(|s| s.iter().all(char::is_ascii_digit));
+    let mut i = 0;
+    while i < line.len() {
+        let starts = three(line, i) && !(i > 0 && before(line.get(i - 1)));
+        let end = if starts {
+            [None, Some(' '), Some('-')].into_iter().find_map(|sep| {
+                let w = 3 + usize::from(sep.is_some());
+                let end = i + 2 * w + 3;
+                let apart = sep.is_none_or(|s| line.get(i + 3) == Some(&s) && line.get(i + w + 3) == Some(&s));
+                (apart && three(line, i + w) && three(line, i + 2 * w) && !after(line.get(end))).then_some(end)
+            })
+        } else {
+            None
+        };
+        match end {
+            Some(end) => {
+                for c in &mut line[i..end] {
+                    if c.is_ascii_digit() {
+                        *c = '#';
+                    }
+                }
+                i = end;
+            }
+            None => i += 1,
+        }
+    }
+}

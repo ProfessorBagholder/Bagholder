@@ -142,3 +142,62 @@ fn a_t5_whose_rows_do_not_come_to_its_totals_is_refused() {
     let e = slips::t5(&altered).unwrap_err();
     assert!(e.contains("totals row says"), "{e}");
 }
+
+/// The made-up recipient each made-up slip is issued to, printed on it wherever a
+/// real slip prints the recipient: under each label and atop a statement's pages
+/// (a joint account's slip names a second person after the first).
+const RECIPIENT: [&str; 3] = ["Ally Samplesworth", "1234 56 ST", "Sampletown AB T0X0X0"];
+const SECOND: &str = "Robin Casey Samplesworth";
+
+/// Every word of nine digits on a slip: the made-up recipient identification numbers.
+fn nine_digit_words(t: &str) -> Vec<String> {
+    t.split_whitespace().filter(|w| w.len() == 9 && w.chars().all(|c| c.is_ascii_digit())).map(str::to_string).collect()
+}
+
+const ALL: [&str; 10] = ["t3-made-up-a", "t3-made-up-b", "t3-made-up-c", "t5-made-up-a", "t5-made-up-b", "t5-made-up-c", "t5008-made-up-a", "t5008-made-up-b", "t5008-made-up-c", "t5008-made-up-d"];
+
+fn kind(name: &str) -> bagholder_wealthsimple::documents::SlipKind {
+    bagholder_wealthsimple::documents::SlipKind::of(name.split('-').next().unwrap()).unwrap()
+}
+
+/// What a slip keeps holds no social insurance number, in any of the three ways
+/// one is written, and no name or address of the recipient's, under its labels or
+/// atop a statement's page; every line keeps its width, and each reader reads it
+/// exactly as it read the slip whole.
+#[test]
+fn a_slip_kept_holds_no_sin_name_or_address_and_reads_as_before() {
+    for name in ALL {
+        let (t, _) = slip(name);
+        let sins = nine_digit_words(&t);
+        assert!(!sins.is_empty(), "{name}: the made-up slip carries its made-up numbers");
+        // the first written with spaces, the second with hyphens, the rest as they are
+        let mut written = t.clone();
+        for (i, s) in sins.iter().take(2).enumerate() {
+            let sep = if i == 0 { " " } else { "-" };
+            written = written.replacen(s.as_str(), &format!("{}{sep}{}{sep}{}", &s[..3], &s[3..6], &s[6..]), 1);
+        }
+        assert!(RECIPIENT.iter().all(|r| written.contains(r)), "{name}: the made-up recipient is printed on it");
+        let kept = slips::redact(&written).unwrap_or_else(|e| panic!("{name}: {e}"));
+        for s in &sins {
+            for form in [s.clone(), format!("{} {} {}", &s[..3], &s[3..6], &s[6..]), format!("{}-{}-{}", &s[..3], &s[3..6], &s[6..])] {
+                assert!(!kept.contains(&form), "{name}: {form} kept");
+            }
+        }
+        for r in RECIPIENT.into_iter().chain([SECOND]) {
+            assert!(!kept.contains(r), "{name}: {r} kept");
+        }
+        assert_eq!(kept.lines().map(|l| l.chars().count()).collect::<Vec<_>>(), written.lines().map(|l| l.chars().count()).collect::<Vec<_>>(), "{name}: every line keeps its width");
+        assert_eq!(slips::read(kind(name), &kept), slips::read(kind(name), &t), "{name}");
+    }
+}
+
+/// A slip with no label heading its recipient, or a label with no name and
+/// address under it, is refused: it is never kept with them in it.
+#[test]
+fn a_slip_whose_recipient_cannot_be_found_is_refused() {
+    let (t, _) = slip("t5008-made-up-b");
+    let unlabelled = t.replace("Name and Address of", "Name and Place of");
+    assert!(slips::redact(&unlabelled).unwrap_err().contains("no recipient's name and address found"));
+    let alone = "Recipient's name and address\n\n\n                                                                Year\n";
+    assert!(slips::redact(alone).unwrap_err().contains("no name and address under the label"));
+}

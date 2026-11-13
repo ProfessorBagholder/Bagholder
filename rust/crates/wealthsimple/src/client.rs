@@ -45,6 +45,8 @@ fn doc(name: &str) -> &'static str {
         "FetchAccountCurrentMarginBuyingPowerV2" => include_str!("../graphql/FetchAccountCurrentMarginBuyingPowerV2.graphql"),
         "FetchAccountAppliedRates" => include_str!("../graphql/FetchAccountAppliedRates.graphql"),
         "FetchTradingBalanceBuyingPower" => include_str!("../graphql/FetchTradingBalanceBuyingPower.graphql"),
+        "FetchIdentityPaginatedDocuments" => include_str!("../graphql/FetchIdentityPaginatedDocuments.graphql"),
+        "DocumentSignedUrlCreate" => include_str!("../graphql/DocumentSignedUrlCreate.graphql"),
         // the probe's only: the enum's values where Wealthsimple answers introspection
         other => panic!("no document named {other}"),
     }
@@ -191,6 +193,52 @@ impl<'n> Client<'n> {
 
     fn identity(&mut self) -> Answer<String> {
         Ok(self.tokens()?.identity)
+    }
+}
+
+/// The documents list a page at a time, as the Documents page asks it.
+const DOCUMENTS_PAGE: i64 = 50;
+
+impl crate::documents::Documents for Client<'_> {
+    fn tax_documents(&mut self) -> Answer<Vec<Value>> {
+        let op = "FetchIdentityPaginatedDocuments";
+        let identity = self.identity()?;
+        let mut out = Vec::new();
+        loop {
+            let vars = obj(vec![("id", text(&identity)), ("limit", num(DOCUMENTS_PAGE)), ("offset", num(out.len() as i64)), ("locale", text("en-CA")), ("categories", Value::Array(vec![text("tax")]))]);
+            let data = self.graphql(op, vars)?;
+            let page = Node::root(&data).obj("identity").and_then(|i| i.obj("documents")).map_err(|m| mismatch(op, m))?;
+            let total = page.int("totalCount").map_err(|m| mismatch(op, m))?;
+            let results = page.list("results").map_err(|m| mismatch(op, m))?;
+            // a page that brings none ends the list, whatever its count says
+            let none = results.is_empty();
+            out.extend(results.into_iter().map(|n| n.value().clone()));
+            if none || out.len() as i64 >= total {
+                return Ok(out);
+            }
+        }
+    }
+    fn signed_link(&mut self, bucket: Option<&str>, key: &str) -> Answer<String> {
+        let op = "DocumentSignedUrlCreate";
+        let mut vars = vec![("key", text(key))];
+        if let Some(b) = bucket {
+            vars.push(("bucket", text(b)));
+        }
+        let data = self.graphql(op, obj(vars))?;
+        Ok(Node::root(&data).obj("signDocumentUrl").and_then(|s| s.text("downloadUrl")).map_err(|m| mismatch(op, m))?.to_string())
+    }
+    fn download(&mut self, url: &str) -> Answer<Vec<u8>> {
+        if !crate::hosts::file_link_ok(url) {
+            return Err(Failure::Refused(format!("a document's file at {}, which is not a link its files are read from", crate::hosts::host_of(url))));
+        }
+        self.sent.fetch_add(1, Ordering::Relaxed);
+        bagholder_net::client::named_call("wealthsimple", "a document's file");
+        // the link carries its own permission: the sign-in is never sent with it
+        let reply = self.net.send(&Ask::get(url, &[])).map_err(|e| Failure::Unreachable(e.to_string()))?;
+        if reply.status != 200 {
+            return Err(Failure::Refused(format!("a document's file: answered {}", reply.status)));
+        }
+        Ok(reply.body)
     }
 }
 

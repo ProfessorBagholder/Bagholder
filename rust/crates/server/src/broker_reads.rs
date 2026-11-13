@@ -322,6 +322,10 @@ fn pass(app: &Arc<App>, f: &Figures, now: Timestamp, rest: &mut Rest, served: &m
         Some(Due::Pull) => {
             let read = pull_now(app, f, &book, conn, file, now, true)?;
             if matches!(read, Read::Done) {
+                // the tax slips Wealthsimple issued: its documents list read after the
+                // day's pull where it is due, on the same sign-in and the same thread,
+                // one request after another (`SPEC.md` tax-slips-1)
+                crate::tax_slips::read(app, &book, conn, now, &zone);
                 // the year's tax forms, on their own work: they wait on CDS, not the pull
                 let a = app.clone();
                 let today = now.to_zoned(zone.clone()).date();

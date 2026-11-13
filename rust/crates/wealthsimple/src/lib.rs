@@ -5,6 +5,7 @@ pub mod adapter;
 pub mod anonymise;
 pub mod assemble;
 pub mod client;
+pub mod documents;
 pub mod generated;
 pub mod hosts;
 pub mod mapping;

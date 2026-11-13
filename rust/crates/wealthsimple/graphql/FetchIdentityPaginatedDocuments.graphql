@@ -1,0 +1,69 @@
+# Wealthsimple's own document, from its web app (release 0.3.753704, read 2026-11-12):
+# the Documents page's list, asked here for its tax category.
+query FetchIdentityPaginatedDocuments($id: ID!, $limit: Int, $offset: Int, $locale: String, $categories: [String!], $accountIds: [String!], $startDate: String, $endDate: String) {
+  identity(id: $id) {
+    id
+    ...IdentityPaginatedDocuments
+    __typename
+  }
+}
+
+fragment IdentityPaginatedDocuments on Identity {
+  documents(limit: $limit, offset: $offset, locale: $locale, categories: $categories, account_ids: $accountIds, start_date: $startDate, end_date: $endDate) {
+    ...Documents
+    __typename
+  }
+  __typename
+}
+
+fragment Documents on PaginatedDocuments {
+  totalCount: total_count
+  offset
+  results {
+    ...Document
+    __typename
+  }
+  __typename
+}
+
+fragment Document on Document {
+  id
+  createdAt: created_at
+  availableAt: available_at
+  displayAt: display_at
+  filename
+  period
+  frequency
+  type
+  downloadUrl: download_url
+  uploaderName: uploader_name
+  s3BucketName: s3_bucket_name
+  s3Key: s3_key
+  category
+  account {
+    id
+    type
+    __typename
+  }
+  documents {
+    ...StatementDocument
+    __typename
+  }
+  __typename
+}
+
+fragment StatementDocument on StatementDocument {
+  id
+  createdAt: created_at
+  downloadUrl: download_url
+  s3BucketName: s3_bucket_name
+  s3Key: s3_key
+  type
+  account {
+    id
+    type
+    custodianAccountIds: custodian_account_ids
+    __typename
+  }
+  __typename
+}

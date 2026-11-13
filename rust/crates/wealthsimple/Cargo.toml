@@ -33,6 +33,9 @@ bagholder-book = { path = "../book", features = ["oracles"] }
 # a book written at an earlier version, for the migrations' tests over the made-up broker's books
 bagholder-sqlite = { path = "../sqlite" }
 tempfile = "3"
+# the PDF text the server reads a tax slip's file with (`pdftext::layout_pages`), so
+# the slips' tests read a file as the app reads one
+bagholder-market = { path = "../market" }
 # the books 2.10.8 and 2.10.9 wrote, kept gzipped (tests/books)
 flate2 = "1"
 
