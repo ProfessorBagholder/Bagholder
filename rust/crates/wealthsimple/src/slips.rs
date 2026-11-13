@@ -520,6 +520,11 @@ pub fn read(kind: crate::documents::SlipKind, text: &str) -> Result<Slip, String
 
 // -- what is never kept of a slip ----------------------------------------------
 
+/// The version of `redact`: a slip it could not take the person out of is kept
+/// with no text under this number, and read again only once it changes. Raise it
+/// whenever `redact` learns to find what it could not.
+pub const REDACTOR: i64 = 1;
+
 /// Where the payer's side of a slip begins: in every layout read (the person's
 /// slips, 2023 to 2025), the recipient's name and address stand left of this
 /// column and Wealthsimple's own name, address and account line right of it.

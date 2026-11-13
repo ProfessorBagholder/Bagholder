@@ -206,7 +206,7 @@
 
 <a id="tax-slips-4"></a>What a slip states, as it states it: a T5008 each sale (its day, type, quantity, security, book cost where stated, proceeds); a T3 its boxes and, where it carries its breakdown (from 2024), each fund's distributions by record and payment date, each box with its cash and non-cash parts; a T5 its rows by security, its return of capital a column of its own beside the boxes.
 
-<a id="tax-slips-5"></a>What identifies the person is never kept. Before a slip's text is kept, refused or not, every number written as a social insurance number (`999 999 999`, `999-999-999` or `999999999`) has its digits written over, and so does the recipient's name and address, under each label that heads them and wherever else the slip prints them, column for column, so that every reader reads the slip as before. A slip whose name and address cannot be found is not kept, and is read again at the next read. No page or agent tool shows a slip's text: only the figures read from it.
+<a id="tax-slips-5"></a>What identifies the person is never kept. Before a slip's text is kept, refused or not, every number written as a social insurance number (`999 999 999`, `999-999-999` or `999999999`) has its digits written over, and so does the recipient's name and address, under each label that heads them and wherever else the slip prints them, column for column, so that every reader reads the slip as before. A slip whose name and address cannot be found is kept with no text at all, its year's slip missing, and its file is fetched again only once the way they are taken out changes. No page or agent tool shows a slip's text: only the figures read from it.
 
 ### Equity and returns
 

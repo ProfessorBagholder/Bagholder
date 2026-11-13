@@ -199,10 +199,11 @@ fn each_slip_the_list_states_is_read_from_its_file_once_and_kept() {
         let s = stored.iter().find(|s| s.document == format!("made-up-document-{i}")).unwrap();
         let kind = kind_of(n);
         assert_eq!((s.kind.as_str(), s.account_key.clone()), (kind.name(), format!("made-up-account-{i}")));
-        assert!(s.text.contains('\u{c}'), "{n}: kept with its pages apart");
-        assert!(!s.text.contains("Samplesworth") && !s.text.contains("Sampletown"), "{n}: its recipient's name and address not kept");
-        assert!(!s.text.split_whitespace().any(|w| w.len() == 9 && w.chars().all(|c| c.is_ascii_digit())), "{n}: no social insurance number kept");
-        assert_eq!(slips::read(kind, &s.text).unwrap(), slips::read(kind, &slip_text(n)).unwrap(), "{n}");
+        let text = s.text.as_deref().unwrap();
+        assert!(text.contains('\u{c}'), "{n}: kept with its pages apart");
+        assert!(!text.contains("Samplesworth") && !text.contains("Sampletown"), "{n}: its recipient's name and address not kept");
+        assert!(!text.split_whitespace().any(|w| w.len() == 9 && w.chars().all(|c| c.is_ascii_digit())), "{n}: no social insurance number kept");
+        assert_eq!(slips::read(kind, text).unwrap(), slips::read(kind, &slip_text(n)).unwrap(), "{n}");
     }
     let again = documents::keep_new(&book, conn, &mut stand, &pages, at("2026-03-03T22:00:00Z")).unwrap();
     assert!(again.new.is_empty() && again.unread.is_empty());
@@ -227,7 +228,7 @@ fn a_slip_amended_is_the_slip_and_the_one_before_stays_kept() {
         let (_home, book, conn) = book();
         documents::keep_new(&book, conn, &mut stand, &pages, at("2026-04-09T22:00:00Z")).unwrap();
         assert_eq!(book.tax_slips(conn).unwrap().iter().map(|s| s.document.as_str()).collect::<Vec<_>>(), vec!["made-up-amended"]);
-        assert_eq!(book.tax_slip_documents(conn).unwrap(), BTreeSet::from(["made-up-amended".to_string(), "made-up-original".to_string()]));
+        assert_eq!(book.tax_slip_documents(conn, slips::REDACTOR).unwrap(), BTreeSet::from(["made-up-amended".to_string(), "made-up-original".to_string()]));
     }
 }
 
@@ -268,7 +269,37 @@ fn a_file_with_no_text_is_read_again_and_a_slip_refused_is_kept_as_it_came() {
     assert_eq!(said["made-up-document-3"], "the slip states the year 2025, its document 2026");
     let stored = book.tax_slips(conn).unwrap();
     assert_eq!(stored.len(), 3, "a refused slip is kept as it came");
-    assert!(stored.iter().all(|s| !s.text.contains("Samplesworth")), "a refused slip is kept without its recipient's name and address");
+    assert!(stored.iter().all(|s| !s.text.as_deref().unwrap().contains("Samplesworth")), "a refused slip is kept without its recipient's name and address");
+}
+
+/// A slip whose recipient cannot be found to take out is kept with no text, its
+/// slip missing, and its file is not fetched again, read after read, until the
+/// redaction changes: then it is read again, and kept with its text once the new
+/// version finds what to take out.
+#[test]
+fn a_slip_that_cannot_be_redacted_is_fetched_once_until_the_redaction_changes() {
+    need_pdftotext();
+    let mut stand = Stand::default();
+    let unlabelled = slip_text("t5008-made-up-b").replace("Name and Address of", "Name and Place of");
+    stand.slip("made-up-document-1", "t5008-made-up-b", &unlabelled, "made-up-account-1", "2026-02-26T10:00:00.000Z");
+    let (_home, book, conn) = book();
+    for day in 2..=9 {
+        let kept = documents::keep_new(&book, conn, &mut stand, &pages, at(&format!("2026-03-0{day}T22:00:00Z"))).unwrap();
+        if day == 2 {
+            assert!(kept.new[0].1.as_ref().unwrap_err().contains("kept without its text"), "{:?}", kept.new);
+        } else {
+            assert!(kept.new.is_empty());
+        }
+    }
+    assert_eq!(stand.downloaded.len(), 1, "fetched once across the reads");
+    let stored = book.tax_slips(conn).unwrap();
+    assert_eq!((stored.len(), stored[0].text.clone()), (1, None), "kept with no text: its slip missing");
+    // a later redaction: read again, and kept with its text once it finds the recipient
+    stand.files.insert(link("made-up-document-1-key"), pdf_of(&slip_text("t5008-made-up-b")));
+    let kept = documents::keep_new_as(&book, conn, &mut stand, &pages, slips::REDACTOR + 1, at("2026-03-10T22:00:00Z")).unwrap();
+    assert_eq!(stand.downloaded.len(), 2);
+    assert_eq!(kept.new.iter().map(|(_, r)| r.clone()).collect::<Vec<_>>(), vec![Ok(())]);
+    assert!(book.tax_slips(conn).unwrap()[0].text.as_deref().is_some_and(|t| !t.contains("Samplesworth")));
 }
 
 /// A sign-in that lapses keeps nothing and notes no read: the next read asks again.
@@ -279,7 +310,7 @@ fn a_lapsed_sign_in_keeps_nothing_and_notes_no_read() {
     let (_home, book, conn) = book();
     let e = documents::keep_new(&book, conn, &mut stand, &pages, at("2026-03-14T22:00:00Z")).unwrap_err();
     assert!(e.contains("lapsed"), "{e}");
-    assert!(book.tax_slip_documents(conn).unwrap().is_empty());
+    assert!(book.tax_slip_documents(conn, slips::REDACTOR).unwrap().is_empty());
     assert_eq!(book.last_read(conn, documents::READ_PART).unwrap(), None);
 }
 

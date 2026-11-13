@@ -6,7 +6,9 @@
 -- kind and a year, the one made last is the slip (`SPEC.md` tax-slips-3). What a
 -- slip states is read from its text each time it is used, so a reader put right
 -- reads every kept slip again without asking the broker; `created` is the broker's
--- own date or instant for it, as it wrote it.
+-- own date or instant for it, as it wrote it. A slip whose name and address cannot
+-- be found is kept with no text at all: `redactor` is the version of the redaction
+-- each row was written under, and such a slip is read again only once it changes.
 CREATE TABLE tax_slips (
     connection_id TEXT NOT NULL REFERENCES broker_connections(id),
     document TEXT NOT NULL,
@@ -14,7 +16,8 @@ CREATE TABLE tax_slips (
     kind TEXT NOT NULL,
     year INTEGER NOT NULL,
     created TEXT NOT NULL,
-    text TEXT NOT NULL,
+    text TEXT,
+    redactor INTEGER NOT NULL,
     read_id TEXT NOT NULL REFERENCES broker_reads(id),
     PRIMARY KEY (connection_id, document)
 ) STRICT;

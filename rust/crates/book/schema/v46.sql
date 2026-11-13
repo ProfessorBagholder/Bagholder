@@ -671,7 +671,8 @@ CREATE TABLE tax_slips (
     kind TEXT NOT NULL,
     year INTEGER NOT NULL,
     created TEXT NOT NULL,
-    text TEXT NOT NULL,
+    text TEXT,
+    redactor INTEGER NOT NULL,
     read_id TEXT NOT NULL REFERENCES broker_reads(id),
     PRIMARY KEY (connection_id, document)
 ) STRICT;

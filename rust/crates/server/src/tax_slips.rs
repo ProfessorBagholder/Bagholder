@@ -31,7 +31,7 @@ pub fn read(app: &App, book: &Book, conn: ConnectionId, now: Timestamp, zone: &T
                 let what = format!("a {} for {} of account {}", slip.kind.name().to_uppercase(), slip.year, slip.account);
                 match reading {
                     Ok(()) => log(&format!("bagholder: {what} read from Wealthsimple's documents")),
-                    Err(why) => log(&format!("bagholder: {what} kept as it came and not read: {why}")),
+                    Err(why) => log(&format!("bagholder: {what} kept and not read: {why}")),
                 }
             }
             for (document, why) in &kept.unread {
@@ -90,7 +90,7 @@ mod tests {
         read(&app, &book, conn, now, &zone);
         let first = vec![("FetchIdentityPaginatedDocuments".to_string(), true), ("DocumentSignedUrlCreate".to_string(), true), ("a file".to_string(), false)];
         assert_eq!(*asked.lock().unwrap(), first);
-        assert!(book.tax_slip_documents(conn).unwrap().is_empty());
+        assert!(book.tax_slip_documents(conn, bagholder_wealthsimple::slips::REDACTOR).unwrap().is_empty());
         assert_eq!(book.last_read(conn, bagholder_wealthsimple::documents::READ_PART).unwrap(), Some(now));
         // the same day again: the list is read once a day at most
         read(&app, &book, conn, "2026-03-02T23:30:00Z".parse().unwrap(), &zone);

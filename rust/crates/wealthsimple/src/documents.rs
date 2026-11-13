@@ -193,30 +193,32 @@ pub fn list_due(last: Option<jiff::civil::Date>, today: jiff::civil::Date) -> bo
 /// person taken out of it (`slips::redact`), and kept in `book`; the read noted
 /// (`READ_PART`) once the list has answered.
 pub fn keep_new(book: &bagholder_book::Book, connection: bagholder_core::ConnectionId, src: &mut dyn Documents, text_of: &dyn Fn(&[u8]) -> Option<String>, now: jiff::Timestamp) -> Result<Kept, String> {
-    let kept = book.tax_slip_documents(connection).map_err(|e| e.to_string())?;
+    keep_new_as(book, connection, src, text_of, crate::slips::REDACTOR, now)
+}
+
+/// [`keep_new`] under the redaction version `redactor`: a slip kept without its
+/// text by another version is read again.
+pub fn keep_new_as(book: &bagholder_book::Book, connection: bagholder_core::ConnectionId, src: &mut dyn Documents, text_of: &dyn Fn(&[u8]) -> Option<String>, redactor: i64, now: jiff::Timestamp) -> Result<Kept, String> {
+    let kept = book.tax_slip_documents(connection, redactor).map_err(|e| e.to_string())?;
     let found = read_new(src, &kept, text_of).map_err(|f| f.to_string())?;
     let read = book.broker_read(connection, READ_PART, now).map_err(|e| e.to_string())?;
     let mut out = Kept { new: Vec::new(), unread: found.unread };
     for f in found.fetched {
         // what identifies the person is taken out before anything is kept, and the
-        // slip is read from what is kept (`SPEC.md` tax-slips-5)
-        let text = match crate::slips::redact(&f.text) {
-            Ok(t) => t,
-            Err(why) => {
-                out.unread.push((f.slip.id.clone(), format!("not kept: {why}")));
-                continue;
-            }
-        };
+        // slip is read from what is kept; one it cannot be taken out of is kept with
+        // no text, so it is not fetched again until the redaction changes
+        // (`SPEC.md` tax-slips-5)
+        let redacted = crate::slips::redact(&f.text);
         let slip = bagholder_book::tax_slips::TaxSlip {
             document: f.slip.id.clone(),
             account_key: f.slip.account.clone(),
             kind: f.slip.kind.name().to_string(),
             year: f.slip.year,
             created: f.slip.created.clone(),
-            text,
+            text: redacted.as_ref().ok().cloned(),
         };
-        book.keep_tax_slip(connection, &slip, &read).map_err(|e| e.to_string())?;
-        let reading = crate::slips::read(f.slip.kind, &slip.text).and_then(|s| {
+        book.keep_tax_slip(connection, &slip, redactor, &read).map_err(|e| e.to_string())?;
+        let reading = redacted.map_err(|why| format!("kept without its text, as what identifies the person could not be taken out of it: {why}")).and_then(|text| crate::slips::read(f.slip.kind, &text)).and_then(|s| {
             if s.year() == f.slip.year { Ok(()) } else { Err(format!("the slip states the year {}, its document {}", s.year(), f.slip.year)) }
         });
         out.new.push((f.slip, reading));
