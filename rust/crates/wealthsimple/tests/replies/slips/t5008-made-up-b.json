@@ -1,0 +1,20 @@
+{
+ "year": 2025,
+ "report_code": null,
+ "rows": [
+  {
+   "day": "2025-01-03",
+   "type": "SHS",
+   "quantity": "186.5915",
+   "security": "Example Covered Call Canadian Banks ETF",
+   "cost": "32162.94",
+   "proceeds": "97782.39",
+   "currency": "CAD"
+  }
+ ],
+ "totals": {
+  "proceeds": "97782.39",
+  "cost": "32162.94",
+  "gain": "65619.45"
+ }
+}
