@@ -234,3 +234,31 @@ fn a_row_naming_an_account_the_book_does_not_have_books_nothing() {
     // and made no instrument on the way
     assert!(f.book.instruments().unwrap().is_empty());
 }
+
+/// A fund type as the records state it (brief 82): the latest record to state
+/// one sets it, a record that states none leaves it as it was, and neither is a
+/// problem.
+#[test]
+fn an_instrument_is_a_fund_as_the_latest_record_to_say_states() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let m = Spelled::v(1);
+    let stating = |fund: Option<bool>| {
+        let mut s = share("CA0000000001", "AAA");
+        if let Some(fund) = fund {
+            s["fund"] = json!(fund);
+        }
+        s
+    };
+    let fund_after = |key: &str, fund: Option<bool>| {
+        let r = f.store(&m, key, &legs(vec![buy("a1", stating(fund), "1", "-1", "2026-01-02T15:00:00Z")]));
+        assert!(f.book.problems_of(r.record).unwrap().is_empty());
+        f.book.instrument(instrument_of(&f, r.record)).unwrap().fund
+    };
+    assert_eq!(fund_after("r1", Some(true)), Some(true), "the record that brings the instrument states it");
+    assert_eq!(fund_after("r2", None), Some(true), "a record that says nothing leaves what another stated");
+    assert_eq!(fund_after("r3", Some(false)), Some(false));
+    // an instrument no record has said of is unsaid
+    let r = f.store(&m, "r4", &legs(vec![buy("a1", share("CA0000000002", "BBB"), "1", "-1", "2026-01-02T15:00:00Z")]));
+    assert_eq!(f.book.instrument(instrument_of(&f, r.record)).unwrap().fund, None);
+}

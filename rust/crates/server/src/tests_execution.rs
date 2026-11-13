@@ -969,7 +969,7 @@ fn between_sessions_a_bracket_with_nothing_in_flight_reads_nothing_and_its_venue
     // the listing, as the book knows it: on Nasdaq
     let r = Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), "sec");
     let name = NameDraft { symbol: "SHOP".into(), venue_mic: Some("XNAS".into()), venue_name: None, name: None, seen: "2026-09-28".parse().unwrap() };
-    let draft = InstrumentDraft { refs: vec![r], kind: InstrumentKind::Security, currency: Currency::parse("USD").unwrap(), name: Some(name), option: None, standing: None };
+    let draft = InstrumentDraft { fund: None, refs: vec![r], kind: InstrumentKind::Security, currency: Currency::parse("USD").unwrap(), name: Some(name), option: None, standing: None };
     w.book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), w.now).unwrap().unwrap();
     let reads = |w: &World| w.fake.0.lock().unwrap().reads.len();
     // Saturday: the first check after the close reads the resting stop once

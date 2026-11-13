@@ -110,8 +110,10 @@ impl Mapping for WealthsimpleMapping {
     ///    final, and while not final holds the amount its row states, which
     ///    Wealthsimple's stated cash already leaves out (a pending spend the
     ///    book held as nothing, 2026-10-26).
+    /// 19: a security states whether it is a fund, as its type does
+    ///    (`EXCHANGE_TRADED_FUND` is one, `EQUITY` is not; brief 82).
     fn version(&self) -> u32 {
-        18
+        19
     }
 
     fn map(&self, ctx: &MapContext, payload: &str) -> Mapped {
@@ -461,7 +463,15 @@ fn instrument(root: &Node, id: &str, seen: jiff::civil::Date) -> Result<Instrume
     let Some(s) = root.obj("securities").ok().and_then(|all| all.obj(id).ok()) else {
         return Err(Problem::new("security-not-read", format!("security {id}, which the record names, was not read with it")).into());
     };
-    let kind = match s.text("securityType")? {
+    let security_type = s.text("securityType")?;
+    // a fund as Wealthsimple states it: an ETF is one, an equity is not, and every
+    // other type says nothing
+    let fund = match security_type {
+        "EXCHANGE_TRADED_FUND" => Some(true),
+        "EQUITY" => Some(false),
+        _ => None,
+    };
+    let kind = match security_type {
         "EQUITY" | "EXCHANGE_TRADED_FUND" => InstrumentKind::Security,
         "OPTION" => InstrumentKind::OptionContract,
         "CRYPTOCURRENCY" => InstrumentKind::Crypto,
@@ -516,7 +526,7 @@ fn instrument(root: &Node, id: &str, seen: jiff::civil::Date) -> Result<Instrume
         Some(other) => return Err(s.field("status")?.mismatch(format!("expected TRADING, HALTED, SUSPENDED, CORPORATE_ACTION or DELISTED, found {other:?}")).into()),
     };
     let standing = standing.map(|standing| StandingDraft { of: refs[0].clone(), standing });
-    Ok(InstrumentDraft { refs, kind, currency, name, option, standing })
+    Ok(InstrumentDraft { refs, kind, currency, name, option, standing, fund })
 }
 
 /// A multi-leg order: each leg as its order states it. The row's amount is its

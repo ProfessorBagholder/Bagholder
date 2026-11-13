@@ -3203,7 +3203,7 @@ mod fill_price_tests {
             multiplier: multiplier.map(|m| Dec::parse(m).unwrap()),
             source: SourceName::named("test"),
         });
-        InstrumentInfo { instrument: Instrument { id, kind, currency: Currency::USD, issuer: None }, names: Vec::new(), terms }
+        InstrumentInfo { instrument: Instrument { id, kind, currency: Currency::USD, issuer: None, fund: None }, names: Vec::new(), terms }
     }
 
     fn fill(qty: &str, price: Option<&str>, cash: Option<&str>, fee: Option<&str>) -> Transaction {

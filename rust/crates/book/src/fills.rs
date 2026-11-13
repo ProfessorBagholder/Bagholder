@@ -86,7 +86,7 @@ impl Mapping for FillMapping {
                 settle_date: None,
                 kind,
                 effect: None,
-                instrument: Some(InstrumentDraft {
+                instrument: Some(InstrumentDraft { fund: None,
                     refs: vec![Reference::new(RefScheme::BrokerSecurity(broker), p.security.clone())],
                     kind: InstrumentKind::parse(&p.kind).map_err(|e| e.to_string())?,
                     currency,
