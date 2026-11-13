@@ -579,7 +579,7 @@ fn fill_daily(conn: &rusqlite::Connection, rates: &Rates, rec: &Keyed, start: &s
 /// The stored bars for a span, fetching first when it was never fetched or the
 /// copy is stale and the span reaches the present. What a background job calls;
 /// a chart asked for by a page reads what is stored and has the read done in the
-/// background (`ensure_daily_in_background`).
+/// background (`daily_read`).
 #[allow(clippy::too_many_arguments)]
 pub fn ensure_history(
     conn: &rusqlite::Connection,
@@ -619,32 +619,26 @@ pub fn daily_pending(rec: &Keyed) -> bool {
     daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).contains(&sym)
 }
 
-/// Start the daily read for a span, once per listing at a time, and return at
-/// once; `done` is called when it ends, with whether the store could be read
-/// and written, so whoever showed the stored bars meanwhile is told to look
-/// again and a failure is said.
-pub fn ensure_daily_in_background(pool: std::sync::Arc<bagholder_sqlite::pool::Pool>, rates: Rates, rec: Keyed, start: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
+/// The read of `rec`'s daily bars from `start`, for the caller to run on a thread
+/// of its own (the server's tracked work, which a test's end waits for): none where
+/// one is under way already. `done` is told how it went.
+pub fn daily_read(pool: std::sync::Arc<bagholder_sqlite::pool::Pool>, rates: Rates, rec: Keyed, start: String, done: impl FnOnce(Result<(), String>) + Send + 'static) -> Option<impl FnOnce() + Send + 'static> {
     let sym = rec.key.clone();
     {
         let mut p = daily_pending_set().lock().unwrap_or_else(|e| e.into_inner());
         if p.contains(&sym) {
-            return;
+            return None;
         }
         p.push(sym.clone());
     }
-    let left = sym.clone();
-    let run = move || {
+    Some(move || {
         let read = pool.get().and_then(|conn| {
             let (today, _, stamp) = crate::clock_now();
             fill_daily(&conn, &rates, &rec, &start, &today, &stamp)
         });
         daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).retain(|s| *s != sym);
         done(read.map_err(|e| format!("The daily bars of {} could not be stored: {e}", sym.named())));
-    };
-    if std::thread::Builder::new().name("bagholder-daily".into()).spawn(run).is_err() {
-        // no thread to read on: nothing is under way, so nothing is left pending
-        daily_pending_set().lock().unwrap_or_else(|e| e.into_inner()).retain(|s| *s != left);
-    }
+    })
 }
 
 /// Weekly (Monday start) or monthly bars from daily
@@ -1028,31 +1022,28 @@ pub fn intraday_pending(rec: &Keyed) -> bool {
     INTRADAY_PENDING.lock().unwrap_or_else(|e| e.into_inner()).contains(&rec.key)
 }
 
-/// Start the fetch for a span not
-/// stored yet, once per instrument, and return at once; `done` is called when
-/// it ends, with whether the store could be read and written.
-pub fn ensure_intraday_in_background(pool: std::sync::Arc<bagholder_sqlite::pool::Pool>, rates: Rates, rec: Keyed, tf: String, start: String, end: String, done: impl FnOnce(Result<(), String>) + Send + 'static) {
+/// The fetch of a span not stored yet, once per instrument, for the caller to run
+/// on a thread of its own (the server's tracked work, which a test's end waits
+/// for): none where one is under way already. `done` is told when it ends, with
+/// whether the store could be read and written.
+#[allow(clippy::too_many_arguments)]
+pub fn intraday_read(pool: std::sync::Arc<bagholder_sqlite::pool::Pool>, rates: Rates, rec: Keyed, tf: String, start: String, end: String, done: impl FnOnce(Result<(), String>) + Send + 'static) -> Option<impl FnOnce() + Send + 'static> {
     let sym = rec.key.clone();
     {
         let mut p = INTRADAY_PENDING.lock().unwrap();
         if p.contains(&sym) {
-            return;
+            return None;
         }
         p.push(sym.clone());
     }
-    let left = sym.clone();
-    let run = move || {
+    Some(move || {
         let read = pool.get().and_then(|conn| {
             let (today, now_unix, stamp) = crate::clock_now();
             ensure_intraday(&conn, &rates, &rec, &tf, &start, &end, &today, now_unix, &stamp, 1.0, true)
         });
         INTRADAY_PENDING.lock().unwrap().retain(|s| *s != sym);
         done(read.map(|_| ()).map_err(|e| format!("The hourly bars of {} could not be stored: {e}", sym.named())));
-    };
-    if std::thread::Builder::new().name(format!("bagholder-intraday-{}", left)).spawn(run).is_err() {
-        // no thread to read on: nothing is under way, so nothing is left pending
-        INTRADAY_PENDING.lock().unwrap().retain(|s| *s != left);
-    }
+    })
 }
 
 /// The bars of a fetch, per intraday timeframe: one fetch covers both, so
