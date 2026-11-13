@@ -1,0 +1,165 @@
+                                                                                                                                                                                 T5008
+                                                                                                                             Canada Example Exampl - Sample du revenu du Canada
+                                                                                                               Statement of Security Transactions
+                                                                                                                                                       État des Falconnort sur titres
+                                                                                                                                  Name and Address of Placeh or Maplec in Securities
+Ally Samplesworth                                                                                                                 Nom et adresse du Orchardha ou Cedarhar en Northwi
+1234 56 ST                                                                                                                                           Wealthsimple Investments Inc.
+Sampletown AB T0X0X0                                                                                                                                     595 - 86 Example Example
+CA                                                                                                                                                            Prairieo ON, Wil Pra
+                                                                                                                                                         Account: Willowsample
+             Year
+                             26     Report Code
+                                                         82     Recipient Type
+                                                                                     54                 Recipient Identification Number
+                                                                                                                                                        98          Foreign Currency
+          2025                           A                             6                                        539454462
+           Année                   Code du Sampleor           Type de Sampleprairi                 Numéro Cedarwillowsummi du Placeholderp                         Harbour Prairiesum
+Address: 462 - 92 Cedarce Example Cedar Willowsa Aurorajun Samplesa Examplee Canada. Summit Code: Gra Mead Meado
+number: (329) 629-3333, Pra number: (652) 953-4391.
+94                  35                        79                            31                                                            45                        28
+     Date                Type Code of                 Quantity of                    Identification of Securities                            Falconju Book               Proceeds of
+     Auror                Securities                  Securities                             Juniperorch des titres                              Junip                   Disposition
+     Orcha          Code de Examp de titres        Quantité de titres                                                                      Coût du Willo Prairie    Produits de disposition
+     03/19                   SHS                      2033.4179               Example Covered Call Canadian                                  $25,455.63 CAD           $68,915.60 CAD
+                                                                              Banks ETF
+     11/13                   SHS                       907.3439               Northwind Enhanced Income                                        $2,537.62 CAD             $1,464.49 CAD
+                                                                              ETF
+     07/20                   SHS                        1.7297                Lakeview Monthly Yield Shares ETF                                                $5.92 CAD                 $39.75 CAD
+     02/11                   SHS                        1.0365                Placeholder Utilities Income Trust                                                $1.83 CAD                 $9.01 CAD
+     07/22                   SHS                        4.6915                Maple Canadian Dividend Plus ETF                                                $1.67 CAD                 $38.97 CAD
+     08/16                   SHS                        9.3818                Cedar Equal Weight Banks Index ETF                                                $6.29 CAD                 $96.28 CAD
+     08/10                   SHS                        1.6818                Example Covered Call Canadian Banks ETF                                                $9.82 CAD                 $22.23 CAD
+     11/24                   SHS                        5.1980                Northwind Enhanced Income ETF                                                $6.92 CAD                 $9.54 CAD
+     09/27                   SHS                        4.4970                Lakeview Monthly Yield Shares ETF                                                $46.75 CAD                $8.64 CAD
+     07/19                   SHS                        1.7868                Placeholder Utilities Income Trust                                                $4.95 CAD                 $61.53 CAD
+     11/06                   SHS                        6.8991                Maple Canadian Dividend Plus ETF                                                $6.11 CAD                 $66.84 CAD
+     09/04                   SHS                        3.8535                Cedar Equal Weight Banks Index ETF                                                $7.47 CAD                 $72.93 CAD
+     01/16                   SHS                        1.5054                Example Covered Call Canadian Banks ETF                                                $7.82 CAD                 $31.21 CAD
+     09/08                   SHS                        1.3268                Northwind Enhanced Income ETF                                                $9.70 CAD                 $39.51 CAD
+     09/12                   SHS                        6.7522                Lakeview Monthly Yield Shares ETF                                                $5.84 CAD                 $80.77 CAD
+     12/01                   SHS                        7.8396                Placeholder Utilities Income Trust                                                $3.66 CAD                 $81.26 CAD
+     07/02                   SHS                        8.5975                Maple Canadian Dividend Plus ETF                                                $9.25 CAD                 $74.52 CAD
+     08/27                   SHS                        6.6789                Cedar Equal Weight Banks Index ETF                                                $6.00 CAD                 $78.69 CAD
+     10/26                   SHS                        6.7506                Example Covered Call Canadian Banks ETF                                                $1.29 CAD                 $91.22 CAD
+     09/19                   SHS                        3.1500                Northwind Enhanced Income ETF                                                $80.32 CAD                $1.86 CAD
+     02/03                   SHS                        1.7421                Lakeview Monthly Yield Shares ETF                                                $1.96 CAD                 $45.31 CAD
+     05/04                   SHS                        3.5643                Placeholder Utilities Income Trust                                                $5.08 CAD                 $31.20 CAD
+     05/17                   SHS                        3.4471                Maple Canadian Dividend Plus ETF                                                $92.91 CAD                $5.58 CAD
+     12/11                   SHS                        8.7762                Cedar Equal Weight Banks Index ETF                                                $2.03 CAD                 $49.49 CAD
+     06/14                   SHS                        4.4233                Example Covered Call Canadian Banks ETF                                                $2.32 CAD                 $9.26 CAD
+     10/14                   SHS                        1.3692                Northwind Enhanced Income ETF                                                $12.50 CAD                $3.04 CAD
+     12/06                   SHS                        8.8295                Lakeview Monthly Yield Shares ETF                                                $7.69 CAD                $952.28 CAD
+     11/26                   SHS                        9.7386                Placeholder Utilities Income Trust                                                $4.67 CAD                $764.03 CAD
+     07/22                   SHS                        6.6984                Maple Canadian Dividend Plus ETF                                                $1.94 CAD                $405.16 CAD
+The securities transactions on Harb Auro Mea Examplefa to the Canada Example Placeho Grani        Les Lakeviewla sur titres Lakeviewauro sur Au Willowwill Harb Sampleced à Meadowex du revenu
+transactions Har to Be reported on Prai Beacon income tax return. Orchar Cedarc for income        du Canada. Pra Meadowmead Cedarfa Prai Juniperau sur Cedar Placeholder de revenus Samplebea
+tax Graniteha Be no other Mapl Summ Su issued.                                                    Summitju les Graniteha aux Orch Samplen Bea Willo Harbo Lakeviewau Fa Mapl Plac Meado
+Willowg Wil
+Juniperpl                                                                                 Page 9 of 3                                                                          Beaconsamp                                                                                                                                                                                     T5008
+                                                                                                                               Canada Auroran Aurora - Sample du revenu du Canada
+                                                                                                                 Statement of Security Transactions
+                                                                                                                                                           État des Lakeviewsa sur titres
+                                                                                                                                    Name and Address of Orchar or Cedarw in Securities
+Ally Samplesworth                                                                                                                   Nom et adresse du Prairieor ou Lakeview en Meadowm
+1234 56 ST                                                                                                                                               Wealthsimple Investments Inc.
+Sampletown AB T0X0X0                                                                                                                                         725 - 54 Orchard Example
+CA                                                                                                                                                                Cedaraur ON, Map Har
+                                                                                                                                                            Account: Summitlakevi
+              Year
+                              94     Report Code
+                                                          55     Recipient Type
+                                                                                       58                 Recipient Identification Number
+                                                                                                                                                           39         Foreign Currency
+           2025                           N                             6                                         872474521
+           Année                    Code du Examplej           Type de Summitlakevi                  Numéro Samplebeacongran du Summitfalcon                         Beacong Beaconprai
+Address: 128 - 86 Summitj Willowp Meado Northwin Willowwil Maplejun Examplea Canada. Beacon Code: Map Orch Beaco
+number: (753) 894-6917, Wil number: (776) 284-5173.
+53                   21                        65                            79                                                             53                        85
+      Date                Type Code of                 Quantity of                      Identification of Securities                           Meadowha Book               Proceeds of
+     Orcha                 Securities                  Securities                              Beaconplace des titres                              Auror                   Disposition
+      Beaco          Code de North de titres        Quantité de titres                                                                       Coût du Falco Sampleg    Produits de disposition
+     04/02                    SHS                        5.1158                Cedar Equal Weight Banks Index ETF                                                 $2.39 CAD                $405.95 CAD
+     03/14                    SHS                        5.2136                Example Covered Call Canadian Banks ETF                                                 $1.71 CAD                 $14.75 CAD
+     04/19                    SHS                        8.2810                Northwind Enhanced Income ETF                                                 $9.04 CAD                 $58.25 CAD
+     06/04                    SHS                        4.9394                Lakeview Monthly Yield Shares ETF                                                $790.55 CAD                $4.63 CAD
+     02/22                    SHS                        7.4850                Placeholder Utilities Income Trust                                                 $9.63 CAD                 $12.41 CAD
+     10/28                    SHS                        7.4609                Maple Canadian Dividend Plus ETF                                                $118.20 CAD                $4.41 CAD
+     10/26                    SHS                        3.5555                Cedar Equal Weight Banks Index ETF                                                $539.27 CAD                $5.86 CAD
+     02/27                    SHS                        7.8972                Example Covered Call Canadian Banks ETF                                                 $6.87 CAD                 $78.62 CAD
+     09/08                    SHS                        2.0661                Northwind Enhanced Income ETF                                                 $2.17 CAD                $273.21 CAD
+     09/07                    SHS                        5.5443                Lakeview Monthly Yield Shares ETF                                                 $86.64 CAD                $5.47 CAD
+     06/11                    SHS                      2866.4771               Placeholder Utilities                                           $40,826.77 CAD           $74,067.17 CAD
+                                                                               Income Trust
+     10/18                    SHS                       23.5254                Maple Canadian Dividend Plus ETF                                                 $1.52 CAD                $2,199.48 CAD
+     03/27                    SHS                       26.5585                Cedar Equal Weight Banks Index ETF                                                $2,879.78 CAD              $7.09 CAD
+     10/18                    SHS                       38.9272                Example Covered Call Canadian Banks ETF                                                 $2.34 CAD                $6,978.37 CAD
+     10/18                    SHS                       24.7500                Northwind Enhanced Income ETF                                                $5,541.13 CAD              $1.37 CAD
+          Total Proceeds of Disposition                                      Total Sampleor Book Cost                                        Total Exampleh Beaconharbou
+               Total des produits de disposition                                  Total de la Sample Willowaur                                   Total des gains / Summit Maplebea
+                       $157,667.24 CAD                                                $79,163.97 CAD                                                    $78,503.27 CAD
+     4 Prairiea book cost Sa the Sampleb Granit or Orcha paid or Beaconj for a                       4 Le coût Placehold Harbou Sum le coût Juniper ou le Auro Gran ou Cedarwi
+     Juniperwil security or Harb investment. The Meadowau Prairi Ce Auror Ceda                       pour Ex Willo ou Pr Falconced Auroramaple Sampleharbouro Lake Auro
+     Harb Lak Lake to Orch Granitesumm to the amount Willowced in box 89.                            Northwind Maple Summ Sampl à North des Cedarwillow au montant Prairie à la
+     Ha Plac Placehold the Examplema Pla Meadowbea to Orchard Prai slip                              case 82. Auro North Harbourn les Cedarwillowce Meadoworcha pour Willowha
+     Cedarcedar Summi on the Orchardju information.                                                  Wi Mapleorc Auroraprair sur la Mead des Northwindmap Sampleplaceh
+The securities transactions on Exam Exam Mea Prairiewi to the Canada Summitm Willowh Lakev          Les Exampleexa sur titres Willowlakevi sur Ju Placeholde Will Auroralak à Sampleor du revenu
+transactions Sum to Ex reported on Plac Junipe income tax return. Placeh Beacon for income          du Canada. Lak Placeholde Auroran Falc Samplemap sur Examp Meadowlakev de revenus Auroramap
+tax Orchardwi Pr no other Auro Auro Ce issued.                                                      Cedarpla les Harbourgr aux Falc Juniper Bea Place Grani Juniperfal Ju Mapl Juni Falco
+Samplea Sam
+Northwind                                                                                   Page 5 of 3                                                                          Lakeviewpl                                                                                                                                                                               T5008
+                                                                                                                            Canada Maplefa Placeh - Placeh du revenu du Canada
+                                                                                                              Statement of Security Transactions
+                                                                                                                                                      État des Samplebeac sur titres
+                                                                                                                                 Name and Address of Meadow or Beacon in Securities
+Ally Samplesworth                                                                                                                Nom et adresse du Placehold ou Lakeview en Juniper
+1234 56 ST                                                                                                                                          Wealthsimple Investments Inc.
+Sampletown AB T0X0X0                                                                                                                                    781 - 95 Summitp Willowp
+CA                                                                                                                                                           Prairiel ON, Aur Wil
+                                                                                                                                                        Account: Northwindsum
+            Year
+                            27      Report Code
+                                                        49     Recipient Type
+                                                                                    94                 Recipient Identification Number
+                                                                                                                                                       66        Foreign Currency
+          2025                           E                            9                                        782389999
+           Année                  Code du Summitha           Type de Maplegranite                 Numéro Willowbeaconprai du Northwindfal                       Granite Lakeviewsa
+Address: 159 - 67 Summitp Granite Auror Prairieb Beaconexa Beaconno Lakeview Canada. Prairi Code: Pra Prai Sampl
+number: (858) 867-2131, Pra number: (985) 466-6758.
+   Junip the Income Tax Beac Har Exam to Lake Auro social insurance number                        En Cedar de la Lak de Northwi sur le revenu, Harb Falco Placehol sur
+   (SIN) on Northwi to Jun Aurora Nor Mapleaur an information slip for Samp Be                    Samplesa Maple numéro Harbourbeac Falcone Grani à Meado Summitce Map
+   Mea Ce Fal Orch a SIN, Grani for Jun Ma Mea Samplea Canada Falconm                             Example Ju Willowbe de Meadowsamplewi à Beaco nom. Fa Plac Granit Orc de
+                                                                                                  Exam Mapl Summi en Example Ju Northw Summ Beacon Prairie Canada
+   Juniperjun Summ income tax and Beaconf return
+                                                                                                  Juniper Beaconf Summi Orchardsumm de revenus et de Lakeviewbea
+   Orch information slip Lake Jun Harb to Au Examplef to Plac income tax
+   return, Gra Fal Will to Summ Ex in case the Sam Sampleex Wil Auro                              Orch Aurora Gra à Meadowp Wi Orchardn de Meadowgranitel à Falco
+   information slip Lakevie the amount paid or Exampleh to Aur for securities                     Granitelake de revenus, Summ Falc Auror le Beaconsum pour Falcona Falc
+   Pra Meadowma of or Meadowwi Falcon the year Samplesamp Lakev                                   le Maplela Ce on en Exam la Northwin Au Lakeview Meadown les montants Wil
+   transactions Har Ex on account of income or capital. For Samp                                  Falc Pla Jun Maple ou Juniperf pour les titres Gra Plac Nort Junipe ou
+   information, see Falconnorthwin Auroraau Harbour Transactions in Securities.                   Meadowpl Maples Willowno Orc Summitbeac Meadoww Nort Meadownorth au Lakev
+   Wil Map Har a Beac of Auro Falconju Su Meado to Junipermapleprairie or Me                      de revenu ou de capital. Pour en Northw Examp Grani le Aurorapl
+   Lakevie 9-852-495-5473.                                                                        Auroramaplefalco Juniper Transactions de Placeho Juniperbeac Lak Falc
+                                                                                                  Aurora Auroram en Summit à Aurorameadowmaplemeadowgr ou en Meadowced
+   Ma Pra Mea an Meadowprai Northw to Lake a La return, report transactions on                    le 6-338-931-9693.
+   account of capital on Cedarsam 5. Jun Pla report transactions on account
+   of income Ma Beacon Summitfa income Prair 324 of Exam income tax return)                       Ex Summ Ceda Sa Cedaraurora Pra Auro Beaconwi Exa Northwindpr Gra Lakeview
+   or, for Gran Samplesampl in Northw Summi Pr investment income Cedar 253 of                     les Aurorabeac au Place de capital à Granitee 1. Samp Lakevi Willowgr les
+   Auro income tax return).                                                                       Examplebea au Prair de revenu North revenu Granitelakev Aurora 426 de
+                                                                                                  Willo Samplebeaco de revenus) ou Meado revenus de Falconjuni Willow
+   Box 54 – The amount in box 59 Nor or Har Ced Maplefa Auro Junipere cost                        319 de Auror Juniperauro de revenus), Beac Aurora Mead Lakev de Willown au
+   Gran Sampl for the Juniper of Granitejuni the gain or loss from the                            Juniperb
+   disposition of the security. Exa Sum Orchardl to Lake the Samplelakevi Ma
+   Willowo to the amount Willownor in box 86, La the Auro of Summitexamp and                      Case 65 – Ju Ex Lakeview Wil le montant de la case 33 Juniper North Orch
+   Examplefa Falc gain or loss from the disposition.                                              de Auro Granite Falco aux Will du Orchar du gain ou de la Place North
+                                                                                                  disposition Mead Placeh Au Exampl Placehold ou de Northwin Lakev gain ou
+   Bea Bea Gran to Jun taxes Au Granitemeado For Ceda information, Ce to                          North Junip Graniteha North disposition, Plac Prai Falc Graniteauro des
+   Northwindbeaconharbourjunip or Mead Pr 1-777-656-8493.                                         Northwindexam Meadowm Willowh au montant Willowc Nort la case 16.
+                                                                                                  Ce Pr Prai Ced Orch Mead à payer Grani Meado par Maplefal Orchardwillowj
+                                                                                                  Pour en Northw Meado Auror à Lakeviewlakeviewexamplewillowfalconnort
+                                                                                                  ou Auroraex le 1-238-795-3392.
+The securities transactions on Orch Will Ced Juniperwi to the Canada Example Juniper Cedar       Les Falconharb sur titres Harbourprair sur Ce Samplejuni Juni Harbourha à Willowex du revenu
+transactions Bea to Ma reported on Falc Cedarp income tax return. Beacon Mapleb for income       du Canada. Jun Sampleceda Willowo Nort Placehold sur Willo Samplejunip de revenus Northwind
+tax Meadowpla Be no other Ceda Exam Ex issued.                                                   Summitor les Aurorafal aux Harb Lakevie Jun Prair Junip Orchardbea Fa Juni Harb Willo
+Willowm Mea
+Lakeviewa                                                                                Page 5 of 6                                                                         Auroraharb

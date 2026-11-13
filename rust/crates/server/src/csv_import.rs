@@ -895,7 +895,7 @@ mod tests {
             let currency = bagholder_core::Currency::parse(&text("currency").unwrap()).unwrap();
             let money = |k: &str| text(k).map(|a| bagholder_core::Money::new(Dec::parse(&a).unwrap(), currency));
             let day: bagholder_core::jiff::civil::Date = text("day").unwrap().parse().unwrap();
-            let instrument = text("symbol").map(|symbol| bagholder_book::mapping::InstrumentDraft {
+            let instrument = text("symbol").map(|symbol| bagholder_book::mapping::InstrumentDraft { fund: None,
                 refs: vec![bagholder_core::instrument::Reference::connection_symbol(ctx.connection.unwrap(), &symbol, currency)],
                 kind: InstrumentKind::Security,
                 currency,

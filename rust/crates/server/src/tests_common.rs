@@ -227,9 +227,34 @@ impl bagholder_book::mapping::Mapping for PaidUnread {
     }
 }
 
-/// Wealthsimple as the made-up broker states it, its records derived by
-/// `PaidUnread`: everything else as the adapter does it.
-pub struct ReadBefore(pub bagholder_wealthsimple::adapter::Wealthsimple<bagholder_wealthsimple::generated::Generated>);
+/// Wealthsimple's mapping a version back as it was before version 19, stating
+/// no instrument's fund type: the version after states it from the record.
+pub struct FundUnstated;
+impl bagholder_book::mapping::Mapping for FundUnstated {
+    fn source(&self) -> bagholder_core::SourceName {
+        bagholder_wealthsimple::mapping::WealthsimpleMapping.source()
+    }
+    fn version(&self) -> u32 {
+        bagholder_wealthsimple::mapping::WealthsimpleMapping.version() - 1
+    }
+    fn map(&self, ctx: &bagholder_book::mapping::MapContext, payload: &str) -> bagholder_book::mapping::Mapped {
+        fn unstated(i: &mut bagholder_book::mapping::InstrumentDraft) {
+            i.fund = None;
+            if let Some(o) = i.option.as_mut() {
+                unstated(&mut o.underlying);
+            }
+        }
+        let mut m = bagholder_wealthsimple::mapping::WealthsimpleMapping.map(ctx, payload);
+        for i in m.legs.iter_mut().filter_map(|d| d.instrument.as_mut()) {
+            unstated(i);
+        }
+        m
+    }
+}
+
+/// Wealthsimple as the made-up broker states it, its records derived by the
+/// mapping a version back given: everything else as the adapter does it.
+pub struct ReadBefore(pub bagholder_wealthsimple::adapter::Wealthsimple<bagholder_wealthsimple::generated::Generated>, pub &'static dyn bagholder_book::mapping::Mapping);
 impl bagholder_broker::BrokerAdapter for ReadBefore {
     fn broker(&self) -> bagholder_core::Broker {
         self.0.broker()
@@ -238,7 +263,7 @@ impl bagholder_broker::BrokerAdapter for ReadBefore {
         self.0.reads(account_type)
     }
     fn mapping(&self) -> &dyn bagholder_book::mapping::Mapping {
-        &PaidUnread
+        self.1
     }
     fn accounts(&mut self) -> bagholder_broker::Answer<Vec<bagholder_broker::AccountStated>> {
         self.0.accounts()

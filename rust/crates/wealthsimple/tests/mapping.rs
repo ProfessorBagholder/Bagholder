@@ -744,3 +744,28 @@ fn a_move_arriving_from_an_account_not_the_person_s_books_nothing_more() {
     assert_eq!(m.legs.len(), 1, "{:?}", m.legs);
     assert_eq!((m.legs[0].kind, m.legs[0].account.value.as_str()), (Kind::TransferIn, "anon-resp-2"));
 }
+
+/// A fund as Wealthsimple states it (brief 82): every security a record names,
+/// and every option's underlying, is a fund exactly where its security record
+/// says `EXCHANGE_TRADED_FUND`, is not one where it says `EQUITY`, and is unsaid
+/// for every other type. Nothing is read from a name.
+#[test]
+fn a_security_is_a_fund_exactly_where_wealthsimple_states_one() {
+    fn walk(i: &bagholder_book::mapping::InstrumentDraft, payload: &Value, seen: &mut std::collections::BTreeSet<(String, Option<bool>)>) {
+        let id = &i.refs.iter().find(|r| matches!(r.scheme, RefScheme::BrokerSecurity(_))).expect("Wealthsimple's id").value;
+        let stated = Node::root(payload).obj("securities").unwrap().obj(id).unwrap().text("securityType").unwrap().to_string();
+        seen.insert((stated, i.fund));
+        if let Some(o) = &i.option {
+            walk(&o.underlying, payload, seen);
+        }
+    }
+    let mut seen = std::collections::BTreeSet::new();
+    for (_, payload, m) in record_all(&mut replay(&fixtures())) {
+        for i in m.legs.iter().filter_map(|d| d.instrument.as_ref()) {
+            walk(i, &payload, &mut seen);
+        }
+    }
+    let want: std::collections::BTreeSet<(String, Option<bool>)> =
+        [("CRYPTOCURRENCY", None), ("EQUITY", Some(false)), ("EXCHANGE_TRADED_FUND", Some(true)), ("OPTION", None), ("PREDICTION_MARKET", None)].into_iter().map(|(t, f)| (t.to_string(), f)).collect();
+    assert_eq!(seen, want);
+}

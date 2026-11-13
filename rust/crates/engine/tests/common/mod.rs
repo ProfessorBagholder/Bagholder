@@ -154,7 +154,7 @@ pub fn build(case: &Value) -> Built {
             multiplier: s(&i, "multiplier").map(dec),
             source: source.clone(),
         });
-        instruments.insert(id, InstrumentInfo { instrument: Instrument { id, kind, currency, issuer: None }, names: vec![name], terms });
+        instruments.insert(id, InstrumentInfo { instrument: Instrument { id, kind, currency, issuer: None, fund: i.get("fund").and_then(Value::as_bool) }, names: vec![name], terms });
     }
     let mut tx = BTreeMap::new();
     let mut transactions = Vec::new();

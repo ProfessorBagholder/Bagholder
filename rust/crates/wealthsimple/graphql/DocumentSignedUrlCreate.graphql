@@ -1,0 +1,9 @@
+# Wealthsimple's own document, from its web app (release 0.3.753704, read 2026-11-12):
+# the signed link its Documents page opens a document's file with. It is named a
+# mutation and changes nothing: it signs a link to read a file the person holds.
+mutation DocumentSignedUrlCreate($bucket: String, $key: String!) {
+  signDocumentUrl(bucket: $bucket, key: $key) {
+    downloadUrl
+    __typename
+  }
+}

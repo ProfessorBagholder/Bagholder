@@ -327,6 +327,13 @@ mod tests {
                 .execute("INSERT INTO monthly_statements (connection_id, account_key, month, payload, read_id) VALUES (?1, 'anon-tfsa-1', '2025-10-01', 'null', ?2)", rusqlite::params![conn.to_string(), read.0])
                 .unwrap();
         }
+        // a tax slip the broker issued
+        {
+            let conn = book.connections().unwrap()[0].id;
+            let read = book.broker_read(conn, bagholder_wealthsimple::documents::READ_PART, t).unwrap();
+            let slip = bagholder_book::tax_slips::TaxSlip { document: "made-up-document-1".into(), account_key: "anon-tfsa-1".into(), kind: "t5".into(), year: 2025, created: "2026-02-27T10:00:00.000Z".into(), text: Some("a made-up slip".into()) };
+            book.keep_tax_slip(conn, &slip, 1, &read).unwrap();
+        }
         // a succession the broker states: an id it retired by a corporate action,
         // and the id its listing trades under now
         {
@@ -335,7 +342,7 @@ mod tests {
             for (id, standing) in [("sec-s-retired", Standing::RetiredByEvent), ("sec-s-live", Standing::Live)] {
                 let r = Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), id);
                 let name = NameDraft { symbol: "ZZCH".into(), venue_mic: Some("XTSX".into()), venue_name: None, name: None, seen: day };
-                let draft = InstrumentDraft { refs: vec![r.clone()], kind: InstrumentKind::Security, currency: bagholder_core::Currency::CAD, name: Some(name), option: None, standing: Some(StandingDraft { of: r, standing }) };
+                let draft = InstrumentDraft { fund: None, refs: vec![r.clone()], kind: InstrumentKind::Security, currency: bagholder_core::Currency::CAD, name: Some(name), option: None, standing: Some(StandingDraft { of: r, standing }) };
                 book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), t).unwrap().unwrap();
             }
         }

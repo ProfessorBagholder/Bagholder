@@ -267,3 +267,85 @@ fn a_record_does_not_state_what_it_does_not_state() {
     assert_eq!(f.book.problems_of(dup.record).unwrap()[0].code, "duplicate-leg");
     assert!(f.book.transactions_of(dup.record).unwrap().is_empty(), "a record is never half counted");
 }
+
+/// What a book holds, as text, but each instrument's fund type, each record's
+/// and transaction's version, the change log (`ledger_changes`,
+/// `successions_due`), which says what was read again, and a name's row numbers
+/// of its first and last sightings, which every derivation writes afresh (the
+/// sightings themselves are compared); with the kinds the
+/// change log names after its row `after`.
+fn held_but_versions(dir: &std::path::Path, after: i64) -> (String, std::collections::BTreeSet<String>) {
+    let c = rusqlite::Connection::open(dir.join("book.db")).unwrap();
+    let tables: Vec<String> = c.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite_%' AND name NOT IN ('ledger_changes', 'successions_due') ORDER BY name").unwrap().query_map([], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    let mut rest = String::new();
+    for t in tables {
+        let mut st = c.prepare(&format!("SELECT * FROM {t} ORDER BY 1, 2")).unwrap();
+        let names: Vec<String> = st.column_names().into_iter().map(str::to_string).collect();
+        let mut rows = st.query([]).unwrap();
+        while let Some(r) = rows.next().unwrap() {
+            let cells: Vec<String> = names
+                .iter()
+                .enumerate()
+                .filter(|(_, n)| !matches!((t.as_str(), n.as_str()), ("instruments", "fund") | ("source_records", "derived_version") | ("transactions", "mapping_version") | ("instrument_names", "first_sighting" | "last_sighting")))
+                .map(|(i, n)| match r.get_ref(i).unwrap() {
+                    rusqlite::types::ValueRef::Text(t) => format!("{n}={}", String::from_utf8_lossy(t)),
+                    v => format!("{n}={v:?}"),
+                })
+                .collect();
+            rest.push_str(&format!("{t}: {}\n", cells.join(" | ")));
+        }
+    }
+    let logged = c.prepare("SELECT DISTINCT kind FROM ledger_changes WHERE seq > ?").unwrap().query_map([after], |r| r.get(0)).unwrap().map(Result::unwrap).collect();
+    (rest, logged)
+}
+
+/// A mapping version that comes to state each instrument's fund type (brief 82):
+/// deriving the records again fills `instruments.fund` where the new version
+/// states one, moves no transaction, and moves nothing else in the book but each
+/// record's version and the change log's note of what was read again.
+#[test]
+fn a_version_that_states_a_fund_type_fills_it_and_moves_nothing_else() {
+    let f = Fixture::new();
+    f.account(&["a1"]);
+    let v1 = Spelled::v(1);
+    let stated = |mut s: serde_json::Value, fund: bool| {
+        s["fund"] = json!(fund);
+        s
+    };
+    let stock = share("CA0000000001", "AAA");
+    let etf = share("CA0000000002", "EEE");
+    let coin = json!({"refs": [["isin", "XX0000000003"]], "kind": "crypto", "currency": "CAD", "symbol": "CCC"});
+    let rows = [
+        ("r1", buy("a1", stock.clone(), "10", "-100", "2026-01-02T15:00:00Z"), buy("a1", stated(stock, false), "10", "-100", "2026-01-02T15:00:00Z")),
+        ("r2", buy("a1", etf.clone(), "4", "-80", "2026-01-03T15:00:00Z"), buy("a1", stated(etf.clone(), true), "4", "-80", "2026-01-03T15:00:00Z")),
+        ("r3", sell("a1", etf.clone(), "-1", "21", "2026-01-04T15:00:00Z"), sell("a1", stated(etf, true), "-1", "21", "2026-01-04T15:00:00Z")),
+        ("r4", buy("a1", coin.clone(), "1", "-5", "2026-01-05T15:00:00Z"), buy("a1", coin, "1", "-5", "2026-01-05T15:00:00Z")),
+    ];
+    let records: Vec<_> = rows.iter().map(|(key, before, after)| f.store(&v1, key, &json!({"legs": [before], "v2": {"legs": [after]}})).record).collect();
+    let fund = |r: bagholder_core::RecordId| f.book.instrument(f.book.transactions_of(r).unwrap()[0].instrument.unwrap()).unwrap().fund;
+    assert_eq!(records.iter().map(|r| fund(*r)).collect::<Vec<_>>(), vec![None; 4]);
+    let last: i64 = rusqlite::Connection::open(f.dir.path().join("book.db")).unwrap().query_row("SELECT COALESCE(MAX(seq), 0) FROM ledger_changes", [], |r| r.get(0)).unwrap();
+    let (before, _) = held_but_versions(f.dir.path(), last);
+    struct V2;
+    impl bagholder_book::mapping::Mapping for V2 {
+        fn source(&self) -> bagholder_core::SourceName {
+            bagholder_core::SourceName::named("test-broker")
+        }
+        fn version(&self) -> u32 {
+            2
+        }
+        fn map(&self, ctx: &bagholder_book::mapping::MapContext, payload: &str) -> bagholder_book::mapping::Mapped {
+            let v: serde_json::Value = serde_json::from_str(payload).unwrap();
+            Spelled::v(2).map(ctx, &v["v2"].to_string())
+        }
+    }
+    assert_eq!(f.book.rederive(&V2, t0()).unwrap(), Changes::default(), "no transaction moves");
+    let (after, logged) = held_but_versions(f.dir.path(), last);
+    let moved = |a: &str, b: &str| a.lines().filter(|l| !b.lines().any(|m| m == *l)).map(str::to_string).collect::<Vec<_>>();
+    assert!(before == after, "something but the fund types and the versions moved: was {:#?} now {:#?}", moved(&before, &after), moved(&after, &before));
+    assert!(logged.iter().all(|k| k == "record" || k == "instrument"), "{logged:?}");
+    assert_eq!(records.iter().map(|r| fund(*r)).collect::<Vec<_>>(), vec![Some(false), Some(true), Some(true), None]);
+    for r in &records {
+        assert_eq!(f.book.transactions_of(*r).unwrap()[0].mapping.version, 2);
+    }
+}
