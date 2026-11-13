@@ -6,7 +6,8 @@
 //! person's slips for 2023 to 2025 came by a signed link (read 2026-11-12).
 //!
 //! A document is read once: its file is fixed, and a slip Wealthsimple amends is
-//! a document of its own. Its text is laid out by the caller (`text_of`: the
+//! a document of its own. What identifies the person is taken out of a slip's text
+//! before it is kept (`slips::redact`). Its text is laid out by the caller (`text_of`: the
 //! server's `pdftotext -layout`, page by page), so this crate runs no program.
 
 use std::collections::BTreeSet;
@@ -188,24 +189,34 @@ pub fn list_due(last: Option<jiff::civil::Date>, today: jiff::civil::Date) -> bo
     today >= on(READ_FROM) && last < today && last < on(ALL_IN_FROM)
 }
 
-/// One read of the list: each slip not kept before read and kept in `book`, the
-/// read noted (`READ_PART`) once the list has answered.
+/// One read of the list: each slip not kept before read, what identifies the
+/// person taken out of it (`slips::redact`), and kept in `book`; the read noted
+/// (`READ_PART`) once the list has answered.
 pub fn keep_new(book: &bagholder_book::Book, connection: bagholder_core::ConnectionId, src: &mut dyn Documents, text_of: &dyn Fn(&[u8]) -> Option<String>, now: jiff::Timestamp) -> Result<Kept, String> {
     let kept = book.tax_slip_documents(connection).map_err(|e| e.to_string())?;
     let found = read_new(src, &kept, text_of).map_err(|f| f.to_string())?;
     let read = book.broker_read(connection, READ_PART, now).map_err(|e| e.to_string())?;
     let mut out = Kept { new: Vec::new(), unread: found.unread };
     for f in found.fetched {
+        // what identifies the person is taken out before anything is kept, and the
+        // slip is read from what is kept (`SPEC.md` tax-slips-5)
+        let text = match crate::slips::redact(&f.text) {
+            Ok(t) => t,
+            Err(why) => {
+                out.unread.push((f.slip.id.clone(), format!("not kept: {why}")));
+                continue;
+            }
+        };
         let slip = bagholder_book::tax_slips::TaxSlip {
             document: f.slip.id.clone(),
             account_key: f.slip.account.clone(),
             kind: f.slip.kind.name().to_string(),
             year: f.slip.year,
             created: f.slip.created.clone(),
-            text: f.text.clone(),
+            text,
         };
         book.keep_tax_slip(connection, &slip, &read).map_err(|e| e.to_string())?;
-        let reading = crate::slips::read(f.slip.kind, &f.text).and_then(|s| {
+        let reading = crate::slips::read(f.slip.kind, &slip.text).and_then(|s| {
             if s.year() == f.slip.year { Ok(()) } else { Err(format!("the slip states the year {}, its document {}", s.year(), f.slip.year)) }
         });
         out.new.push((f.slip, reading));

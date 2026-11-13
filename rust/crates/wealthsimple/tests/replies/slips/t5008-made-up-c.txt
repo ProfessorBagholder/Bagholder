@@ -4,10 +4,10 @@
                                                                                                                                                           État des Beaconwill sur titres
                                                                                                                                      Name and Address of Granit or Junipe in Securities
                                                                                                                                      Nom et adresse du Falconced ou Prairiee en Aurorah
-Prai Junipernorth & Maple Auror Summitnorthw
-2024 28 Me                                                                                                                                              Wealthsimple Investments Inc.
-Examplesum Fa Falcon                                                                                                                                        262 - 73 Northwi Placeho
-Pl                                                                                                                                                               Willowpr ON, Jun Aur
+Ally Samplesworth & Robin Casey Samplesworth
+1234 56 ST                                                                                                                                              Wealthsimple Investments Inc.
+Sampletown AB T0X0X0                                                                                                                                        262 - 73 Northwi Placeho
+CA                                                                                                                                                               Willowpr ON, Jun Aur
                                                                                                                                                           Account: Beaconcedarp
                                 51                          22                            91                                                                47
                Year                    Report Code                 Recipient Type                          Recipient Identification Number                            Foreign Currency
@@ -48,10 +48,10 @@ Samplepla                                                                       
                                                                                                                                                     État des Juniperpla sur titres
                                                                                                                                Name and Address of Junipe or Prairi in Securities
                                                                                                                                Nom et adresse du Harboursa ou Cedarhar en Cedaror
-Will Auroragranit & Willo Grani Juniperfalco
-2024 27 Be                                                                                                                                        Wealthsimple Investments Inc.
-Meadowlake Wi Lakevi                                                                                                                                  473 - 79 Harbour Northwi
-Me                                                                                                                                                         Meadowbe ON, Orc Har
+Ally Samplesworth & Robin Casey Samplesworth
+1234 56 ST                                                                                                                                        Wealthsimple Investments Inc.
+Sampletown AB T0X0X0                                                                                                                                  473 - 79 Harbour Northwi
+CA                                                                                                                                                         Meadowbe ON, Orc Har
                                                                                                                                                     Account: Lakeviewauro
                             43                          96                          49                                                                57
             Year                    Report Code                Recipient Type                        Recipient Identification Number                           Foreign Currency

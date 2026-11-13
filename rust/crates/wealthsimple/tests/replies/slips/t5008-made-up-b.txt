@@ -3,10 +3,10 @@
                                                                                                                  Statement of Security Transactions
                                                                                                                                                            État des Falconwill sur titres
                                                                                                                                     Name and Address of Beacon or Granit in Securities
-Juni Orchardbeaco & Auror Place Examplegrani                                                                                        Nom et adresse du Orchardpr ou Willowfa en Beaconh
-2025 93 Ce                                                                                                                                               Wealthsimple Investments Inc.
-Lakeviewbe Be Granit                                                                                                                                         413 - 63 Beaconj Harbour
-Or                                                                                                                                                                Falconbe ON, Gra Gra
+Ally Samplesworth & Robin Casey Samplesworth                                                                                        Nom et adresse du Orchardpr ou Willowfa en Beaconh
+1234 56 ST                                                                                                                                               Wealthsimple Investments Inc.
+Sampletown AB T0X0X0                                                                                                                                         413 - 63 Beaconj Harbour
+CA                                                                                                                                                                Falconbe ON, Gra Gra
                                                                                                                                                            Account: Graniteorcha
               Year
                               37     Report Code
@@ -39,10 +39,10 @@ Aurorahar                                                                       
                                                                                                               Statement of Security Transactions
                                                                                                                                                       État des Orchardorc sur titres
                                                                                                                                  Name and Address of Exampl or Willow in Securities
-Harb Willowbeacon & Place Meado Aurorawillow                                                                                     Nom et adresse du Aurorafal ou Meadowgr en Juniper
-2025 62 Ce                                                                                                                                          Wealthsimple Investments Inc.
-Prairieorc Be Orchar                                                                                                                                    947 - 71 Harbour Northwi
-Ex                                                                                                                                                           Willowma ON, Wil Map
+Ally Samplesworth & Robin Casey Samplesworth                                                                                     Nom et adresse du Aurorafal ou Meadowgr en Juniper
+1234 56 ST                                                                                                                                          Wealthsimple Investments Inc.
+Sampletown AB T0X0X0                                                                                                                                    947 - 71 Harbour Northwi
+CA                                                                                                                                                           Willowma ON, Wil Map
                                                                                                                                                        Account: Northwindwil
             Year
                             94      Report Code

@@ -200,6 +200,8 @@ fn each_slip_the_list_states_is_read_from_its_file_once_and_kept() {
         let kind = kind_of(n);
         assert_eq!((s.kind.as_str(), s.account_key.clone()), (kind.name(), format!("made-up-account-{i}")));
         assert!(s.text.contains('\u{c}'), "{n}: kept with its pages apart");
+        assert!(!s.text.contains("Samplesworth") && !s.text.contains("Sampletown"), "{n}: its recipient's name and address not kept");
+        assert!(!s.text.split_whitespace().any(|w| w.len() == 9 && w.chars().all(|c| c.is_ascii_digit())), "{n}: no social insurance number kept");
         assert_eq!(slips::read(kind, &s.text).unwrap(), slips::read(kind, &slip_text(n)).unwrap(), "{n}");
     }
     let again = documents::keep_new(&book, conn, &mut stand, &pages, at("2026-03-03T22:00:00Z")).unwrap();
@@ -264,7 +266,9 @@ fn a_file_with_no_text_is_read_again_and_a_slip_refused_is_kept_as_it_came() {
     let said: BTreeMap<String, String> = kept.new.iter().map(|(s, r)| (s.id.clone(), r.clone().unwrap_err())).collect();
     assert!(said["made-up-document-2"].contains("proceeds come to"), "{said:?}");
     assert_eq!(said["made-up-document-3"], "the slip states the year 2025, its document 2026");
-    assert_eq!(book.tax_slips(conn).unwrap().len(), 3, "a refused slip is kept as it came");
+    let stored = book.tax_slips(conn).unwrap();
+    assert_eq!(stored.len(), 3, "a refused slip is kept as it came");
+    assert!(stored.iter().all(|s| !s.text.contains("Samplesworth")), "a refused slip is kept without its recipient's name and address");
 }
 
 /// A sign-in that lapses keeps nothing and notes no read: the next read asks again.

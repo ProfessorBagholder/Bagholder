@@ -1,5 +1,5 @@
 //! The tax slips a broker issued the person (migration 046): each document's text
-//! kept whole as it came, read once. A slip the broker amends is a document of its
+//! kept as it came less what identifies the person (`SPEC.md` tax-slips-5), read once. A slip the broker amends is a document of its
 //! own, and for an account, a kind and a year the one the broker made last is the
 //! slip (`SPEC.md` tax-slips-3); the ones before it stay kept, and are not read.
 
@@ -24,7 +24,8 @@ pub struct TaxSlip {
     pub year: i16,
     /// When the broker made it, as it wrote it: texts of one broker sort as time.
     pub created: String,
-    /// Its file's text, as `pdftotext -layout` lays its pages out.
+    /// Its file's text, as `pdftotext -layout` lays its pages out, what identifies
+    /// the person taken out. Never shown: only the figures read from it are.
     pub text: String,
 }
 
