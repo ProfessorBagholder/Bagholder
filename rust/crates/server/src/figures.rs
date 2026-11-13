@@ -1288,7 +1288,7 @@ mod tests {
                     settle_date: None,
                     kind: bagholder_core::transaction::Kind::Buy,
                     effect: None,
-                    instrument: Some(bagholder_book::mapping::InstrumentDraft { refs: vec![Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), "sec-race")], kind: InstrumentKind::Security, currency: usd, name: None, option: None, standing: None }),
+                    instrument: Some(bagholder_book::mapping::InstrumentDraft { fund: None, refs: vec![Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), "sec-race")], kind: InstrumentKind::Security, currency: usd, name: None, option: None, standing: None }),
                     quantity: Some(bagholder_core::Dec::from_int(10)),
                     price: None,
                     cash: Some(bagholder_core::Money::new(bagholder_core::Dec::parse("-1012.5").unwrap(), usd)),

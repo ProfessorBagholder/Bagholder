@@ -335,7 +335,7 @@ mod tests {
             for (id, standing) in [("sec-s-retired", Standing::RetiredByEvent), ("sec-s-live", Standing::Live)] {
                 let r = Reference::new(RefScheme::BrokerSecurity(bagholder_core::Broker::named("wealthsimple")), id);
                 let name = NameDraft { symbol: "ZZCH".into(), venue_mic: Some("XTSX".into()), venue_name: None, name: None, seen: day };
-                let draft = InstrumentDraft { refs: vec![r.clone()], kind: InstrumentKind::Security, currency: bagholder_core::Currency::CAD, name: Some(name), option: None, standing: Some(StandingDraft { of: r, standing }) };
+                let draft = InstrumentDraft { fund: None, refs: vec![r.clone()], kind: InstrumentKind::Security, currency: bagholder_core::Currency::CAD, name: Some(name), option: None, standing: Some(StandingDraft { of: r, standing }) };
                 book.instrument_stated(&draft, &bagholder_core::SourceName::named("wealthsimple"), t).unwrap().unwrap();
             }
         }

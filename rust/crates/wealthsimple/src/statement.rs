@@ -96,7 +96,7 @@ fn fill(n: &Node, _row_currency: Currency) -> Result<Mapped, Mismatch> {
             settle_date,
             kind,
             effect,
-            instrument: Some(bagholder_book::mapping::InstrumentDraft { refs: vec![security], kind: instrument_kind, currency: instrument_currency, name: None, option: None, standing: None }),
+            instrument: Some(bagholder_book::mapping::InstrumentDraft { fund: None, refs: vec![security], kind: instrument_kind, currency: instrument_currency, name: None, option: None, standing: None }),
             quantity: Some(n.dec_text("quantity")?),
             price: money("price", "priceCurrency")?,
             cash: money("cash", "cashCurrency")?,
