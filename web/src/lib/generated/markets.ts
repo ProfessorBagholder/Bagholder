@@ -188,9 +188,9 @@ title: string, strike: Dec,
  */
 cost: Dec | null, 
 /**
- * The bid × 100; none where Cboe states no bid, or a bid of zero.
+ * The bid × 100, as Cboe states it: zero where no one bids.
  */
-premium: Dec | null, 
+premium: Dec, 
 /**
  * The Premium over the Cost, in percent, to two decimals.
  */
@@ -244,7 +244,7 @@ export type OptionContract = { occ: string,
 /**
  * `KO Dec 11 66 put`.
  */
-title: string, cost: Dec | null, premium: Dec | null, 
+title: string, cost: Dec | null, premium: Dec, 
 /**
  * None where Yahoo has no bars for it.
  */

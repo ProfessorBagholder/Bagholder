@@ -200,7 +200,7 @@ fn test_a_quote_tick_is_the_moved_fields_alone() {
 fn options_card(premium: &str, yield_pct: &str) -> crate::options_card::OptionsAnswer {
     use crate::options_card::{OptionExpiry, OptionRow, OptionSide};
     let d = |s: &str| crate::wire::Dec(bagholder_core::Dec::parse(s).unwrap());
-    let row = |occ: &str, title: &str, strike: &str, cost: &str, premium: &str, y: &str| OptionRow { occ: occ.into(), title: title.into(), strike: d(strike), cost: Some(d(cost)), premium: Some(d(premium)), yield_pct: Some(d(y)) };
+    let row = |occ: &str, title: &str, strike: &str, cost: &str, premium: &str, y: &str| OptionRow { occ: occ.into(), title: title.into(), strike: d(strike), cost: Some(d(cost)), premium: d(premium), yield_pct: Some(d(y)) };
     crate::options_card::OptionsAnswer::Ok {
         ok: true,
         expiries: vec![OptionExpiry {

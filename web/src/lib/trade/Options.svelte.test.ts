@@ -28,14 +28,14 @@ function deliver(data: unknown): void {
 // every figure made up and the server's own.
 const trade = { id: 'listing:KO@US', symbol: 'KO', exchange: 'NYSE', currency: 'USD', kind: 'Shares', listing: true } as unknown as Trade
 
-const row = (occ: string, title: string, strike: string, cost: string | null, premium: string | null, y: string | null) => ({ occ, title, strike, cost, premium, yield: y })
+const row = (occ: string, title: string, strike: string, cost: string | null, premium: string, y: string | null) => ({ occ, title, strike, cost, premium, yield: y })
 const card = {
   ok: true,
   expiries: [
     {
       day: '2026-11-13',
       label: 'Nov 13',
-      puts: { rows: [row('KO261113P00070000', 'KO Nov 13 70 put', '70', '7000', '161', '2.30'), row('KO261113P00060000', 'KO Nov 13 60 put', '60', '6000', null, null)], near: 0 },
+      puts: { rows: [row('KO261113P00070000', 'KO Nov 13 70 put', '70', '7000', '161', '2.30'), row('KO261113P00060000', 'KO Nov 13 60 put', '60', '6000', '0', '0')], near: 0 },
       calls: { rows: [row('KO261113C00070000', 'KO Nov 13 70 call', '70', '6842', '3', '0.04')], near: 0 },
     },
     {
@@ -115,7 +115,8 @@ describe('the Options card', () => {
     expect(texts(Array.from(el.querySelectorAll('.oc-head span')))).toEqual(['Strike', 'Cost', 'Premium', 'Yield'])
     const rows = () => Array.from(el.querySelectorAll('.oc-row')).map((r) => texts(Array.from(r.querySelectorAll('span'))))
     // no bid: Premium and Yield read a dash
-    expect(rows()).toEqual([['70', '$7,000', '$161', '2.30%'], ['60', '$6,000', '—', '—']])
+    // a bid of zero is shown as Cboe states it: $0, and a yield of 0.00%
+    expect(rows()).toEqual([['70', '$7,000', '$161', '2.30%'], ['60', '$6,000', '$0', '0.00%']])
     await fireEvent.click(getAllByRole('button', { name: 'Dec 11' })[0])
     expect(rows()).toEqual([['66', '$6,600', '$24', '0.36%'], ['62.50', '$6,250', '$11', '0.18%']])
     await fireEvent.click(getByRole('button', { name: 'Calls' }))
