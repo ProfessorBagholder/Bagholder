@@ -55,8 +55,8 @@ pub struct OptionRow {
     /// listing's current price for a call; none for a call while the listing's
     /// price is not read.
     pub cost: Option<crate::wire::Dec>,
-    /// The bid × 100; none where Cboe states no bid, or a bid of zero.
-    pub premium: Option<crate::wire::Dec>,
+    /// The bid × 100, as Cboe states it: zero where no one bids.
+    pub premium: crate::wire::Dec,
     /// The Premium over the Cost, in percent, to two decimals.
     #[serde(rename = "yield")]
     pub yield_pct: Option<crate::wire::Dec>,
@@ -143,7 +143,7 @@ pub struct OptionContract {
     /// `KO Dec 11 66 put`.
     pub title: String,
     pub cost: Option<crate::wire::Dec>,
-    pub premium: Option<crate::wire::Dec>,
+    pub premium: crate::wire::Dec,
     /// None where Yahoo has no bars for it.
     pub chart: Option<PremiumChart>,
     /// Why its chart was not read, where it was not.
@@ -207,16 +207,17 @@ fn on_the_listing(c: &ChainContract, root: &str) -> bool {
 
 fn row(symbol: &str, c: &ChainContract, price: Option<Dec>, today: Date) -> Result<OptionRow, String> {
     let e = |e: DecError| format!("{}'s figures: {e}", c.occ);
-    let premium = if c.bid.is_positive() { Some(c.bid.checked_mul(hundred()).map_err(e)?) } else { None };
+    // the bid as Cboe states it, zero included: a bid of zero is no one bidding
+    let premium = c.bid.checked_mul(hundred()).map_err(e)?;
     let cost = match c.right {
         OptionRight::Put => Some(c.strike.checked_mul(hundred()).map_err(e)?),
         OptionRight::Call => price.map(|p| p.checked_mul(hundred())).transpose().map_err(e)?,
     };
-    let yield_pct = match (premium, cost) {
-        (Some(p), Some(k)) if k.is_positive() => Some(p.mul_div_rounded(hundred(), k, 2, Rounding::HalfUp).map_err(e)?),
+    let yield_pct = match cost {
+        Some(k) if k.is_positive() => Some(premium.mul_div_rounded(hundred(), k, 2, Rounding::HalfUp).map_err(e)?),
         _ => None,
     };
-    Ok(OptionRow { occ: c.occ.clone(), title: title(symbol, c, today), strike: c.strike.into(), cost: cost.map(Into::into), premium: premium.map(Into::into), yield_pct: yield_pct.map(Into::into) })
+    Ok(OptionRow { occ: c.occ.clone(), title: title(symbol, c, today), strike: c.strike.into(), cost: cost.map(Into::into), premium: premium.into(), yield_pct: yield_pct.map(Into::into) })
 }
 
 fn side(symbol: &str, mut list: Vec<&ChainContract>, price: Option<Dec>, today: Date) -> Result<OptionSide, String> {
@@ -411,7 +412,7 @@ pub fn contract_payload(app: &Arc<App>, key: &ListingKey, exchange: &str, curren
         Outcome::NotCarried(_) | Outcome::Offline => (vec![], None),
         other => (vec![], Some(format!("Yahoo's chart of {occ} could not be read: {} ({})", other.kind(), other.detail()))),
     };
-    let chart = match premium_chart(&closes, chain.session, r.premium.map(|p| p.0)) {
+    let chart = match premium_chart(&closes, chain.session, Some(r.premium.0)) {
         Ok(c) => c,
         Err(e) => return refused(e),
     };
@@ -458,7 +459,7 @@ mod tests {
 
     fn figures(r: &OptionRow) -> (Option<String>, Option<String>, Option<String>) {
         let t = |v: Option<crate::wire::Dec>| v.map(|v| v.0.to_text());
-        (t(r.cost), t(r.premium), t(r.yield_pct))
+        (t(r.cost), t(Some(r.premium)), t(r.yield_pct))
     }
 
     fn some(cost: &str, premium: &str, yield_pct: &str) -> (Option<String>, Option<String>, Option<String>) {
@@ -486,13 +487,14 @@ mod tests {
         assert!(dec11.puts.rows.iter().all(|r| r.cost.map(|c| c.0) == r.strike.0.checked_mul(hundred()).ok()));
     }
 
-    /// No bid, or a bid of zero, is no Premium and no Yield; the Cost stands.
+    /// A bid of zero, no one bidding, is a Premium of $0 and a Yield of 0.00%, as
+    /// Cboe states it: never a dash, as though nothing were stated.
     #[test]
-    fn a_contract_with_no_bid_has_no_premium_and_no_yield() {
+    fn a_contract_bid_at_zero_has_a_premium_and_a_yield_of_zero() {
         let card = card(&chain(), "KO", Some(d("68.42")), today()).unwrap();
         let nov13 = expiry(&card, "2026-11-13");
-        assert_eq!(figures(of(&nov13.puts, "60")), (Some(d("6000").to_text()), None, None));
-        assert_eq!(figures(of(&nov13.calls, "76")), (Some(d("6842").to_text()), None, None));
+        assert_eq!(figures(of(&nov13.puts, "60")), some("6000", "0", "0"));
+        assert_eq!(figures(of(&nov13.calls, "76")), some("6842", "0", "0"));
     }
 
     /// A call is figured on the listing's price: while it is not read a call has
@@ -657,7 +659,7 @@ mod tests {
         let OptionContractAnswer::Ok { contract, .. } = contract_payload(&app, &ko, "NYSE", "USD", "KO261211P00066000") else { panic!("the contract was refused") };
         assert_eq!(asked_of(&asked, "/delayed_quotes/options/KO.json"), 1);
         assert_eq!(asked_of(&asked, "/v8/finance/chart/KO261211P00066000?"), 1);
-        assert_eq!((contract.title.as_str(), contract.cost.map(|c| c.0), contract.premium.map(|p| p.0)), ("KO Dec 11 66 put", Some(d("6600")), Some(d("24"))));
+        assert_eq!((contract.title.as_str(), contract.cost.map(|c| c.0), contract.premium.0), ("KO Dec 11 66 put", Some(d("6600")), d("24")));
         let chart = contract.chart.expect("a chart");
         assert_eq!((chart.points.len(), chart.points.last().map(|p| p.premium.0)), (30, Some(d("24"))));
         assert_eq!(contract.chart_failed, None);

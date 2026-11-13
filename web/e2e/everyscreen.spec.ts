@@ -185,17 +185,7 @@ async function watchFromTheStart(page: Page): Promise<void> {
 }
 
 /** What the page shows, a relative time (`3 min ago`, `just now`) read as the clock allows it to differ. */
-/**
- * What the screen says, less what is drawn from no kept answer (`data-never-kept`: an
- * option chain, recorded nowhere, SPEC.md markets-129), which a reload with the server
- * held back cannot show until the server answers.
- */
-const shownText = (page: Page) =>
-  page.evaluate(() => {
-    let text = document.body.innerText
-    for (const e of document.querySelectorAll<HTMLElement>('[data-never-kept]')) text = text.replace(e.innerText, '')
-    return text.replace(/\d+ (s|min|h|d|mo|y) ago|just now/g, 'AGO')
-  })
+const shownText = (page: Page) => page.evaluate(() => document.body.innerText.replace(/\d+ (s|min|h|d|mo|y) ago|just now/g, 'AGO'))
 
 /** The page's reads, held until let through: what is drawn meanwhile can only be what was kept. */
 async function holdServer(page: Page): Promise<() => void> {
