@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 
-pub const APP_VERSION: &str = "2.26.1";
+pub const APP_VERSION: &str = "2.26.2";
 /// Bumped whenever the page and the server change together.
 pub const PROTOCOL: &str = "2026-09-26.2";
 /// Bump when title/summary logic improves, so a row that is missing a half is
@@ -568,7 +568,8 @@ impl App {
                 }
             }
         }
-        spawn(&format!("bagholder-{}", name), f);
+        // tracked, as all one-off work is: a test's end waits for it (`finish`)
+        self.spawn_work(&format!("bagholder-{}", name), f);
         true
     }
 }
@@ -817,6 +818,36 @@ mod work_tests {
         go.send(()).unwrap();
         finisher.join().unwrap();
         assert!(app.work.lock().unwrap().is_empty(), "every handle joined");
+    }
+
+    /// A job kicked (`kick`) is work the app started: `finish` waits for it too, so
+    /// a test's folder never goes while it still writes there.
+    #[test]
+    fn finish_waits_for_a_job_kicked() {
+        let home = tempfile::tempdir().unwrap();
+        let app = App::new(home.path().to_path_buf(), home.path().to_path_buf(), "127.0.0.1".into());
+        let (go, wait) = std::sync::mpsc::channel::<()>();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let d = done.clone();
+        assert!(app.kick("test-job", move || {
+            let _ = wait.recv();
+            d.store(true, std::sync::atomic::Ordering::SeqCst);
+        }));
+        let a = app.clone();
+        let finisher = std::thread::spawn(move || a.finish());
+        while !app.stopping() {
+            std::thread::yield_now();
+        }
+        for _ in 0..100_000 {
+            if finisher.is_finished() {
+                break;
+            }
+            std::thread::yield_now();
+        }
+        assert!(!finisher.is_finished(), "finish returned while the kicked job still ran");
+        go.send(()).unwrap();
+        finisher.join().unwrap();
+        assert!(done.load(std::sync::atomic::Ordering::SeqCst), "the job ran to its end before finish returned");
     }
 }
 

@@ -1853,10 +1853,14 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
             {
                 let told = app.clone();
                 // its end is told: what the listing offers may have changed with it
-                history::ensure_intraday_in_background(p.clone(), rates.clone(), inst.clone(), tf.clone(), start.clone(), end.clone(), move |read| {
+                let read = history::intraday_read(p.clone(), rates.clone(), inst.clone(), tf.clone(), start.clone(), end.clone(), move |read| {
                     bars_read(&told, read);
                     told.events.signal();
                 });
+                // on the app's tracked work: a test's end waits for it (`App::finish`)
+                if let Some(read) = read {
+                    app.spawn_work("bagholder-intraday", read);
+                }
                 pending = true;
                 ChartBars::default()
             } else if history::INTRADAY_SECONDS.iter().any(|(k, _)| *k == tf) {
@@ -1873,10 +1877,14 @@ pub fn history_payload(app: &Arc<App>, q: &HistoryQuery) -> HistoryAnswer {
                 };
                 if due {
                     let signal = app.clone();
-                    history::ensure_daily_in_background(p.clone(), rates.clone(), inst.clone(), start.clone(), move |read| {
+                    let read = history::daily_read(p.clone(), rates.clone(), inst.clone(), start.clone(), move |read| {
                         bars_read(&signal, read);
                         signal.events.signal();
                     });
+                    // on the app's tracked work: a test's end waits for it (`App::finish`)
+                    if let Some(read) = read {
+                        app.spawn_work("bagholder-daily", read);
+                    }
                 }
                 pending = history::daily_pending(&inst);
                 let daily = match history::stored_daily(c, &inst, &start, &end) {
