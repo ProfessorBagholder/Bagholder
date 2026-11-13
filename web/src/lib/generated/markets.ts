@@ -255,3 +255,114 @@ chart: PremiumChart | null,
 chartFailed: string | null, };
 
 export type OptionContractAnswer = { ok: true, contract: OptionContract, } | OkOr;
+
+export type TaxWait = { 
+/**
+ * `slip`, `record-date`, `rate`, `slip-differs`, `moved-in-cost`, `moved-out`,
+ * `period-open`, `account-plan`, `corporate-event`, `units`, `earlier-year`,
+ * `calendar` or `arithmetic` (`acb::Missing`).
+ */
+code: string, day: string | null, transaction: string | null, account: string | null, currency: string | null, year: number | null, 
+/**
+ * The slip less the figures, for `slip-differs`.
+ */
+amount: Dec | null, };
+
+export type TaxGain = { 
+/**
+ * `sale` or `below-zero`.
+ */
+kind: string, day: string, transaction: string | null, units: Dec, proceeds: Dec, cost: Dec, outlays: Dec, gain: Dec, denied: Dec, };
+
+export type TaxYear = { year: number, complete: boolean, waiting: Array<TaxWait>, gains: Array<TaxGain>, };
+
+export type TaxRow = { day: string, 
+/**
+ * `bought`, `sold`, `moved-in`, `return-of-capital`, `non-cash`, `below-zero`,
+ * `loss-added` or `split`.
+ */
+event: string, units: Dec, cad: Dec, unitsAfter: Dec, costAfter: Dec, rate: Dec | null, 
+/**
+ * `book`, `entered`, `fund`, `breakdown` or `slip`.
+ */
+source: string, 
+/**
+ * The row's transaction, for `book` and `entered`; whose figure, for `fund`.
+ */
+sourceDetail: string | null, };
+
+export type TaxHolding = { 
+/**
+ * The book's id for the fund.
+ */
+fund: string, symbol: string, 
+/**
+ * Its venue's market identifier code, where known.
+ */
+venue: string | null, name: string | null, 
+/**
+ * `canada` or `united-states`.
+ */
+listed: string, units: Dec, cost: Dec, 
+/**
+ * The cost per unit, to the fourth place, where units are held.
+ */
+perUnit: Dec | null, completeThrough: number | null, years: Array<TaxYear>, rows: Array<TaxRow>, };
+
+export type TaxNote = { 
+/**
+ * `slip-without-text`, `slip-refused`, `fund-unmatched`, `fund-ambiguous`,
+ * `combines` or `venue-unknown`.
+ */
+code: string, account: string | null, year: number | null, 
+/**
+ * The slip's kind (`t3`, `t5`, `t5008`).
+ */
+kind: string | null, 
+/**
+ * The fund as the slip names it.
+ */
+name: string | null, 
+/**
+ * How many funds a T3 combines.
+ */
+funds: number | null, 
+/**
+ * The book's id for the fund, for `venue-unknown`.
+ */
+fund: string | null, };
+
+export type TaxSale = { year: number, account: string, 
+/**
+ * The security as the slip names it.
+ */
+security: string, day: string, units: Dec, 
+/**
+ * Box 21.
+ */
+proceeds: Dec, 
+/**
+ * Box 20, where the slip states one.
+ */
+slipCost: Dec | null, 
+/**
+ * What box 20 must say: box 21 less the ledger's gain; none unless matched.
+ */
+enter: Dec | null, 
+/**
+ * `right` (the slip's box 20 is what it must say), `change`, `unmatched` (no
+ * sale of the ledger's is it) or `ambiguous` (more than one could be).
+ */
+state: string, 
+/**
+ * The fund of the ledger's sale it is.
+ */
+fund: string | null, };
+
+export type TaxDoc = { holdings: Array<TaxHolding>, 
+/**
+ * The years complete for every holding that has them, oldest first.
+ */
+ready: Array<number>, notes: Array<TaxNote>, sales: Array<TaxSale>, };
+
+export type TaxAnswer = { ok: true, tax: TaxDoc, } | OkOr;

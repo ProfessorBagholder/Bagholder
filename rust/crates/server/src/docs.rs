@@ -158,6 +158,8 @@ pub enum Doc {
     /// `options:<symbol=…&exchange=…&currency=…>`: a listing's Options card,
     /// nothing until the first answer.
     Options(crate::options_card::OptionsAnswer),
+    /// `tax`: the ETFs' tax cost, worked out only while it is watched.
+    Tax(crate::tax_doc::TaxAnswer),
     History(HistoryDoc),
     /// `universe:<key>`: what the last read of a market universe came to.
     Universe(UniverseDoc),
@@ -177,6 +179,7 @@ impl Diff for Doc {
             (Fear(a), Fear(b)) => a.diff(b, path, ops),
             (Quote(a), Quote(b)) => a.diff(b, path, ops),
             (Options(a), Options(b)) => a.diff(b, path, ops),
+            (Tax(a), Tax(b)) => a.diff(b, path, ops),
             (History(a), History(b)) => a.diff(b, path, ops),
             (Universe(a), Universe(b)) => a.diff(b, path, ops),
             (News(a), News(b)) => a.diff(b, path, ops),
@@ -237,6 +240,7 @@ pub fn read(app: &Arc<App>, key: &str) -> Option<Doc> {
         // `universe:<key>`: a market universe the heatmap shows
         k if k.starts_with("universe:") => crate::feeds::universe_stored(app, &k["universe:".len()..]).map(Doc::Universe),
         "news" => Some(Doc::News(crate::feeds::news_stored(app))),
+        "tax" => Some(Doc::Tax(crate::tax_doc::answer(app))),
         _ => None,
     }
 }

@@ -33,6 +33,8 @@ mod exit_with;
 mod webpush;
 mod feeds;
 mod fund_tax;
+mod tax_doc;
+mod tax_inputs;
 mod tax_slips;
 mod filings;
 mod http;

@@ -89,6 +89,7 @@ fn page_reads() -> Vec<(&'static str, &'static str)> {
         (GetRoute::of(m::shorts, "/api/shorts").path, "shorts"),
         (GetRoute::of(m::shorts_feed, "/api/shorts/feed").path, "shorts_feed"),
         (GetRoute::of(m::options, "/api/options").path, "options"),
+        (GetRoute::of(model::tax, "/api/tax").path, "tax"),
         (GetRoute::of(m::option_contract, "/api/options/contract").path, "option_contract"),
         (GetRoute::of(m::fear, "/api/fear").path, "fear"),
         (GetRoute::of(m::history, "/api/history").path, "history"),
