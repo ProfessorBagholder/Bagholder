@@ -93,6 +93,8 @@ pub const TABLES: &[(&str, Holds)] = &[
     ("statement_holds", Holds::Broker),
     ("account_values", Holds::Broker),
     ("monthly_statements", Holds::Broker),
+    // the tax slips the broker issued (migration 46)
+    ("tax_slips", Holds::Broker),
     // what the broker's net worth feature states (migration 33)
     ("outside_debts", Holds::Broker),
     ("outside_days", Holds::Broker),
@@ -211,7 +213,7 @@ impl Book {
             }
             if what.broker {
                 c.execute_batch(
-                    "DELETE FROM settings WHERE key = 'statements.said'; DELETE FROM monthly_statements; DELETE FROM statement_units; DELETE FROM statement_holds; DELETE FROM statement_cash; DELETE FROM statements; DELETE FROM account_values;
+                    "DELETE FROM settings WHERE key = 'statements.said'; DELETE FROM tax_slips; DELETE FROM monthly_statements; DELETE FROM statement_units; DELETE FROM statement_holds; DELETE FROM statement_cash; DELETE FROM statements; DELETE FROM account_values;
                      DELETE FROM buying_power; DELETE FROM margin_rates; DELETE FROM account_days; DELETE FROM account_links; DELETE FROM margin_backing;
                      DELETE FROM activity_reads; DELETE FROM broker_reads; DELETE FROM outside_debts; DELETE FROM outside_days;",
                 )?;

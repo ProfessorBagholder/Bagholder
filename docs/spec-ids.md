@@ -153,6 +153,10 @@ Every id ever given to a rule of `SPEC.md`, so that no id is given to a second r
 - `tax-cost-of-an-etf-8`
 - `tax-cost-of-an-etf-9`
 - `tax-cost-of-an-etf-10`
+- `tax-slips-1`
+- `tax-slips-2`
+- `tax-slips-3`
+- `tax-slips-4`
 - `equity-and-returns-1`
 - `equity-and-returns-2`
 - `equity-and-returns-3`

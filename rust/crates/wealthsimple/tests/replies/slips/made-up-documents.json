@@ -1,0 +1,93 @@
+{
+  "data": {
+    "identity": {
+      "id": "identity-1",
+      "documents": {
+        "totalCount": 4,
+        "offset": 0,
+        "results": [
+          {
+            "id": "made-up-document-1",
+            "createdAt": "2026-03-13T14:02:11.000Z",
+            "availableAt": "2026-03-13",
+            "displayAt": null,
+            "filename": null,
+            "period": "2025-01-01",
+            "frequency": "year",
+            "type": "t3",
+            "downloadUrl": null,
+            "uploaderName": null,
+            "s3BucketName": "made-up-bucket",
+            "s3Key": "made-up-key-1",
+            "category": "tax",
+            "account": {
+              "id": "made-up-account-1",
+              "type": "non_registered"
+            },
+            "documents": null
+          },
+          {
+            "id": "made-up-document-2",
+            "createdAt": "2026-02-20T11:40:02.000Z",
+            "availableAt": "2026-02-20",
+            "displayAt": null,
+            "filename": null,
+            "period": "2025-01-01",
+            "frequency": "year",
+            "type": "crm2_fee",
+            "downloadUrl": null,
+            "uploaderName": null,
+            "s3BucketName": "made-up-bucket",
+            "s3Key": "made-up-key-2",
+            "category": "tax",
+            "account": {
+              "id": "made-up-account-1",
+              "type": "non_registered"
+            },
+            "documents": null
+          },
+          {
+            "id": "made-up-document-3",
+            "createdAt": "2026-02-26T09:15:47.000Z",
+            "availableAt": "2026-02-26",
+            "displayAt": null,
+            "filename": null,
+            "period": "2025-01-01",
+            "frequency": "year",
+            "type": "t5008",
+            "downloadUrl": "https://files.example.com/made-up-document-3?signature=made-up",
+            "uploaderName": null,
+            "s3BucketName": null,
+            "s3Key": null,
+            "category": "tax",
+            "account": {
+              "id": "made-up-account-1",
+              "type": "non_registered"
+            },
+            "documents": null
+          },
+          {
+            "id": "made-up-document-4",
+            "createdAt": "2026-02-27T16:21:30.000Z",
+            "availableAt": "2026-02-27",
+            "displayAt": null,
+            "filename": null,
+            "period": "2025-01-01",
+            "frequency": "year",
+            "type": "t5",
+            "downloadUrl": null,
+            "uploaderName": null,
+            "s3BucketName": null,
+            "s3Key": "made-up-key-4",
+            "category": "tax",
+            "account": {
+              "id": "made-up-account-2",
+              "type": "ca_cash_msb"
+            },
+            "documents": null
+          }
+        ]
+      }
+    }
+  }
+}

@@ -351,6 +351,7 @@ dependencies = [
  "bagholder-book",
  "bagholder-broker",
  "bagholder-core",
+ "bagholder-market",
  "bagholder-net",
  "bagholder-sources",
  "bagholder-sqlite",

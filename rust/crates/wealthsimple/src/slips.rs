@@ -488,3 +488,32 @@ pub fn t5(text: &str) -> Result<T5, String> {
     }
     Ok(T5 { year, rows: rows.into_iter().map(|r| r.1).collect() })
 }
+
+/// A slip read, of whichever kind.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Slip {
+    T3(T3),
+    T5(T5),
+    T5008(T5008),
+}
+
+impl Slip {
+    /// The tax year the slip states.
+    pub fn year(&self) -> i16 {
+        match self {
+            Slip::T3(s) => s.year,
+            Slip::T5(s) => s.year,
+            Slip::T5008(s) => s.year,
+        }
+    }
+}
+
+/// A slip of `kind` read from its text, or why it is refused.
+pub fn read(kind: crate::documents::SlipKind, text: &str) -> Result<Slip, String> {
+    use crate::documents::SlipKind;
+    match kind {
+        SlipKind::T3 => t3(text).map(Slip::T3),
+        SlipKind::T5 => t5(text).map(Slip::T5),
+        SlipKind::T5008 => t5008(text).map(Slip::T5008),
+    }
+}

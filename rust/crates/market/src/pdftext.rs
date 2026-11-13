@@ -44,7 +44,7 @@ pub fn text(data: &[u8]) -> String {
         return String::new();
     }
     if let Some(exe) = which("pdftotext") {
-        if let Some(out) = run_pdftotext(&exe, data, false) {
+        if let Some(out) = run_pdftotext(&exe, data, &PLAIN) {
             let got = out.trim().to_string();
             if !got.is_empty() {
                 return got;
@@ -74,14 +74,36 @@ pub fn layout_text(data: &[u8]) -> Option<String> {
         SAID.call_once(|| bagholder_core::log::line("bagholder: a fund's tax form from 2025 on is read with pdftotext, which is not installed: those years place return of capital by the slips"));
         return None;
     };
-    run_pdftotext(&exe, data, true).filter(|t| !t.trim().is_empty())
+    run_pdftotext(&exe, data, &LAYOUT).filter(|t| !t.trim().is_empty())
 }
+
+/// A PDF's text as [`layout_text`] lays it, each page apart: a form feed ends
+/// each page, as `pdftotext -layout` writes them, for a document read page by
+/// page (a tax slip's statement is its first page, its slips the pages after;
+/// `bagholder_wealthsimple::slips`). None where the bytes are not a PDF or
+/// `pdftotext` is not installed, which the log says once a run: the built-in
+/// reader lays no page out.
+pub fn layout_pages(data: &[u8]) -> Option<String> {
+    static SAID: std::sync::Once = std::sync::Once::new();
+    if disabled() || !data.starts_with(b"%PDF-") {
+        return None;
+    }
+    let Some(exe) = which("pdftotext") else {
+        SAID.call_once(|| bagholder_core::log::line("bagholder: tax slips are read with pdftotext, which is not installed: no slip is read until it is"));
+        return None;
+    };
+    run_pdftotext(&exe, data, &PAGES).filter(|t| !t.trim().is_empty())
+}
+
+/// What `pdftotext` is asked for: its plain text, laid out, or laid out by page.
+const PLAIN: [&str; 4] = ["-q", "-nopgbrk", "-", "-"];
+const LAYOUT: [&str; 5] = ["-q", "-nopgbrk", "-layout", "-", "-"];
+const PAGES: [&str; 4] = ["-q", "-layout", "-", "-"];
 
 /// `pdftotext`'s text, or None where it could not give all of it (the PDF not
 /// written to it whole, its output not read whole, thirty seconds passed), and
 /// the built-in engine reads the PDF instead.
-fn run_pdftotext(exe: &std::path::Path, data: &[u8], layout: bool) -> Option<String> {
-    let args: &[&str] = if layout { &["-q", "-nopgbrk", "-layout", "-", "-"] } else { &["-q", "-nopgbrk", "-", "-"] };
+fn run_pdftotext(exe: &std::path::Path, data: &[u8], args: &[&str]) -> Option<String> {
     let mut child = Command::new(exe)
         .args(args)
         .stdin(Stdio::piped())

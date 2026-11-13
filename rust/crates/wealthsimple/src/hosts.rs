@@ -66,6 +66,17 @@ pub fn login_url() -> String {
     format!("{}/app/login", web())
 }
 
+/// Whether a document's file may be read from `url`: a link Wealthsimple states
+/// or signs carries its own permission and goes wherever its files are stored,
+/// over https; with a stand-in named, to the stand-in alone, so nothing leaves for
+/// any other host.
+pub fn file_link_ok(url: &str) -> bool {
+    match base() {
+        Some(b) => host_of(url).eq_ignore_ascii_case(host_of(&b)) && url.split_once("://").map(|(s, _)| s) == b.split_once("://").map(|(s, _)| s),
+        None => url.starts_with("https://") && !host_of(url).is_empty(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     /// With the variable set, every address is the stand-in's.
@@ -75,7 +86,14 @@ mod tests {
         for url in [super::web(), super::graphql_url(), super::token_url(), super::login_url()] {
             assert!(url.starts_with("http://127.0.0.1:9"), "{url}");
         }
+        // a document's file from the stand-in alone
+        assert!(super::file_link_ok("http://127.0.0.1:9/files/slip-1?sig=a"));
+        assert!(!super::file_link_ok("https://files.example.com/slip-1?sig=a"));
         std::env::remove_var(super::BASE_VAR);
         assert_eq!(super::graphql_url(), "https://my.wealthsimple.com/graphql");
+        // without one, any https link a document states, and nothing else
+        assert!(super::file_link_ok("https://files.example.com/slip-1?sig=a"));
+        assert!(!super::file_link_ok("http://files.example.com/slip-1"));
+        assert!(!super::file_link_ok("https:///slip-1"));
     }
 }

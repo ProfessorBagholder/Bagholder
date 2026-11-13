@@ -327,6 +327,13 @@ mod tests {
                 .execute("INSERT INTO monthly_statements (connection_id, account_key, month, payload, read_id) VALUES (?1, 'anon-tfsa-1', '2025-10-01', 'null', ?2)", rusqlite::params![conn.to_string(), read.0])
                 .unwrap();
         }
+        // a tax slip the broker issued
+        {
+            let conn = book.connections().unwrap()[0].id;
+            let read = book.broker_read(conn, bagholder_wealthsimple::documents::READ_PART, t).unwrap();
+            let slip = bagholder_book::tax_slips::TaxSlip { document: "made-up-document-1".into(), account_key: "anon-tfsa-1".into(), kind: "t5".into(), year: 2025, created: "2026-02-27T10:00:00.000Z".into(), text: "a made-up slip".into() };
+            book.keep_tax_slip(conn, &slip, &read).unwrap();
+        }
         // a succession the broker states: an id it retired by a corporate action,
         // and the id its listing trades under now
         {

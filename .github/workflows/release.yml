@@ -173,6 +173,10 @@ jobs:
         if: needs.release.outputs.tag != ''
         with:
           tool: cargo-nextest@0.9.148
+      # pdftotext, which reads a tax slip's file (`wealthsimple/tests/tax_documents.rs`)
+      - name: pdftotext
+        if: needs.release.outputs.tag != ''
+        run: command -v pdftotext > /dev/null || brew install poppler
       # on a temp folder of its own: a test that leaves anything there fails it;
       # nextest runs no doc test, so they run apart
       - name: The Rust suite

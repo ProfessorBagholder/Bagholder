@@ -58,9 +58,11 @@ jobs:
           save-if: false
       # a start is traced to show it opens no store but the book and the market
       # cache (`server/tests/start_failures.rs`)
-      - name: strace
+      # and pdftotext, which the app's image carries and reads a tax slip's file with
+      # (`wealthsimple/tests/tax_documents.rs`)
+      - name: strace and pdftotext
         if: steps.gate.outputs.run == 'true'
-        run: sudo apt-get update && sudo apt-get install -y strace
+        run: sudo apt-get update && sudo apt-get install -y strace poppler-utils
       # cargo-nextest runs each test in a process of its own, as many at once as the
       # runner has cores: the suite's tests no longer wait in line on one shared lock
       - if: steps.gate.outputs.run == 'true'
@@ -276,6 +278,10 @@ jobs:
         if: matrix.kind == 'spec' && steps.read.outputs.count != '0'
         run: npx playwright install --with-deps chromium
         working-directory: web
+      # pdftotext, as the suite has it (a tax slip's file is read with it)
+      - name: pdftotext
+        if: matrix.kind == 'cargo' && steps.read.outputs.count != '0'
+        run: sudo apt-get update && sudo apt-get install -y poppler-utils
       # with the suite's flags, so the suite's cache is the build's
       - name: Each plant put in, its test run, and the tree put back
         if: matrix.kind == 'cargo' && steps.read.outputs.count != '0'

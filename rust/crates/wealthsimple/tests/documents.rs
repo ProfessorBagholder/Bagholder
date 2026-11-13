@@ -246,6 +246,8 @@ fn every_answer_the_pull_is_tested_on_is_what_its_document_asks_for() {
         ("FetchAccountHistoricalFinancials", "history-2.json"),
         ("FetchAccountHistoricalFinancials", "history-3.json"),
         ("FetchHoldingsExportPositionsAsOfDate", "positions@anon-tfsa-1@2025-11-18.json"),
+        ("FetchIdentityPaginatedDocuments", "../slips/made-up-documents.json"),
+        ("DocumentSignedUrlCreate", "../slips/made-up-signed-link.json"),
     ] {
         assert_eq!(not_asked(document, &reply(&format!("wealthsimple-pull/{answer}"))), Vec::<String>::new(), "{answer}, asked by {document}");
     }
