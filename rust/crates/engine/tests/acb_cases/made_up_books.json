@@ -1373,5 +1373,281 @@
     }
    ]
   }
+ },
+ {
+  "name": "A T3's own breakdown places each record date's return of capital and non-cash in dollars, ahead of the fund's per-unit figures, the slip its check",
+  "spec": "SPEC.md tax-cost-of-an-etf-5",
+  "working": [
+   "Made up. 1,000 units bought Monday 2024-01-08 for 10,000.00, settled T+2 on 01-10; 500 more on Monday 2024-07-08 for 5,000.00, settled T+1 on 07-09.",
+   "2024: 0.10 a unit paid for record dates 03-20, 06-20 and 12-20: 100.00, 100.00 and 150.00.",
+   "The T3's breakdown states the person's own return of capital for each record date: 30.00, 31.00 and 46.00, and 20.00 of non-cash on 12-20. The fund's per-unit figures (0.05 each, which would give 50.00, 50.00 and 75.00) are passed over: the slip's own figure for a record date comes first.",
+   "Box 42 is 107.00 = 30.00 + 31.00 + 46.00: the check holds, nothing to place.",
+   "Cost: 10,000.00 - 30.00 = 9,970.00; - 31.00 = 9,939.00; + 5,000.00 = 14,939.00; on 12-20 return of capital before non-cash: - 46.00 = 14,893.00; + 20.00 = 14,913.00 on 1,500 units."
+  ],
+  "today": "2025-04-15",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "F"
+   }
+  ],
+  "declared": {
+   "F": [
+    {
+     "ex": "2024-03-20",
+     "record": "2024-03-20",
+     "pay": "2024-03-28",
+     "amount": "0.10"
+    },
+    {
+     "ex": "2024-06-20",
+     "record": "2024-06-20",
+     "pay": "2024-06-27",
+     "amount": "0.10"
+    },
+    {
+     "ex": "2024-12-20",
+     "record": "2024-12-20",
+     "pay": "2024-12-30",
+     "amount": "0.10"
+    }
+   ]
+  },
+  "transactions": [
+   {
+    "id": "b1",
+    "account": "A",
+    "day": "2024-01-08",
+    "kind": "buy",
+    "instrument": "F",
+    "qty": "1000",
+    "cash": "-10000.00"
+   },
+   {
+    "id": "d1",
+    "account": "A",
+    "day": "2024-03-28",
+    "kind": "dividend",
+    "instrument": "F",
+    "cash": "100.00"
+   },
+   {
+    "id": "d2",
+    "account": "A",
+    "day": "2024-06-27",
+    "kind": "dividend",
+    "instrument": "F",
+    "cash": "100.00"
+   },
+   {
+    "id": "b2",
+    "account": "A",
+    "day": "2024-07-08",
+    "kind": "buy",
+    "instrument": "F",
+    "qty": "500",
+    "cash": "-5000.00"
+   },
+   {
+    "id": "d3",
+    "account": "A",
+    "day": "2024-12-30",
+    "kind": "dividend",
+    "instrument": "F",
+    "cash": "150.00"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "F": "canada"
+   },
+   "slips": {
+    "F": {
+     "2024": [
+      {
+       "box42": "107.00",
+       "income": "263.00"
+      }
+     ]
+    }
+   },
+   "stated": {
+    "F": {
+     "2024-03-20": {
+      "roc": "30.00"
+     },
+     "2024-06-20": {
+      "roc": "31.00"
+     },
+     "2024-12-20": {
+      "roc": "46.00",
+      "non_cash": "20.00"
+     }
+    }
+   },
+   "per_unit": {
+    "F": {
+     "2024-03-20": {
+      "roc": "0.05"
+     },
+     "2024-06-20": {
+      "roc": "0.05"
+     },
+     "2024-12-20": {
+      "roc": "0.05"
+     }
+    }
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "F",
+     "units": "1500",
+     "cost": "14913.00",
+     "rows": [
+      "2024-01-10 bought 1000 10000.00 10000.00",
+      "2024-03-20 return-of-capital 0 -30.00 9970.00",
+      "2024-06-20 return-of-capital 0 -31.00 9939.00",
+      "2024-07-09 bought 500 5000.00 14939.00",
+      "2024-12-20 return-of-capital 0 -46.00 14893.00",
+      "2024-12-20 non-cash 0 20.00 14913.00"
+     ],
+     "years": {
+      "2024": {
+       "gains": []
+      }
+     }
+    }
+   ]
+  }
+ },
+ {
+  "name": "A record date the T3's breakdown leaves out takes the rest of box 42 by the person's cash, the breakdown's own figures kept",
+  "spec": "SPEC.md tax-cost-of-an-etf-5",
+  "working": [
+   "Made up. 1,000 units bought Monday 2024-01-08 for 10,000.00, settled T+2 on 01-10. 0.10 a unit paid for record dates 03-20, 06-20 and 09-20: 100.00 each, 300.00 on the year's record dates.",
+   "The breakdown states 50.00 of return of capital for 03-20 and 30.00 for 06-20, and nothing for 09-20; no per-unit figures. Box 42 is 120.00: 120.00 - 80.00 = 40.00 is placed by cash among the record dates left, 09-20 alone, which takes it whole. (Placed by cash over all three, each would have had 40.00.)",
+   "Non-cash = income 300.00 - foreign tax 0 - cash 300.00 + return of capital 120.00 = 120.00, on the year's last record date, 09-20, as no date is stated for it.",
+   "Cost: 10,000.00 - 50.00 = 9,950.00; - 30.00 = 9,920.00; - 40.00 = 9,880.00; + 120.00 = 10,000.00."
+  ],
+  "today": "2025-04-15",
+  "accounts": [
+   {
+    "id": "A"
+   }
+  ],
+  "instruments": [
+   {
+    "id": "F"
+   }
+  ],
+  "declared": {
+   "F": [
+    {
+     "ex": "2024-03-20",
+     "record": "2024-03-20",
+     "pay": "2024-03-28",
+     "amount": "0.10"
+    },
+    {
+     "ex": "2024-06-20",
+     "record": "2024-06-20",
+     "pay": "2024-06-27",
+     "amount": "0.10"
+    },
+    {
+     "ex": "2024-09-20",
+     "record": "2024-09-20",
+     "pay": "2024-09-27",
+     "amount": "0.10"
+    }
+   ]
+  },
+  "transactions": [
+   {
+    "id": "b1",
+    "account": "A",
+    "day": "2024-01-08",
+    "kind": "buy",
+    "instrument": "F",
+    "qty": "1000",
+    "cash": "-10000.00"
+   },
+   {
+    "id": "d1",
+    "account": "A",
+    "day": "2024-03-28",
+    "kind": "dividend",
+    "instrument": "F",
+    "cash": "100.00"
+   },
+   {
+    "id": "d2",
+    "account": "A",
+    "day": "2024-06-27",
+    "kind": "dividend",
+    "instrument": "F",
+    "cash": "100.00"
+   },
+   {
+    "id": "d3",
+    "account": "A",
+    "day": "2024-09-27",
+    "kind": "dividend",
+    "instrument": "F",
+    "cash": "100.00"
+   }
+  ],
+  "tax": {
+   "funds": {
+    "F": "canada"
+   },
+   "slips": {
+    "F": {
+     "2024": [
+      {
+       "box42": "120.00",
+       "income": "300.00"
+      }
+     ]
+    }
+   },
+   "stated": {
+    "F": {
+     "2024-03-20": {
+      "roc": "50.00"
+     },
+     "2024-06-20": {
+      "roc": "30.00"
+     }
+    }
+   }
+  },
+  "expect": {
+   "acb": [
+    {
+     "fund": "F",
+     "units": "1000",
+     "cost": "10000.00",
+     "rows": [
+      "2024-01-10 bought 1000 10000.00 10000.00",
+      "2024-03-20 return-of-capital 0 -50.00 9950.00",
+      "2024-06-20 return-of-capital 0 -30.00 9920.00",
+      "2024-09-20 return-of-capital 0 -40.00 9880.00",
+      "2024-09-20 non-cash 0 120.00 10000.00"
+     ],
+     "years": {
+      "2024": {
+       "gains": []
+      }
+     }
+    }
+   ]
+  }
  }
 ]

@@ -14,7 +14,7 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use bagholder_engine::acb::{self, Event, GainKind, Listed, Missing, PerUnit, Slip, TaxInputs};
+use bagholder_engine::acb::{self, Event, GainKind, Listed, Missing, PerUnit, Slip, Stated, TaxInputs};
 use common::*;
 
 fn tax_inputs(case: &Value, ids: &mut Ids) -> TaxInputs {
@@ -40,6 +40,13 @@ fn tax_inputs(case: &Value, ids: &mut Ids) -> TaxInputs {
             m.insert(day(d), PerUnit { return_of_capital: dec(s(x, "roc").unwrap()), non_cash: dec(s(x, "non_cash").unwrap_or("0")), source: s(x, "source").unwrap_or("fund").into() });
         }
         out.per_unit.insert(ids.instrument(&f), m);
+    }
+    for (f, days) in obj(&t, "stated") {
+        let mut m = BTreeMap::new();
+        for (d, x) in days.as_object().unwrap() {
+            m.insert(day(d), Stated { return_of_capital: dec(s(x, "roc").unwrap()), non_cash: dec(s(x, "non_cash").unwrap_or("0")) });
+        }
+        out.stated.insert(ids.instrument(&f), m);
     }
     out.slips_final = arr(&t, "slips_final").iter().map(|y| y.as_str().unwrap().parse().unwrap()).collect();
     for (f, years) in obj(&t, "non_cash_on") {
