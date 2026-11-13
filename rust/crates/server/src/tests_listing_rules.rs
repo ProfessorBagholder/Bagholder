@@ -274,7 +274,7 @@ fn test_no_route_finds_a_listing_by_a_bare_symbol() {
         assert!(refused || waits, "{route} ({ty}) answered a bare symbol: {got}");
     }
     // the routes that take a listing, so the rule is known to have been driven over them
-    for want in ["GET /api/listing", "GET /api/symbols/quote", "GET /api/news/symbol", "GET /api/filings", "GET /api/shorts", "GET /api/history", "POST /api/watchlist/add", "POST /api/tiles/set", "POST /api/entries"] {
+    for want in ["GET /api/listing", "GET /api/symbols/quote", "GET /api/news/symbol", "GET /api/filings", "GET /api/shorts", "GET /api/options", "GET /api/options/contract", "GET /api/history", "POST /api/watchlist/add", "POST /api/tiles/set", "POST /api/entries"] {
         assert!(driven.iter().any(|d| d == want), "{want} carries a symbol and was not driven: {driven:?}");
     }
 }

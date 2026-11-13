@@ -27,6 +27,8 @@ pub fn routes() -> Routed {
         get "/api/fear" => fear;
         get "/api/shorts" => shorts;
         get "/api/shorts/feed" => shorts_feed;
+        get "/api/options" => options;
+        get "/api/options/contract" => option_contract;
         get "/api/history" => history;
         post "/api/watchlist/add" => watchlist_add;
         post "/api/watchlist/remove" => watchlist_remove;
@@ -404,6 +406,28 @@ pub struct ShortsQuery {
 pub(crate) async fn shorts(State(state): State<AppState>, Params(q): Params<ShortsQuery>) -> Api<feeds::ShortsAnswer> {
     let l = q.listing;
     answer(move || feeds::shorts_payload(&state.app, &l.key, &l.exchange, q.trend).into()).await
+}
+
+/// `GET /api/options`: a US listing's Options card, its chain read as the card shows.
+pub(crate) async fn options(State(state): State<AppState>, Params(l): Params<Listing>) -> Api<crate::options_card::OptionsAnswer> {
+    answer(move || crate::options_card::options_payload(&state.app, &l.key, &l.exchange, &l.currency)).await
+}
+
+#[derive(Deserialize, TS)]
+pub struct OptionContractQuery {
+    #[serde(flatten)]
+    #[ts(flatten)]
+    listing: Listing,
+    /// the contract's OCC symbol, as the card names it
+    #[serde(default, deserialize_with = "text")]
+    occ: String,
+}
+
+/// `GET /api/options/contract`: one contract of a listing's Options card, as the
+/// card opens it.
+pub(crate) async fn option_contract(State(state): State<AppState>, Params(q): Params<OptionContractQuery>) -> Api<crate::options_card::OptionContractAnswer> {
+    let l = q.listing;
+    answer(move || crate::options_card::contract_payload(&state.app, &l.key, &l.exchange, &l.currency, &q.occ)).await
 }
 
 pub(crate) async fn shorts_feed(State(state): State<AppState>) -> Api<crate::feeds::ShortsFeed> {

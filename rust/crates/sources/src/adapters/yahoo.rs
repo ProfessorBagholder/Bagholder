@@ -376,11 +376,17 @@ fn percent_encode(s: &str) -> String {
 /// too, which its reply does not list: those are asked first, as the monthly
 /// chart from the day after the span to today, which lists them.
 pub fn ask_span(net: &Net, symbol: &str, from: Date, to: Date, now: Timestamp) -> Noted<Chart> {
+    ask_span_of(net, CHART, symbol, from, to, now)
+}
+
+/// `ask_span`, of the chart at `chart` (`…/v8/finance/chart/`): Yahoo's own, or a
+/// stand-in on loopback for the browser tests.
+pub fn ask_span_of(net: &Net, chart: &str, symbol: &str, from: Date, to: Date, now: Timestamp) -> Noted<Chart> {
     let end = to.tomorrow().unwrap_or(to);
     let today = now.to_zoned(TimeZone::UTC).date();
     let mut later = Vec::new();
     if end < today {
-        let url = format!("{CHART}{}?period1={}&period2={}&interval=1mo&events=split", percent_encode(symbol), epoch(end), epoch(today.tomorrow().unwrap_or(today)));
+        let url = format!("{chart}{}?period1={}&period2={}&interval=1mo&events=split", percent_encode(symbol), epoch(end), epoch(today.tomorrow().unwrap_or(today)));
         let noted = ask_url(net, &url, symbol, now);
         match noted.outcome {
             Outcome::Answered(c) => later = c.splits,
@@ -388,7 +394,7 @@ pub fn ask_span(net: &Net, symbol: &str, from: Date, to: Date, now: Timestamp) -
             other => return Noted { outcome: other, shape_change: noted.shape_change },
         }
     }
-    let url = format!("{CHART}{}?period1={}&period2={}&interval=1d&events=div%7Csplit", percent_encode(symbol), epoch(from), epoch(end));
+    let url = format!("{chart}{}?period1={}&period2={}&interval=1d&events=div%7Csplit", percent_encode(symbol), epoch(from), epoch(end));
     ask_url_after(net, &url, symbol, now, &later)
 }
 

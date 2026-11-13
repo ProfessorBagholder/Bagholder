@@ -1,7 +1,7 @@
 // Builds the server and the made-up book, then runs the server on it until told
 // to stop. Started by Playwright (`webServer` in playwright.config.ts).
 import { execFileSync, spawn } from 'node:child_process'
-import { appendFileSync, mkdtempSync, openSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdtempSync, openSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
@@ -57,12 +57,38 @@ if (signedIn) {
   writeFileSync(join(home, 'session.json'), JSON.stringify({ access_token: 'e2e-access', refresh_token: 'e2e-refresh', client_id: 'e2e-client', identity_canonical_id: 'identity-e2e' }))
 }
 
+// the Options card's sources stood in on loopback (`BAGHOLDER_OPTIONS_BASE`), for the
+// server the app's tests drive: Cboe's delayed chain of KO, and of AAPL (KO's with
+// each strike six times over, about the made-up book's AAPL), and Yahoo's daily
+// chart of one KO put, from the server's own made-up captures; Cboe's 403 for any
+// other symbol (it lists no options of it) and Yahoo's 404 for any other contract
+let optionsBase = ''
+if (!signedIn) {
+  const replies = join(rust, 'crates', 'server', 'tests', 'replies', 'options-card')
+  const chain = readFileSync(join(replies, 'chain-KO.json'), 'utf8')
+  const aapl = chain
+    .replace(/"option": "KO(\d?)(\d{6})([CP])(\d{8})"/g, (_, adjusted, day, right, strike) => `"option": "AAPL${adjusted}${day}${right}${String(Number(strike) * 6).padStart(8, '0')}"`)
+    .replaceAll('"symbol": "KO"', '"symbol": "AAPL"')
+  const chains = { KO: chain, AAPL: aapl }
+  const charts = { KO261211P00066000: readFileSync(join(replies, 'chart-KO261211P00066000.json'), 'utf8') }
+  const options = createServer((req, res) => {
+    const path = new URL(req.url ?? '/', 'http://stand-in').pathname
+    const chainOf = /^\/api\/global\/delayed_quotes\/options\/([A-Z.]+)\.json$/.exec(path)?.[1]
+    const chartOf = /^\/v8\/finance\/chart\/([A-Z0-9]+)$/.exec(path)?.[1]
+    const body = chainOf ? chains[chainOf] : chartOf ? charts[chartOf] : undefined
+    res.writeHead(body ? 200 : chainOf ? 403 : 404, { 'content-type': 'application/json' })
+    res.end(body ?? '')
+  })
+  await new Promise((ok) => options.listen(0, '127.0.0.1', ok))
+  optionsBase = `http://127.0.0.1:${options.address().port}`
+}
 const logFd = requestLog ? openSync(requestLog, 'w') : null
 const server = spawn(join(target, 'debug', 'bagholder' + exe), [], {
   stdio: ['inherit', 'inherit', logFd ?? 'inherit'],
   env: {
     ...process.env,
     ...(signedIn ? { BAGHOLDER_WS_BASE: wsBase } : {}),
+    ...(optionsBase ? { BAGHOLDER_OPTIONS_BASE: optionsBase } : {}),
     ...(requestLog ? { BAGHOLDER_LOG_REQUESTS: '1' } : {}),
     BAGHOLDER_HOME: home,
     BAGHOLDER_EXIT_WITH: String(process.pid), // it ends when this script does, however this script ends
