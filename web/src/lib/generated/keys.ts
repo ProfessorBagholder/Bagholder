@@ -92,6 +92,11 @@ export const ROW_KEYS: Record<string, Record<string, string>> = {
   'quote': {
     'accounts': 'id',
   },
+  'options': {
+    'expiries': 'day',
+    'expiries.*.puts.rows': 'occ',
+    'expiries.*.calls.rows': 'occ',
+  },
   'history': {
   },
   'universe': {

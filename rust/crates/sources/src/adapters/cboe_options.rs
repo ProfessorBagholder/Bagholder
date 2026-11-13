@@ -175,7 +175,13 @@ pub enum ChainReply {
 /// Ask for `symbol`'s chain; with `since`, the `Last-Modified` of the chain
 /// held, only if Cboe has a newer one.
 pub fn ask(net: &Net, symbol: &str, since: Option<&str>) -> Noted<ChainReply> {
-    let url = format!("https://{HOST}/api/global/delayed_quotes/options/{symbol}.json");
+    ask_of(net, &format!("https://{HOST}"), symbol, since)
+}
+
+/// `ask`, of the chains at `base` (`https://cdn.cboe.com`): Cboe's own, or a
+/// stand-in on loopback for the browser tests.
+pub fn ask_of(net: &Net, base: &str, symbol: &str, since: Option<&str>) -> Noted<ChainReply> {
+    let url = format!("{base}/api/global/delayed_quotes/options/{symbol}.json");
     let mut headers: Vec<(&str, &str)> = HEADERS.to_vec();
     if let Some(since) = since {
         headers.push(("If-Modified-Since", since));

@@ -165,3 +165,93 @@ export type WatchlistRemove = { id: string, };
 export type TilesSet = { tiles: Array<TileRef>, };
 
 export type TileRef = { symbol: string, exchange: string, };
+
+export type OptionContractQuery = { 
+/**
+ * the contract's OCC symbol, as the card names it
+ */
+occ: string, symbol: string, exchange: string, currency: string, name: string, };
+
+export type OptionRow = { 
+/**
+ * Its OCC symbol, as Cboe states it (`KO261211P00066000`).
+ */
+occ: string, 
+/**
+ * As the card titles it opened (`KO Dec 11 66 put`, `KO Jan 15 '27 66 put`).
+ */
+title: string, strike: Dec, 
+/**
+ * What one contract puts in play: the strike × 100 for a put, 100 × the
+ * listing's current price for a call; none for a call while the listing's
+ * price is not read.
+ */
+cost: Dec | null, 
+/**
+ * The bid × 100; none where Cboe states no bid, or a bid of zero.
+ */
+premium: Dec | null, 
+/**
+ * The Premium over the Cost, in percent, to two decimals.
+ */
+yield: Dec | null, };
+
+export type OptionSide = { rows: Array<OptionRow>, 
+/**
+ * The row whose strike is nearest the listing's current price, which the
+ * card opens in view; none while the price is not read.
+ */
+near: number | null, };
+
+export type OptionExpiry = { 
+/**
+ * Its day, `YYYY-MM-DD`.
+ */
+day: string, 
+/**
+ * As its button says it: `Dec 11`, and `Jan 15 '27` in a later year.
+ */
+label: string, puts: OptionSide, calls: OptionSide, };
+
+export type OptionsAnswer = { ok: true, 
+/**
+ * Nearest first. None for a listing with no options: the page then
+ * shows no card.
+ */
+expiries: Array<OptionExpiry>, } | OkOr;
+
+export type PremiumPoint = { 
+/**
+ * `YYYY-MM-DD`; the last point is today's.
+ */
+day: string, premium: Dec, };
+
+export type PremiumChart = { 
+/**
+ * Oldest first; the last is today's Premium.
+ */
+points: Array<PremiumPoint>, 
+/**
+ * The axis's top, middle and bottom lines, in dollars.
+ */
+top: Dec, middle: Dec, bottom: Dec, 
+/**
+ * The first day, as the axis says it (`Nov 3`).
+ */
+from: string, };
+
+export type OptionContract = { occ: string, 
+/**
+ * `KO Dec 11 66 put`.
+ */
+title: string, cost: Dec | null, premium: Dec | null, 
+/**
+ * None where Yahoo has no bars for it.
+ */
+chart: PremiumChart | null, 
+/**
+ * Why its chart was not read, where it was not.
+ */
+chartFailed: string | null, };
+
+export type OptionContractAnswer = { ok: true, contract: OptionContract, } | OkOr;
