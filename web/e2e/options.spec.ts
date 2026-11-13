@@ -30,7 +30,9 @@ test("a US listing's card: Puts first, its expiries, a row a strike, and a row o
   expect(puts[0][0]).toBe('76')
   expect(puts).toContainEqual(['66', '$6,600', '$24', '0.36%'])
   expect(puts).toContainEqual(['62.50', '$6,250', '$11', '0.18%'])
-  expect(puts.length).toBe(20)
+  // twenty puts listed for Dec 11; the 60, no one bidding on it, is not (markets-125)
+  expect(puts.length).toBe(19)
+  expect(puts.map((r) => r[0])).not.toContain('60')
   // offline, the listing's price is not read: a call has no Cost and no Yield
   await card(page).getByRole('button', { name: 'Calls' }).click()
   expect(await rows(page)).toContainEqual(['66', '—', '$266', '—'])
@@ -74,7 +76,24 @@ test("a holding's card opens at the strike nearest its price, and figures a call
   const calls = await rows(page)
   expect(calls.length).toBeGreaterThan(0)
   for (const r of calls) expect(r[1]).toBe(cost)
+  // the other side, and every other expiry, opens at its strike nearest the price too
+  expect(await nearestShown(page, Number(aapl.last)), 'calls').toBe(true)
+  for (const day of ['Nov 20', 'Dec 11', 'Nov 13']) {
+    await card(page).getByRole('button', { name: day }).click()
+    expect(await nearestShown(page, Number(aapl.last)), day).toBe(true)
+  }
 })
+
+/** Whether the list shows its strike nearest `price`, scrolled into its view. */
+async function nearestShown(page: Page, price: number): Promise<boolean> {
+  const strikes = (await rows(page)).map((r) => Number(r[0]))
+  const nearest = strikes.reduce((a, b) => (Math.abs(b - price) < Math.abs(a - price) ? b : a))
+  return card(page).locator('.scroll').evaluate((e, k) => {
+    const row = [...e.querySelectorAll('.oc-row')].find((r) => Number(r.querySelector('span')?.textContent) === k) as HTMLElement
+    const top = row.offsetTop - (e as HTMLElement).offsetTop
+    return top >= e.scrollTop && top + row.offsetHeight <= e.scrollTop + e.clientHeight
+  }, nearest)
+}
 
 test('no card for a listing with no options, nor for a Canadian one', async ({ page, request }) => {
   const model = await figures(request)
