@@ -446,25 +446,40 @@ fn a_family_s_announcement_is_asked_for_its_funds_together_and_their_pages_read_
     let harvest = payers::adapter_for(&needs[0]).unwrap();
     let next = run::next_asks(&ctx, &needs[0], harvest.as_ref(), declared.get(&needs[0].listing.id), frequencies.get(&needs[0].listing.id)).unwrap();
     assert_eq!(next.into_iter().filter(|w| *w > ctx.now).min(), Some(t("2026-10-23T03:50:00Z")));
-    // the release is out: the next sweep reads each fund's page once, and the
-    // release once between them (its press page never)
+    // the release is out, naming every fund but HHIS (its line renamed here): the
+    // next sweep reads each fund's page once and the release once between them
+    // (its press page never), and TMX's record beside HHIS, which still lists
+    // nothing to pay
+    let release = common::read("harvest", "release-income-shares-2026-10.html").replace("<p>HHIS</p>", "<p>HHIZ</p>").replace("<p>HHIS.U</p>", "<p>HHIZ.U</p>");
     let out = Arc::new(
         common::Recorded::new()
-            .with("https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-october-2026-distributions/", 200, "harvest", "release-income-shares-2026-10.html")
+            .with_text(SHARES_OCT, 200, release)
             .with_text(ETFS_OCT, 404, String::new())
-            .with_prefix("https://harvestportfolios.com/etf/", 200, "harvest", "page-plte.html"),
+            .with_prefix("https://harvestportfolios.com/etf/", 200, "harvest", "page-plte.html")
+            .with_market_record("HHIS"),
     );
     sweep(&out, t("2026-10-23T03:50:00Z"));
     let asked = out.asked.lock().unwrap().clone();
     assert_eq!(asked.iter().filter(|u| u.contains("/etf/")).count(), 10, "{asked:?}");
-    assert_eq!(asked.len(), 12, "{asked:?}");
+    assert_eq!(asked.iter().filter(|u| *u == SHARES_OCT || *u == ETFS_OCT).collect::<Vec<_>>(), [SHARES_OCT, ETFS_OCT], "{asked:?}");
+    assert!(asked.iter().filter(|u| !u.contains("harvestportfolios.com")).all(|u| u.contains("tmx.com")), "{asked:?}");
+    assert!(asked.iter().any(|u| u.contains("tmx.com")), "TMX's record beside HHIS: {asked:?}");
     let declared = book.declared().unwrap();
     for p in &needs {
-        assert_eq!(declared[&p.listing.id].items.iter().map(|r| r.ex_date).max(), Some(date(2026, 10, 30)), "{}", p.listing.symbol);
+        let newest = declared[&p.listing.id].items.iter().map(|r| r.ex_date).max().unwrap();
+        assert_eq!(newest == date(2026, 10, 30), p.listing.symbol != "HHIS", "{} {newest}", p.listing.symbol);
     }
-    // each now lists its October distribution: none is looked for, nothing is asked
-    sweep(&out, t("2026-10-23T04:30:00Z"));
-    assert_eq!(out.asked.lock().unwrap().len(), 12);
+    // HHIS is still looked for: through the next day the release that is out is
+    // never asked again, only the other family's, a quarter of an hour apart
+    let landed = asked.len();
+    let mut at = t("2026-10-23T03:55:00Z");
+    while at <= t("2026-10-24T03:45:00Z") {
+        sweep(&out, at);
+        at = at + bagholder_core::jiff::SignedDuration::from_mins(5);
+    }
+    let after = out.asked.lock().unwrap()[landed..].to_vec();
+    assert!(after.iter().all(|u| u == ETFS_OCT), "{:?}", after.iter().filter(|u| *u != ETFS_OCT).collect::<Vec<_>>());
+    assert_eq!(after.len(), 95);
 }
 
 #[test]
