@@ -78,13 +78,17 @@ impl Ran {
 }
 
 fn run_payer(recorded: common::Recorded, need: &PayerNeed, source: &'static str) -> Ran {
+    run_payer_at(recorded, need, source, AT)
+}
+
+fn run_payer_at(recorded: common::Recorded, need: &PayerNeed, source: &'static str, when: &str) -> Ran {
     let dir = tempfile::tempdir().unwrap();
-    let at = t(AT);
+    let at = t(when);
     let (book, _) = Book::open(&dir.path().join("book.db"), "test", at).unwrap();
     common::instrument_in_book(&dir.path().join("book.db"), id(), "security", need.listing.currency.as_str());
     let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", at).unwrap();
     let recorded = Arc::new(recorded);
-    let net = common::net(&recorded, AT);
+    let net = common::net(&recorded, when);
     let zone = TimeZone::get("America/Toronto").unwrap();
     let ctx = Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone };
     assert_eq!(payers::adapter_for(need).map(|a| a.source().to_string()).as_deref(), Some(source));
@@ -109,12 +113,17 @@ const PRESS_SHARES: &str = "https://harvestportfolios.com/high-income-shares/pre
 const PRESS_ETFS: &str = "https://harvestportfolios.com/press-releases/";
 const SHARES_SEP: &str = "https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-september-2026-distributions/";
 const SHARES_OCT: &str = "https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-october-2026-distributions/";
+const SHARES_NOV: &str = "https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-november-2026-distributions/";
 const ETFS_OCT: &str = "https://harvestportfolios.com/harvest-etfs-announces-october-2026-distributions/";
+const ETFS_NOV: &str = "https://harvestportfolios.com/harvest-etfs-announces-november-2026-distributions/";
+/// The day October's releases were out (9:50 Toronto, 13:50 UTC)
+const OCT_23: &str = "2026-10-23T16:00:00Z";
+/// Before November's releases were out
+const NOV_3: &str = "2026-11-03T16:00:00Z";
 
-/// The High Income Shares' press page as it stood on 2026-09-24 (October's
-/// release came a month later) and the September release it then linked first.
+/// The High Income Shares' September release, out on 2026-09-24.
 fn shares_in_september(r: common::Recorded) -> common::Recorded {
-    r.with_text(PRESS_SHARES, 200, common::harvest_press_before(&["october-2026"])).with(SHARES_SEP, 200, HV, "release-income-shares-2026-09.html")
+    r.with(SHARES_SEP, 200, HV, "release-income-shares-2026-09.html")
 }
 
 fn hhis() -> PayerNeed {
@@ -173,20 +182,46 @@ fn listed(symbol: &str, name: &str) -> PayerNeed {
 #[test]
 fn the_month_s_release_is_the_newest_distribution_before_the_page_lists_it() {
     // 2026-10-23: the October release is out, PLTE's page still ends at
-    // September's $0.45; the release raises it to $0.50
-    let r = common::Recorded::new().with("https://harvestportfolios.com/etf/plte/", 200, HV, "page-plte.html").with(PRESS_SHARES, 200, HV, "press-income-shares.html").with(SHARES_OCT, 200, HV, "release-income-shares-2026-10.html");
-    let ran = run_payer(r, &listed("PLTE", "Harvest Portfolios Group Inc. - Harvest Palantir Enhanced High Income Shares ETF"), HV);
+    // September's $0.45; the release raises it to $0.50. The press page still
+    // links September's first: Harvest links a release hours after it is out
+    // (November's, 2026-11-23), so the month's is asked at its own address
+    let r = common::Recorded::new()
+        .with("https://harvestportfolios.com/etf/plte/", 200, HV, "page-plte.html")
+        .with_text(PRESS_SHARES, 200, common::harvest_press_before(&["october-2026"]))
+        .with(SHARES_OCT, 200, HV, "release-income-shares-2026-10.html");
+    let ran = run_payer_at(r, &listed("PLTE", "Harvest Portfolios Group Inc. - Harvest Palantir Enhanced High Income Shares ETF"), HV, OCT_23);
     assert_eq!(ran.outcome().0, OutcomeKind::Answered);
     let (_, items) = ran.declared().unwrap();
     let newest = items.iter().max_by_key(|r| r.ex_date).unwrap();
     assert_eq!(*newest, stored(date(2026, 10, 30), Some(date(2026, 10, 30)), Some(date(2026, 11, 6)), "0.5000", Currency::CAD, None));
     assert!(ran.asked.iter().any(|u| u == SHARES_OCT), "{:?}", ran.asked);
+    assert!(!ran.asked.iter().any(|u| u == PRESS_SHARES), "{:?}", ran.asked);
+}
+
+#[test]
+fn before_the_month_s_release_is_out_the_newest_its_press_page_links_is_read() {
+    // 2026-11-03: November's release answers 404; the press page's newest is
+    // October's, which raises PLTE's page past September's
+    let r = common::Recorded::new()
+        .with("https://harvestportfolios.com/etf/plte/", 200, HV, "page-plte.html")
+        .with_text(SHARES_NOV, 404, String::new())
+        .with(PRESS_SHARES, 200, HV, "press-income-shares.html")
+        .with(SHARES_OCT, 200, HV, "release-income-shares-2026-10.html");
+    let ran = run_payer_at(r, &listed("PLTE", "Harvest Portfolios Group Inc. - Harvest Palantir Enhanced High Income Shares ETF"), HV, NOV_3);
+    assert_eq!(ran.outcome().0, OutcomeKind::Answered);
+    let (_, items) = ran.declared().unwrap();
+    assert_eq!(items.iter().map(|r| (r.ex_date, r.amount.amount)).max(), Some((date(2026, 10, 30), dec("0.5000"))));
+    assert_eq!(ran.asked.iter().filter(|u| u.contains("-distributions/") || u.ends_with("/press/")).collect::<Vec<_>>(), [SHARES_NOV, PRESS_SHARES, SHARES_OCT]);
 }
 
 #[test]
 fn an_etf_s_release_is_read_from_the_etfs_press_page() {
-    let r = common::Recorded::new().with("https://harvestportfolios.com/etf/hbix/", 200, HV, "page-hbix.html").with(PRESS_ETFS, 200, HV, "press-etfs.html").with(ETFS_OCT, 200, HV, "release-etfs-2026-10.html");
-    let ran = run_payer(r, &listed("HBIX", "Harvest Portfolios Group Inc. - Harvest Bitcoin Enhanced Income ETF"), HV);
+    let r = common::Recorded::new()
+        .with("https://harvestportfolios.com/etf/hbix/", 200, HV, "page-hbix.html")
+        .with_text(ETFS_NOV, 404, String::new())
+        .with(PRESS_ETFS, 200, HV, "press-etfs.html")
+        .with(ETFS_OCT, 200, HV, "release-etfs-2026-10.html");
+    let ran = run_payer_at(r, &listed("HBIX", "Harvest Portfolios Group Inc. - Harvest Bitcoin Enhanced Income ETF"), HV, NOV_3);
     let (_, items) = ran.declared().unwrap();
     let newest = items.iter().max_by_key(|r| r.ex_date).unwrap();
     assert_eq!((newest.ex_date, newest.pay_date, newest.amount.amount), (date(2026, 10, 30), Some(date(2026, 11, 6)), dec("0.1200")));
@@ -196,8 +231,8 @@ fn an_etf_s_release_is_read_from_the_etfs_press_page() {
 fn a_fund_paid_twice_a_month_takes_the_first_distribution_its_own_row_states() {
     // HPYB pays twice a month: the release lists it in its own table, each of
     // the month's two distributions with its days in the row
-    let r = common::Recorded::new().with("https://harvestportfolios.com/etf/hpyb/", 200, HV, "page-hpyb.html").with(PRESS_ETFS, 200, HV, "press-etfs.html").with(ETFS_OCT, 200, HV, "release-etfs-2026-10.html");
-    let ran = run_payer(r, &listed("HPYB", "Harvest Portfolios Group Inc. - Harvest Premium Yield Canadian Bank ETF"), HV);
+    let r = common::Recorded::new().with("https://harvestportfolios.com/etf/hpyb/", 200, HV, "page-hpyb.html").with(ETFS_OCT, 200, HV, "release-etfs-2026-10.html");
+    let ran = run_payer_at(r, &listed("HPYB", "Harvest Portfolios Group Inc. - Harvest Premium Yield Canadian Bank ETF"), HV, OCT_23);
     let (_, items) = ran.declared().unwrap();
     let newest = items.iter().max_by_key(|r| r.ex_date).unwrap();
     assert_eq!((newest.ex_date, newest.pay_date, newest.amount.amount), (date(2026, 10, 30), Some(date(2026, 11, 6)), dec("0.0700")));
