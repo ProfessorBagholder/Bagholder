@@ -121,41 +121,40 @@ fn freq(n: u32) -> StatedFrequency {
 #[test]
 fn a_payer_is_read_when_it_first_appears_and_when_its_next_distribution_is_due() {
     let z = eastern();
-    assert!(run::due(None, None, t("2026-09-24T12:00:00Z"), &z));
-    assert_eq!(run::next_due(None, None, t("2026-09-24T12:00:00Z"), &z), t("2026-09-24T12:00:00Z"));
+    assert!(run::due(None, None, t("2026-09-24T12:00:00Z"), &z, run::LOOKED_FOR_EVERY));
+    assert_eq!(run::next_due(None, None, t("2026-09-24T12:00:00Z"), &z, run::LOOKED_FOR_EVERY), t("2026-09-24T12:00:00Z"));
     // monthly, latest ex 2026-09-15: the next about 2026-10-15, looked for from
     // 2026-10-05, the start of that day in Toronto
     let monthly = read("2026-09-20T12:00:00Z", &[date(2026, 8, 15), date(2026, 9, 15)]);
-    assert!(!run::due(Some(&monthly), Some(&freq(12)), t("2026-10-04T12:00:00Z"), &z));
-    assert_eq!(run::next_due(Some(&monthly), Some(&freq(12)), t("2026-10-04T12:00:00Z"), &z), t("2026-10-05T04:00:00Z"));
-    // then a quarter of an hour after each read, until one lists it
+    assert!(!run::due(Some(&monthly), Some(&freq(12)), t("2026-10-04T12:00:00Z"), &z, run::LOOKED_FOR_EVERY));
+    assert_eq!(run::next_due(Some(&monthly), Some(&freq(12)), t("2026-10-04T12:00:00Z"), &z, run::LOOKED_FOR_EVERY), t("2026-10-05T04:00:00Z"));
+    // then an hour after each read, until one lists it, where its company has no
+    // announcement to ask
     let looked = read("2026-10-08T11:00:00Z", &[date(2026, 9, 15)]);
-    assert!(!run::due(Some(&looked), Some(&freq(12)), t("2026-10-08T11:14:59Z"), &z));
-    assert!(run::due(Some(&looked), Some(&freq(12)), t("2026-10-08T11:15:00Z"), &z));
+    assert!(!run::due(Some(&looked), Some(&freq(12)), t("2026-10-08T11:59:59Z"), &z, run::LOOKED_FOR_EVERY));
+    assert!(run::due(Some(&looked), Some(&freq(12)), t("2026-10-08T12:00:00Z"), &z, run::LOOKED_FOR_EVERY));
     // a distribution declared ahead moves the window with it
     let ahead = read("2026-10-08T11:00:00Z", &[date(2026, 9, 15), date(2026, 10, 15)]);
-    assert!(!run::due(Some(&ahead), Some(&freq(12)), t("2026-10-20T12:00:00Z"), &z));
+    assert!(!run::due(Some(&ahead), Some(&freq(12)), t("2026-10-20T12:00:00Z"), &z, run::LOOKED_FOR_EVERY));
     // no schedule stated: once a week
     let unstated = read("2026-09-20T12:00:00Z", &[]);
-    assert!(!run::due(Some(&unstated), None, t("2026-09-26T12:00:00Z"), &z));
-    assert!(run::due(Some(&unstated), None, t("2026-09-27T12:00:00Z"), &z));
+    assert!(!run::due(Some(&unstated), None, t("2026-09-26T12:00:00Z"), &z, run::LOOKED_FOR_EVERY));
+    assert!(run::due(Some(&unstated), None, t("2026-09-27T12:00:00Z"), &z, run::LOOKED_FOR_EVERY));
     // a record with nothing in it yet: once a day
-    assert_eq!(run::next_due(Some(&unstated), Some(&freq(12)), t("2026-09-20T13:00:00Z"), &z), t("2026-09-21T04:00:00Z"));
+    assert_eq!(run::next_due(Some(&unstated), Some(&freq(12)), t("2026-09-20T13:00:00Z"), &z, run::LOOKED_FOR_EVERY), t("2026-09-21T04:00:00Z"));
 }
 
 #[test]
-fn a_declaration_is_read_within_a_quarter_of_an_hour_of_its_company_publishing_it() {
+fn a_payer_is_looked_for_from_ten_days_before_its_next_is_due_at_most_half_a_period() {
     let z = eastern();
     // Harvest's releases of 2026 came out seven days before their ex-dates,
-    // February's on 2026-02-20 at 15:44 UTC, 21 days after January's ex-date:
-    // that day is looked on, and the read after it is due by 15:59
-    let january = read("2026-02-20T15:40:00Z", &[date(2025, 12, 31), date(2026, 1, 30)]);
-    assert!(run::due(Some(&january), Some(&freq(12)), t("2026-02-20T15:59:00Z"), &z));
-    assert_eq!(run::next_due(Some(&read("2026-02-18T12:00:00Z", &[date(2026, 1, 30)])), Some(&freq(12)), t("2026-02-18T12:00:00Z"), &z), t("2026-02-19T05:00:00Z"));
+    // February's on 2026-02-20, 21 days after January's ex-date of the 30th:
+    // looked for from 2026-02-19
+    assert_eq!(run::next_due(Some(&read("2026-02-18T12:00:00Z", &[date(2026, 1, 30)])), Some(&freq(12)), t("2026-02-18T12:00:00Z"), &z, run::LOOKED_FOR_EVERY), t("2026-02-19T05:00:00Z"));
     // a weekly payer is looked for from half a week before its next, never all week
     let weekly = read("2026-11-18T20:00:00Z", &[date(2026, 11, 11), date(2026, 11, 18)]);
-    assert!(!run::due(Some(&weekly), Some(&freq(52)), t("2026-11-21T12:00:00Z"), &z));
-    assert_eq!(run::next_due(Some(&weekly), Some(&freq(52)), t("2026-11-21T12:00:00Z"), &z), t("2026-11-22T05:00:00Z"));
+    assert!(!run::due(Some(&weekly), Some(&freq(52)), t("2026-11-21T12:00:00Z"), &z, run::LOOKED_FOR_EVERY));
+    assert_eq!(run::next_due(Some(&weekly), Some(&freq(52)), t("2026-11-21T12:00:00Z"), &z, run::LOOKED_FOR_EVERY), t("2026-11-22T05:00:00Z"));
 }
 
 const TMX: &str = "https://app-money.tmx.com/graphql";
@@ -306,29 +305,29 @@ fn the_markets_record_is_read_beside_a_companys_only_while_the_companys_lists_no
     let now = t("2026-09-26T16:00:00Z");
     // the company's record lists the distribution still to be paid: nothing beside it is read
     let listed = paid_on("2026-09-26T04:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4)), (date(2026, 9, 29), date(2026, 10, 6))]);
-    assert!(!run::market_due(&listed, Some(&freq(12)), now, &z));
-    assert_eq!(run::market_next_due(&listed, Some(&freq(12)), now, &z), None);
+    assert!(!run::market_due(&listed, Some(&freq(12)), now, &z, run::LOOKED_FOR_EVERY));
+    assert_eq!(run::market_next_due(&listed, Some(&freq(12)), now, &z, run::LOOKED_FOR_EVERY), None);
     // its latest was paid: the market's record, never read, is read now
     let mut paid = paid_on("2026-09-26T04:00:00Z", &[(date(2026, 7, 31), date(2026, 8, 6)), (date(2026, 8, 31), date(2026, 9, 4))]);
-    assert!(run::market_due(&paid, Some(&freq(12)), now, &z));
+    assert!(run::market_due(&paid, Some(&freq(12)), now, &z, run::LOOKED_FOR_EVERY));
     // the market's record lists the next after the company's latest: not read again until it is paid
     paid.market = Some(market_read("2026-09-26T05:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4)), (date(2026, 9, 29), date(2026, 10, 6))]));
-    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), now, &z), None);
+    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), now, &z, run::LOOKED_FOR_EVERY), None);
     // the market's record lists nothing after the company's latest either: read
-    // again every quarter of an hour while the next is looked for by the stated
+    // again every hour while the next is looked for by the stated
     // schedule (latest ex 2026-08-31, monthly: due about 2026-09-30, looked for
     // from 2026-09-20)
     paid.market = Some(market_read("2026-09-26T15:50:00Z", &[(date(2026, 8, 31), date(2026, 9, 4))]));
-    assert!(!run::market_due(&paid, Some(&freq(12)), now, &z), "read ten minutes ago");
-    assert!(run::market_due(&paid, Some(&freq(12)), t("2026-09-26T16:05:00Z"), &z));
-    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), now, &z), Some(t("2026-09-26T16:05:00Z")));
+    assert!(!run::market_due(&paid, Some(&freq(12)), now, &z, run::LOOKED_FOR_EVERY), "read ten minutes ago");
+    assert!(run::market_due(&paid, Some(&freq(12)), t("2026-09-26T16:50:00Z"), &z, run::LOOKED_FOR_EVERY));
+    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), now, &z, run::LOOKED_FOR_EVERY), Some(t("2026-09-26T16:50:00Z")));
     // before the window opens, not before it
     let early = t("2026-09-10T16:00:00Z");
     paid.market = Some(market_read("2026-09-08T05:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4))]));
-    assert!(!run::market_due(&paid, Some(&freq(12)), early, &z));
-    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), early, &z), Some(t("2026-09-20T04:00:00Z")));
+    assert!(!run::market_due(&paid, Some(&freq(12)), early, &z, run::LOOKED_FOR_EVERY));
+    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), early, &z, run::LOOKED_FOR_EVERY), Some(t("2026-09-20T04:00:00Z")));
     // no schedule stated: once a week
-    assert_eq!(run::market_next_due(&paid, None, early, &z), Some(t("2026-09-15T05:00:00Z")));
+    assert_eq!(run::market_next_due(&paid, None, early, &z, run::LOOKED_FOR_EVERY), Some(t("2026-09-15T05:00:00Z")));
 }
 
 #[test]
@@ -347,6 +346,7 @@ fn a_companys_record_listing_nothing_to_pay_has_the_exchanges_record_read_beside
             .with_text("https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-september-2026-distributions/", 404, String::new())
             .with_text("https://harvestportfolios.com/high-income-shares/press/", 200, common::harvest_press_before(&["october-2026", "september-2026"]))
             .with("https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-august-2026-distributions/", 200, "harvest", "release-income-shares-2026-08.html")
+            .with_text("https://harvestportfolios.com/harvest-etfs-announces-september-2026-distributions/", 404, String::new())
             .with_market_record("RDDY"));
     let net = common::net(&recorded, "2026-09-26T16:00:00Z");
     let zone = eastern();
@@ -362,10 +362,11 @@ fn a_companys_record_listing_nothing_to_pay_has_the_exchanges_record_read_beside
     assert_eq!(beside.source.as_str(), "tmx");
     let next = beside.items.iter().find(|r| r.ex_date == date(2026, 9, 29)).expect("the declared distribution");
     assert_eq!((next.pay_date, next.amount.amount), (Some(date(2026, 10, 6)), dec("0.15")));
-    // the same moment again: neither record is due
+    // the same moment again: neither record is due, and RDDY's next is looked
+    // for, so its family's announcements are asked, neither out
     let asked = recorded.asked.lock().unwrap().len();
     run::read(&ctx, &needs).unwrap();
-    assert_eq!(recorded.asked.lock().unwrap().len(), asked);
+    assert_eq!(recorded.asked.lock().unwrap()[asked..], ["https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-september-2026-distributions/", "https://harvestportfolios.com/harvest-etfs-announces-september-2026-distributions/"]);
 }
 
 #[test]
@@ -400,6 +401,70 @@ fn the_exchanges_record_beside_passes_over_rows_of_no_cash_and_rests_apart_from_
     assert_eq!(beside.items.iter().filter(|r| r.ex_date == date(2025, 12, 30)).count(), 1);
     let tmx = cache.outcomes(&SourceName::named("tmx")).unwrap();
     assert!(tmx.iter().any(|o| o.kind == DataKind::Distributions && o.outcome == OutcomeKind::Answered), "{tmx:?}");
+}
+
+#[test]
+fn a_family_s_announcement_is_asked_for_its_funds_together_and_their_pages_read_once_it_is_out() {
+    // ten High Income Shares funds, each paid its September distribution (ex
+    // 2026-09-29) and looked for its October one from 2026-10-19, last read at
+    // the start of 2026-10-22; through that day October's releases are not out
+    const SHARES_OCT: &str = "https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-october-2026-distributions/";
+    const ETFS_OCT: &str = "https://harvestportfolios.com/harvest-etfs-announces-october-2026-distributions/";
+    let tickers = ["HHIS", "PLTE", "RDDY", "AMDY", "CONY", "MSTE", "NVHE", "TSLY", "METE", "SPXE"];
+    let dir = tempfile::tempdir().unwrap();
+    let read_at = t("2026-10-22T04:00:00Z");
+    let (book, _) = Book::open(&dir.path().join("book.db"), "test", read_at).unwrap();
+    let (cache, _) = MarketCache::open(&dir.path().join("market.db"), "test", read_at).unwrap();
+    let september = [DeclaredRow { form: bagholder_core::distribution::Form::Stated, ex_date: date(2026, 9, 29), record_date: Some(date(2026, 9, 29)), pay_date: Some(date(2026, 10, 6)), amount: Money::new(dec("0.45"), Currency::CAD), reinvested: None }];
+    let needs: Vec<PayerNeed> = (1..).zip(tickers).map(|(n, s)| payer(n, s, "XTSE", Currency::CAD, &format!("Harvest Portfolios Group Inc. - Harvest {s} Enhanced High Income Shares ETF"))).collect();
+    for p in &needs {
+        common::instrument_in_book(&dir.path().join("book.db"), p.listing.id, "security", "CAD");
+        book.store_declared(p.listing.id, &september, &SourceName::named("harvest"), read_at).unwrap();
+        book.store_frequency(p.listing.id, 12, &SourceName::named("harvest"), None, read_at).unwrap();
+        book.store_market_declared(p.listing.id, &september, &SourceName::named("tmx"), read_at).unwrap();
+    }
+    let zone = eastern();
+    let sweep = |recorded: &Arc<common::Recorded>, at: Timestamp| {
+        let net = common::net(recorded, &at.to_string());
+        run::read(&Ctx { book: &book, cache: &cache, net: &net, now: at, bank: &zone }, &needs).unwrap();
+    };
+    let quiet = Arc::new(common::Recorded::new().with_text(SHARES_OCT, 404, String::new()).with_text(ETFS_OCT, 404, String::new()));
+    // a sweep every five minutes to 03:45 the next morning: each family's address
+    // a quarter of an hour apart, for all ten funds together, and no fund's page
+    let mut at = t("2026-10-22T04:05:00Z");
+    while at <= t("2026-10-23T03:45:00Z") {
+        sweep(&quiet, at);
+        at = at + bagholder_core::jiff::SignedDuration::from_mins(5);
+    }
+    let asked = quiet.asked.lock().unwrap().clone();
+    assert_eq!(asked.len(), 2 * 95, "{:?}", &asked[..asked.len().min(12)]);
+    assert!(asked.chunks(2).all(|two| two == [SHARES_OCT, ETFS_OCT]), "{asked:?}");
+    // and the app wakes for the next ask
+    let net = common::net(&quiet, "2026-10-23T03:40:00Z");
+    let ctx = Ctx { book: &book, cache: &cache, net: &net, now: t("2026-10-23T03:40:00Z"), bank: &zone };
+    let (declared, frequencies) = (book.declared().unwrap(), book.frequencies().unwrap());
+    let harvest = payers::adapter_for(&needs[0]).unwrap();
+    let next = run::next_asks(&ctx, &needs[0], harvest.as_ref(), declared.get(&needs[0].listing.id), frequencies.get(&needs[0].listing.id)).unwrap();
+    assert_eq!(next.into_iter().filter(|w| *w > ctx.now).min(), Some(t("2026-10-23T03:50:00Z")));
+    // the release is out: the next sweep reads each fund's page once, and the
+    // release once between them (its press page never)
+    let out = Arc::new(
+        common::Recorded::new()
+            .with("https://harvestportfolios.com/harvest-high-income-shares-etfs-announces-october-2026-distributions/", 200, "harvest", "release-income-shares-2026-10.html")
+            .with_text(ETFS_OCT, 404, String::new())
+            .with_prefix("https://harvestportfolios.com/etf/", 200, "harvest", "page-plte.html"),
+    );
+    sweep(&out, t("2026-10-23T03:50:00Z"));
+    let asked = out.asked.lock().unwrap().clone();
+    assert_eq!(asked.iter().filter(|u| u.contains("/etf/")).count(), 10, "{asked:?}");
+    assert_eq!(asked.len(), 12, "{asked:?}");
+    let declared = book.declared().unwrap();
+    for p in &needs {
+        assert_eq!(declared[&p.listing.id].items.iter().map(|r| r.ex_date).max(), Some(date(2026, 10, 30)), "{}", p.listing.symbol);
+    }
+    // each now lists its October distribution: none is looked for, nothing is asked
+    sweep(&out, t("2026-10-23T04:30:00Z"));
+    assert_eq!(out.asked.lock().unwrap().len(), 12);
 }
 
 #[test]

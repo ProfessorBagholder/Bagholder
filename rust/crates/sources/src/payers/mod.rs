@@ -112,6 +112,19 @@ pub trait Payer: Send + Sync {
         need.listing.market().is_some_and(|m| self.markets().contains(&m)) && self.brands().iter().any(|b| name.contains(b))
     }
     fn read(&self, net: &Net, need: &PayerNeed, now: Timestamp) -> Noted<Record>;
+    /// The addresses this company announces a family's distributions at for the
+    /// period `now` falls in, where it has such: each answers 404 until that
+    /// declaration is out. While a payer of the family is looked for, these are
+    /// asked in place of its record (`run`): one small request a quarter hour
+    /// for a family, however many of its funds are held, and each fund's page
+    /// once the announcement is out.
+    fn announcements(&self, _need: &PayerNeed, _now: Timestamp) -> Vec<String> {
+        Vec::new()
+    }
+    /// Whether an address [`Payer::announcements`] named is out.
+    fn announced(&self, _net: &Net, _url: &str) -> crate::outcome::Outcome<bool> {
+        crate::outcome::Outcome::Answered(false)
+    }
 }
 
 /// Canadian listings, on any Canadian venue.
