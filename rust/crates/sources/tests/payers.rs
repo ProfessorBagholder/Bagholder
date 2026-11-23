@@ -122,13 +122,16 @@ fn freq(n: u32) -> StatedFrequency {
 fn a_payer_is_read_when_it_first_appears_and_when_its_next_distribution_is_due() {
     let z = eastern();
     assert!(run::due(None, None, t("2026-09-24T12:00:00Z"), &z));
-    // monthly, latest ex 2026-09-15: the next about 2026-10-15, looked for from 2026-10-08
+    assert_eq!(run::next_due(None, None, t("2026-09-24T12:00:00Z"), &z), t("2026-09-24T12:00:00Z"));
+    // monthly, latest ex 2026-09-15: the next about 2026-10-15, looked for from
+    // 2026-10-05, the start of that day in Toronto
     let monthly = read("2026-09-20T12:00:00Z", &[date(2026, 8, 15), date(2026, 9, 15)]);
-    assert!(!run::due(Some(&monthly), Some(&freq(12)), t("2026-10-07T12:00:00Z"), &z));
-    assert!(run::due(Some(&monthly), Some(&freq(12)), t("2026-10-08T12:00:00Z"), &z));
-    // read today already: not again today
-    let today = read("2026-10-08T11:00:00Z", &[date(2026, 9, 15)]);
-    assert!(!run::due(Some(&today), Some(&freq(12)), t("2026-10-08T20:00:00Z"), &z));
+    assert!(!run::due(Some(&monthly), Some(&freq(12)), t("2026-10-04T12:00:00Z"), &z));
+    assert_eq!(run::next_due(Some(&monthly), Some(&freq(12)), t("2026-10-04T12:00:00Z"), &z), t("2026-10-05T04:00:00Z"));
+    // then a quarter of an hour after each read, until one lists it
+    let looked = read("2026-10-08T11:00:00Z", &[date(2026, 9, 15)]);
+    assert!(!run::due(Some(&looked), Some(&freq(12)), t("2026-10-08T11:14:59Z"), &z));
+    assert!(run::due(Some(&looked), Some(&freq(12)), t("2026-10-08T11:15:00Z"), &z));
     // a distribution declared ahead moves the window with it
     let ahead = read("2026-10-08T11:00:00Z", &[date(2026, 9, 15), date(2026, 10, 15)]);
     assert!(!run::due(Some(&ahead), Some(&freq(12)), t("2026-10-20T12:00:00Z"), &z));
@@ -136,6 +139,23 @@ fn a_payer_is_read_when_it_first_appears_and_when_its_next_distribution_is_due()
     let unstated = read("2026-09-20T12:00:00Z", &[]);
     assert!(!run::due(Some(&unstated), None, t("2026-09-26T12:00:00Z"), &z));
     assert!(run::due(Some(&unstated), None, t("2026-09-27T12:00:00Z"), &z));
+    // a record with nothing in it yet: once a day
+    assert_eq!(run::next_due(Some(&unstated), Some(&freq(12)), t("2026-09-20T13:00:00Z"), &z), t("2026-09-21T04:00:00Z"));
+}
+
+#[test]
+fn a_declaration_is_read_within_a_quarter_of_an_hour_of_its_company_publishing_it() {
+    let z = eastern();
+    // Harvest's releases of 2026 came out seven days before their ex-dates,
+    // February's on 2026-02-20 at 15:44 UTC, 21 days after January's ex-date:
+    // that day is looked on, and the read after it is due by 15:59
+    let january = read("2026-02-20T15:40:00Z", &[date(2025, 12, 31), date(2026, 1, 30)]);
+    assert!(run::due(Some(&january), Some(&freq(12)), t("2026-02-20T15:59:00Z"), &z));
+    assert_eq!(run::next_due(Some(&read("2026-02-18T12:00:00Z", &[date(2026, 1, 30)])), Some(&freq(12)), t("2026-02-18T12:00:00Z"), &z), t("2026-02-19T05:00:00Z"));
+    // a weekly payer is looked for from half a week before its next, never all week
+    let weekly = read("2026-11-18T20:00:00Z", &[date(2026, 11, 11), date(2026, 11, 18)]);
+    assert!(!run::due(Some(&weekly), Some(&freq(52)), t("2026-11-21T12:00:00Z"), &z));
+    assert_eq!(run::next_due(Some(&weekly), Some(&freq(52)), t("2026-11-21T12:00:00Z"), &z), t("2026-11-22T05:00:00Z"));
 }
 
 const TMX: &str = "https://app-money.tmx.com/graphql";
@@ -263,33 +283,6 @@ fn a_cash_row_and_a_units_row_for_one_ex_date_are_one_distribution() {
     assert!(payers::checked(Record { form: bagholder_core::distribution::Form::Stated, rows: vec![cash, other], per_year: Some(4), by_record: vec![] }, t("2026-10-01T00:00:00Z")).unwrap_err().contains("two different"));
 }
 
-#[test]
-fn a_payer_is_next_due_at_the_first_instant_its_rule_holds() {
-    // every kind of record, in every zone: the instant `next_due` names is the
-    // first at which `due` holds, the second before it not
-    let reads = [
-        read("2026-09-20T12:00:00Z", &[]),
-        read("2026-09-20T12:00:00Z", &[date(2026, 9, 15)]),
-        read("2026-10-08T11:00:00Z", &[date(2026, 9, 15), date(2026, 10, 15)]),
-    ];
-    let schedules = [None, Some(freq(12)), Some(freq(4)), Some(freq(52)), Some(freq(1))];
-    let db = bagholder_core::jiff::tz::TimeZoneDatabase::bundled();
-    let now = t("2026-09-21T00:00:00Z");
-    for name in db.available() {
-        let z = db.get(name.as_str()).unwrap();
-        for r in &reads {
-            for f in &schedules {
-                let at = run::next_due(Some(r), f.as_ref(), now, &z);
-                assert!(run::due(Some(r), f.as_ref(), at, &z), "{} {:?} {:?}: due at {at}", name.as_str(), r.read_at, f.as_ref().map(|f| f.per_year));
-                let before = at - bagholder_core::jiff::SignedDuration::from_secs(1);
-                assert!(!run::due(Some(r), f.as_ref(), before, &z), "{} {:?} {:?}: already due at {before}", name.as_str(), r.read_at, f.as_ref().map(|f| f.per_year));
-            }
-        }
-    }
-    // never read: due now
-    assert_eq!(run::next_due(None, None, now, &eastern()), now);
-}
-
 fn market_read(at: &str, items: &[(Date, Date)]) -> bagholder_book::facts::MarketReadRow {
     bagholder_book::facts::MarketReadRow {
         read_at: t(at),
@@ -322,17 +315,18 @@ fn the_markets_record_is_read_beside_a_companys_only_while_the_companys_lists_no
     paid.market = Some(market_read("2026-09-26T05:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4)), (date(2026, 9, 29), date(2026, 10, 6))]));
     assert_eq!(run::market_next_due(&paid, Some(&freq(12)), now, &z), None);
     // the market's record lists nothing after the company's latest either: read
-    // again once a day from a week before the next is due by the stated schedule
-    // (latest ex 2026-08-31, monthly: due about 2026-09-30, looked for from 2026-09-23)
-    paid.market = Some(market_read("2026-09-26T05:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4))]));
-    assert!(!run::market_due(&paid, Some(&freq(12)), now, &z), "read today already");
-    assert!(run::market_due(&paid, Some(&freq(12)), t("2026-09-27T16:00:00Z"), &z));
-    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), now, &z), Some(t("2026-09-27T04:00:00Z")));
+    // again every quarter of an hour while the next is looked for by the stated
+    // schedule (latest ex 2026-08-31, monthly: due about 2026-09-30, looked for
+    // from 2026-09-20)
+    paid.market = Some(market_read("2026-09-26T15:50:00Z", &[(date(2026, 8, 31), date(2026, 9, 4))]));
+    assert!(!run::market_due(&paid, Some(&freq(12)), now, &z), "read ten minutes ago");
+    assert!(run::market_due(&paid, Some(&freq(12)), t("2026-09-26T16:05:00Z"), &z));
+    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), now, &z), Some(t("2026-09-26T16:05:00Z")));
     // before the window opens, not before it
     let early = t("2026-09-10T16:00:00Z");
     paid.market = Some(market_read("2026-09-08T05:00:00Z", &[(date(2026, 8, 31), date(2026, 9, 4))]));
     assert!(!run::market_due(&paid, Some(&freq(12)), early, &z));
-    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), early, &z), Some(t("2026-09-23T04:00:00Z")));
+    assert_eq!(run::market_next_due(&paid, Some(&freq(12)), early, &z), Some(t("2026-09-20T04:00:00Z")));
     // no schedule stated: once a week
     assert_eq!(run::market_next_due(&paid, None, early, &z), Some(t("2026-09-15T05:00:00Z")));
 }

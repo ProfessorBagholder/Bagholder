@@ -3,19 +3,24 @@
 //!
 //! A payer's record changes only when it declares, and it declares on its own
 //! schedule. So a payer is read when it first appears, and then when its next
-//! distribution is due by the schedule it states: from a week before the day one
-//! period after its latest ex-date (declarations come about a week ahead), once a
-//! day, until a read shows a distribution from that window on. A payer whose
-//! schedule no source states is read once a week: there is nothing else to go by.
+//! distribution can be declared by the schedule it states: from ten days before
+//! the day one period after its latest ex-date (at most half a period), every
+//! fifteen minutes, until a read shows a distribution from that window on. A
+//! declaration then reaches the app within a quarter of an hour of its company
+//! publishing it, not the next day (the owner, 2026-11-23: "If I'm expecting that
+//! the information should be in Bagholder because I got an email from Harvest
+//! about it and I have to wait for the next day that is not acceptable"). A payer
+//! whose schedule no source states is read once a week: there is nothing else to
+//! go by.
 //!
 //! A company lists a declaration on its own publication days after the exchange
 //! lists it (Harvest and Ninepoint, observed 2026-09-26: TMX listed the
 //! September distributions declared 2026-09-23 while the
 //! companies' pages did not). So while a Canadian payer's company record lists
 //! nothing still to be paid, the exchange's record (TMX) is read beside it for
-//! the next distribution (`SPEC.md` §5, Ex-Div): at once, then a day from a week
-//! before the next is due until TMX lists it. The rate and schedule stay the
-//! company's.
+//! the next distribution (`SPEC.md` §5, Ex-Div): at once, then every fifteen
+//! minutes while the next is looked for, until TMX lists it. The rate and
+//! schedule stay the company's.
 
 use std::collections::BTreeMap;
 
@@ -32,39 +37,38 @@ use crate::outcome::{Outcome, OutcomeKind};
 use crate::payers::{adapter_for, checked, companies, market_record_for, Payer, Record};
 use crate::read::{Ctx, Result};
 
+/// How often a payer is read while its next distribution can be declared and
+/// is not listed yet, and the market's record beside it.
+pub const LOOKED_FOR_EVERY: SignedDuration = SignedDuration::from_mins(15);
+
+/// How many days before one period after a payer's latest ex-date its next is
+/// looked for. Declarations come a week ahead, and an ex-date up to three days
+/// short of a period after the last: Harvest's releases of 2026 each came out
+/// seven days before the ex-date, and February's on the 20th, 21 days after
+/// January's ex-date of the 30th (May's on the 22nd, 22 days after April's 30th).
+const LOOKED_FOR_DAYS: i64 = 10;
+
 /// Whether a payer is due, from what the book holds of it.
 pub fn due(read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone) -> bool {
-    let Some(read) = read else { return true };
-    let today = now.to_zoned(zone.clone()).date();
-    let read_on = read.read_at.to_zoned(zone.clone()).date();
-    let Some(per_year) = frequency.map(|f| f.per_year).filter(|n| *n > 0) else {
-        return now.duration_since(read.read_at) >= SignedDuration::from_hours(24 * 7);
-    };
-    let Some(latest) = read.items.iter().map(|d| d.ex_date).max() else {
-        // a record with nothing in it yet: a new fund before its first
-        return read_on < today;
-    };
-    let period = SignedDuration::from_hours(24 * i64::from((365 / per_year).max(7)));
-    let window = latest.checked_add(period).and_then(|d| d.checked_sub(SignedDuration::from_hours(24 * 7))).unwrap_or(Date::MAX);
-    today >= window && read_on < today
+    next_due(read, frequency, now, zone) <= now
 }
 
-/// The first instant at which [`due`] holds for this payer: now, for one never
-/// read; a week after its last read, where no source states its schedule; else
-/// the start of the day its window opens in `zone`, or of the next day where it
-/// was read today.
+/// The first instant a payer is due: now, for one never read; a week after its
+/// last read, where no source states its schedule; the start of the next day in
+/// `zone`, for a record with nothing in it yet; else the start of the day its
+/// next distribution is looked for from, and then a quarter of an hour after
+/// each read.
 pub fn next_due(read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone) -> Timestamp {
     let Some(read) = read else { return now };
     let start = |d: Date| d.to_zoned(zone.clone()).map(|z| z.timestamp()).unwrap_or(Timestamp::MAX);
-    let read_on = read.read_at.to_zoned(zone.clone()).date();
-    let day_after_read = read_on.tomorrow().map(start).unwrap_or(Timestamp::MAX);
     let Some(per_year) = frequency.map(|f| f.per_year).filter(|n| *n > 0) else {
         return read.read_at.checked_add(SignedDuration::from_hours(24 * 7)).unwrap_or(Timestamp::MAX);
     };
-    let Some(latest) = read.items.iter().map(|d| d.ex_date).max() else { return day_after_read };
-    let period = SignedDuration::from_hours(24 * i64::from((365 / per_year).max(7)));
-    let window = latest.checked_add(period).and_then(|d| d.checked_sub(SignedDuration::from_hours(24 * 7))).map(start).unwrap_or(Timestamp::MAX);
-    window.max(day_after_read)
+    let Some(window) = window_opens(&read.items, per_year) else {
+        // a record with nothing in it yet: a new fund before its first
+        return read.read_at.to_zoned(zone.clone()).date().tomorrow().map(start).unwrap_or(Timestamp::MAX);
+    };
+    start(window).max(read.read_at.checked_add(LOOKED_FOR_EVERY).unwrap_or(Timestamp::MAX))
 }
 
 /// Whether a record lists a distribution paying cash still to be paid on or
@@ -73,20 +77,21 @@ fn lists_one_to_pay(items: &[DeclaredRow], today: Date) -> bool {
     items.iter().any(|d| d.amount.amount.is_positive() && d.pay_date.unwrap_or(d.ex_date) >= today)
 }
 
-/// The day a payer's next distribution is due by its stated schedule, less the
-/// week declarations come ahead: none where its record lists nothing yet.
+/// The day a payer's next distribution is looked for from: the day it is due by
+/// its stated schedule, less [`LOOKED_FOR_DAYS`] or half a period, whichever is
+/// less; none where its record lists nothing yet.
 fn window_opens(items: &[DeclaredRow], per_year: u32) -> Option<Date> {
     let latest = items.iter().map(|d| d.ex_date).max()?;
-    let period = SignedDuration::from_hours(24 * i64::from((365 / per_year).max(7)));
-    Some(latest.checked_add(period).and_then(|d| d.checked_sub(SignedDuration::from_hours(24 * 7))).unwrap_or(Date::MAX))
+    let period = i64::from((365 / per_year).max(7));
+    Some(latest.checked_add(SignedDuration::from_hours(24 * (period - LOOKED_FOR_DAYS.min(period / 2)))).unwrap_or(Date::MAX))
 }
 
 /// Whether the market's record beside a company's is due (`SPEC.md` §5,
 /// Cashflow Positions, Ex-Div): the company's record lists nothing still to be
 /// paid, and the market's has not been read, or lists nothing after the
-/// company's latest still to be paid and was last read before today, with the
-/// payer's next distribution due within a week by its stated schedule (a week
-/// after its last read where no source states one).
+/// company's latest still to be paid and was read a quarter of an hour ago or
+/// more, with the payer's next distribution looked for by its stated schedule
+/// (a week after its last read where no source states one).
 pub fn market_due(read: &DeclaredReadRow, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone) -> bool {
     market_next_due(read, frequency, now, zone).is_some_and(|at| at <= now)
 }
@@ -106,10 +111,10 @@ pub fn market_next_due(read: &DeclaredReadRow, frequency: Option<&StatedFrequenc
         return None;
     }
     let start = |d: Date| d.to_zoned(zone.clone()).map(|z| z.timestamp()).unwrap_or(Timestamp::MAX);
-    let day_after_read = market.read_at.to_zoned(zone.clone()).date().tomorrow().map(start).unwrap_or(Timestamp::MAX);
+    let again = market.read_at.checked_add(LOOKED_FOR_EVERY).unwrap_or(Timestamp::MAX);
     match frequency.map(|f| f.per_year).filter(|n| *n > 0) {
         None => Some(market.read_at.checked_add(SignedDuration::from_hours(24 * 7)).unwrap_or(Timestamp::MAX)),
-        Some(n) => Some(window_opens(&read.items, n).map(start).unwrap_or(now).max(day_after_read)),
+        Some(n) => Some(window_opens(&read.items, n).map(start).unwrap_or(now).max(again)),
     }
 }
 
