@@ -10,7 +10,8 @@
 //! - the day turning in the person's zone, and the Bank of Canada's 16:30
 //!   Eastern on a weekday, when a day's rate is published;
 //! - each market's close settling, for the closes and benchmarks needed;
-//! - each payer's next distribution window (`payers::run::next_due`);
+//! - each payer's next distribution window, and its family's announcements while
+//!   that is looked for (`payers::run::next_asks`);
 //! - a failed read's source rest ending;
 //! - a minute, for the quotes of what is held and of what the person follows (the
 //!   watchlist, the tiles), while the app runs, page or none (the owner,
@@ -330,12 +331,8 @@ fn next_due(ctx: &Ctx, needs: &Needs, zone: &TimeZone, quoting: bool, quiet_unti
     let frequencies = ctx.book.frequencies().map_err(|e| e.to_string())?;
     for p in &needs.payers {
         if let Some(adapter) = payers::adapter_for(p) {
-            let (read, frequency) = (declared.get(&p.listing.id), frequencies.get(&p.listing.id));
-            at.push(payers::run::next_due(read, frequency, now, bank));
-            // the market's record beside a company's, read for the next distribution
-            if let Some(read) = read.filter(|r| r.source == adapter.source() && payers::run::beside_record_for(p, adapter.as_ref()).is_some()) {
-                at.extend(payers::run::market_next_due(read, frequency, now, bank));
-            }
+            // its record, the market's record beside a company's, and its family's announcements
+            at.extend(payers::run::next_asks(ctx, p, adapter.as_ref(), declared.get(&p.listing.id), frequencies.get(&p.listing.id)).map_err(|e| e.to_string())?);
         }
     }
     if quoting {

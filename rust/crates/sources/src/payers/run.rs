@@ -3,19 +3,27 @@
 //!
 //! A payer's record changes only when it declares, and it declares on its own
 //! schedule. So a payer is read when it first appears, and then when its next
-//! distribution is due by the schedule it states: from a week before the day one
-//! period after its latest ex-date (declarations come about a week ahead), once a
-//! day, until a read shows a distribution from that window on. A payer whose
-//! schedule no source states is read once a week: there is nothing else to go by.
+//! distribution can be declared by the schedule it states: from ten days before
+//! the day one period after its latest ex-date (at most half a period), until a
+//! read shows a distribution from that window on (the owner, 2026-11-23: "If I'm
+//! expecting that the information should be in Bagholder because I got an email
+//! from Harvest about it and I have to wait for the next day that is not
+//! acceptable"). The unit is the family, not the fund: one release announces a
+//! family's distributions. So where a company announces them at one address of
+//! its own (Harvest's month's release), that address is asked every quarter of an
+//! hour for all the family's funds together, each fund's record is read once it
+//! is out, and once a day all the same; any other payer is read every hour. A
+//! payer whose schedule no source states is read once a week: there is nothing
+//! else to go by.
 //!
 //! A company lists a declaration on its own publication days after the exchange
 //! lists it (Harvest and Ninepoint, observed 2026-09-26: TMX listed the
 //! September distributions declared 2026-09-23 while the
 //! companies' pages did not). So while a Canadian payer's company record lists
 //! nothing still to be paid, the exchange's record (TMX) is read beside it for
-//! the next distribution (`SPEC.md` §5, Ex-Div): at once, then a day from a week
-//! before the next is due until TMX lists it. The rate and schedule stay the
-//! company's.
+//! the next distribution (`SPEC.md` §5, Ex-Div): at once, then on its payer's
+//! pace while the next is looked for, and at once when its family's announcement
+//! is out, until TMX lists it. The rate and schedule stay the company's.
 
 use std::collections::BTreeMap;
 
@@ -32,39 +40,121 @@ use crate::outcome::{Outcome, OutcomeKind};
 use crate::payers::{adapter_for, checked, companies, market_record_for, Payer, Record};
 use crate::read::{Ctx, Result};
 
-/// Whether a payer is due, from what the book holds of it.
-pub fn due(read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone) -> bool {
-    let Some(read) = read else { return true };
-    let today = now.to_zoned(zone.clone()).date();
-    let read_on = read.read_at.to_zoned(zone.clone()).date();
-    let Some(per_year) = frequency.map(|f| f.per_year).filter(|n| *n > 0) else {
-        return now.duration_since(read.read_at) >= SignedDuration::from_hours(24 * 7);
-    };
-    let Some(latest) = read.items.iter().map(|d| d.ex_date).max() else {
-        // a record with nothing in it yet: a new fund before its first
-        return read_on < today;
-    };
-    let period = SignedDuration::from_hours(24 * i64::from((365 / per_year).max(7)));
-    let window = latest.checked_add(period).and_then(|d| d.checked_sub(SignedDuration::from_hours(24 * 7))).unwrap_or(Date::MAX);
-    today >= window && read_on < today
+/// How often a family's announcement ([`Payer::announcements`]) is asked while
+/// a payer of the family is looked for.
+pub const ANNOUNCEMENT_EVERY: SignedDuration = SignedDuration::from_mins(15);
+
+/// How often a payer is read while its next distribution is looked for, and the
+/// market's record beside it, where its company has no announcement to ask.
+pub const LOOKED_FOR_EVERY: SignedDuration = SignedDuration::from_hours(1);
+
+/// How often a payer whose family's announcement is asked is read all the
+/// same: an announcement moved to another address is still found within a day.
+pub const ANNOUNCED_FAMILY_EVERY: SignedDuration = SignedDuration::from_hours(24);
+
+/// How often a payer is read while its next distribution is looked for, with the
+/// announcements its company names for it.
+pub fn pace(announcements: &[String]) -> SignedDuration {
+    if announcements.is_empty() { LOOKED_FOR_EVERY } else { ANNOUNCED_FAMILY_EVERY }
 }
 
-/// The first instant at which [`due`] holds for this payer: now, for one never
-/// read; a week after its last read, where no source states its schedule; else
-/// the start of the day its window opens in `zone`, or of the next day where it
-/// was read today.
-pub fn next_due(read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone) -> Timestamp {
+/// How many days before one period after a payer's latest ex-date its next is
+/// looked for. Declarations come a week ahead, and an ex-date up to three days
+/// short of a period after the last: Harvest's releases of 2026 each came out
+/// seven days before the ex-date, and February's on the 20th, 21 days after
+/// January's ex-date of the 30th (May's on the 22nd, 22 days after April's 30th).
+const LOOKED_FOR_DAYS: i64 = 10;
+
+/// Whether a payer's record is due by what the book holds of it, read `every`
+/// while its next distribution is looked for ([`pace`]).
+pub fn due(read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone, every: SignedDuration) -> bool {
+    next_due(read, frequency, now, zone, every) <= now
+}
+
+/// The first instant a payer's record is due: now, for one never read; a week
+/// after its last read, where no source states its schedule; the start of the
+/// next day in `zone`, for a record with nothing in it yet; else from the start
+/// of the day its next distribution is looked for from, `every` after each read.
+pub fn next_due(read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone, every: SignedDuration) -> Timestamp {
     let Some(read) = read else { return now };
     let start = |d: Date| d.to_zoned(zone.clone()).map(|z| z.timestamp()).unwrap_or(Timestamp::MAX);
-    let read_on = read.read_at.to_zoned(zone.clone()).date();
-    let day_after_read = read_on.tomorrow().map(start).unwrap_or(Timestamp::MAX);
-    let Some(per_year) = frequency.map(|f| f.per_year).filter(|n| *n > 0) else {
+    if !frequency.is_some_and(|f| f.per_year > 0) {
         return read.read_at.checked_add(SignedDuration::from_hours(24 * 7)).unwrap_or(Timestamp::MAX);
+    }
+    let Some(from) = looked_for_from(read, frequency, zone) else {
+        // a record with nothing in it yet: a new fund before its first
+        return read.read_at.to_zoned(zone.clone()).date().tomorrow().map(start).unwrap_or(Timestamp::MAX);
     };
-    let Some(latest) = read.items.iter().map(|d| d.ex_date).max() else { return day_after_read };
-    let period = SignedDuration::from_hours(24 * i64::from((365 / per_year).max(7)));
-    let window = latest.checked_add(period).and_then(|d| d.checked_sub(SignedDuration::from_hours(24 * 7))).map(start).unwrap_or(Timestamp::MAX);
-    window.max(day_after_read)
+    from.max(read.read_at.checked_add(every).unwrap_or(Timestamp::MAX))
+}
+
+/// The instant a payer's next distribution is looked for from, in `zone`: none
+/// where no source states its schedule or its record lists nothing yet.
+fn looked_for_from(read: &DeclaredReadRow, frequency: Option<&StatedFrequency>, zone: &TimeZone) -> Option<Timestamp> {
+    let per_year = frequency.map(|f| f.per_year).filter(|n| *n > 0)?;
+    window_opens(&read.items, per_year).map(|d| d.to_zoned(zone.clone()).map(|z| z.timestamp()).unwrap_or(Timestamp::MAX))
+}
+
+/// What the cache holds of a family's announcement: when it was first found
+/// out, else when it was last asked.
+enum Asked {
+    Out(Timestamp),
+    Not(Timestamp),
+    Never,
+}
+
+fn asked(ctx: &Ctx, url: &str) -> Result<Asked> {
+    let reads = ctx.cache.reads(url, DataKind::Distributions)?;
+    Ok(match (reads.iter().find(|r| r.outcome == OutcomeKind::Answered), reads.first()) {
+        (Some(r), _) => Asked::Out(r.at),
+        (None, Some(r)) => Asked::Not(r.at),
+        (None, None) => Asked::Never,
+    })
+}
+
+/// Whether one of a family's announcements came out after `since`: each one not
+/// out yet is asked, unless it was within the quarter hour, so a family's funds
+/// ask it once between them. One out stays out, and is never asked again.
+fn announced_since(ctx: &Ctx, company: &dyn Payer, urls: &[String], since: Timestamp) -> Result<bool> {
+    let mut since_read = false;
+    for url in urls {
+        let out = match asked(ctx, url)? {
+            Asked::Out(at) => Some(at),
+            Asked::Not(at) if ctx.now < at.checked_add(ANNOUNCEMENT_EVERY).unwrap_or(Timestamp::MAX) => None,
+            Asked::Not(_) | Asked::Never => {
+                let kind = match company.announced(ctx.net, url) {
+                    Outcome::Answered(true) => OutcomeKind::Answered,
+                    Outcome::Answered(false) => OutcomeKind::NotCarried,
+                    other => other.kind(),
+                };
+                ctx.attempted(url, DataKind::Distributions, &company.source(), kind)?;
+                (kind == OutcomeKind::Answered).then_some(ctx.now)
+            }
+        };
+        since_read |= out.is_some_and(|at| at > since);
+    }
+    Ok(since_read)
+}
+
+/// When a payer is next asked about: its record, the market's record beside
+/// it, and while its next distribution is looked for, its family's
+/// announcements, each a quarter of an hour after it was last asked.
+pub fn next_asks(ctx: &Ctx, need: &PayerNeed, company: &dyn Payer, read: Option<&DeclaredReadRow>, frequency: Option<&StatedFrequency>) -> Result<Vec<Timestamp>> {
+    let urls = company.announcements(need, ctx.now);
+    let mut at = vec![next_due(read, frequency, ctx.now, ctx.bank, pace(&urls))];
+    let Some(read) = read else { return Ok(at) };
+    if read.source == company.source() && beside_record_for(need, company).is_some() {
+        at.extend(market_next_due(read, frequency, ctx.now, ctx.bank, pace(&urls)));
+    }
+    if let Some(from) = looked_for_from(read, frequency, ctx.bank).filter(|_| !urls.is_empty()) {
+        at.push(from);
+        for url in &urls {
+            if let Asked::Not(asked) = asked(ctx, url)? {
+                at.push(asked.checked_add(ANNOUNCEMENT_EVERY).unwrap_or(Timestamp::MAX));
+            }
+        }
+    }
+    Ok(at)
 }
 
 /// Whether a record lists a distribution paying cash still to be paid on or
@@ -73,28 +163,29 @@ fn lists_one_to_pay(items: &[DeclaredRow], today: Date) -> bool {
     items.iter().any(|d| d.amount.amount.is_positive() && d.pay_date.unwrap_or(d.ex_date) >= today)
 }
 
-/// The day a payer's next distribution is due by its stated schedule, less the
-/// week declarations come ahead: none where its record lists nothing yet.
+/// The day a payer's next distribution is looked for from: the day it is due by
+/// its stated schedule, less [`LOOKED_FOR_DAYS`] or half a period, whichever is
+/// less; none where its record lists nothing yet.
 fn window_opens(items: &[DeclaredRow], per_year: u32) -> Option<Date> {
     let latest = items.iter().map(|d| d.ex_date).max()?;
-    let period = SignedDuration::from_hours(24 * i64::from((365 / per_year).max(7)));
-    Some(latest.checked_add(period).and_then(|d| d.checked_sub(SignedDuration::from_hours(24 * 7))).unwrap_or(Date::MAX))
+    let period = i64::from((365 / per_year).max(7));
+    Some(latest.checked_add(SignedDuration::from_hours(24 * (period - LOOKED_FOR_DAYS.min(period / 2)))).unwrap_or(Date::MAX))
 }
 
 /// Whether the market's record beside a company's is due (`SPEC.md` §5,
 /// Cashflow Positions, Ex-Div): the company's record lists nothing still to be
 /// paid, and the market's has not been read, or lists nothing after the
-/// company's latest still to be paid and was last read before today, with the
-/// payer's next distribution due within a week by its stated schedule (a week
-/// after its last read where no source states one).
-pub fn market_due(read: &DeclaredReadRow, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone) -> bool {
-    market_next_due(read, frequency, now, zone).is_some_and(|at| at <= now)
+/// company's latest still to be paid and was read `every` ago or more, with the
+/// payer's next distribution looked for by its stated schedule (a week after
+/// its last read where no source states one).
+pub fn market_due(read: &DeclaredReadRow, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone, every: SignedDuration) -> bool {
+    market_next_due(read, frequency, now, zone, every).is_some_and(|at| at <= now)
 }
 
 /// The first instant at which [`market_due`] holds: none while the company's
 /// record lists a distribution still to be paid, or the market's lists one
 /// after it (each is read again once that is paid, on its schedule).
-pub fn market_next_due(read: &DeclaredReadRow, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone) -> Option<Timestamp> {
+pub fn market_next_due(read: &DeclaredReadRow, frequency: Option<&StatedFrequency>, now: Timestamp, zone: &TimeZone, every: SignedDuration) -> Option<Timestamp> {
     let today = now.to_zoned(zone.clone()).date();
     if lists_one_to_pay(&read.items, today) {
         return None;
@@ -106,10 +197,10 @@ pub fn market_next_due(read: &DeclaredReadRow, frequency: Option<&StatedFrequenc
         return None;
     }
     let start = |d: Date| d.to_zoned(zone.clone()).map(|z| z.timestamp()).unwrap_or(Timestamp::MAX);
-    let day_after_read = market.read_at.to_zoned(zone.clone()).date().tomorrow().map(start).unwrap_or(Timestamp::MAX);
+    let again = market.read_at.checked_add(every).unwrap_or(Timestamp::MAX);
     match frequency.map(|f| f.per_year).filter(|n| *n > 0) {
         None => Some(market.read_at.checked_add(SignedDuration::from_hours(24 * 7)).unwrap_or(Timestamp::MAX)),
-        Some(n) => Some(window_opens(&read.items, n).map(start).unwrap_or(now).max(day_after_read)),
+        Some(n) => Some(window_opens(&read.items, n).map(start).unwrap_or(now).max(again)),
     }
 }
 
@@ -159,7 +250,16 @@ pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
             // no reader for its market either: the figures wait on it, named
             continue;
         };
-        if due(declared.get(&id), frequencies.get(&id), ctx.now, ctx.bank) {
+        let (read, frequency) = (declared.get(&id), frequencies.get(&id));
+        let urls = adapter.announcements(need, ctx.now);
+        // while its next distribution is looked for, its family's announcements
+        // are asked first: one out since its last read makes it due now, and the
+        // market's record beside it
+        let announced = match read.filter(|r| !urls.is_empty() && looked_for_from(r, frequency, ctx.bank).is_some_and(|from| from <= ctx.now)) {
+            Some(r) => announced_since(ctx, adapter, &urls, r.read_at)?,
+            None => false,
+        };
+        if announced || due(read, frequency, ctx.now, ctx.bank, pace(&urls)) {
             let outcome = read_with(ctx, need, adapter, Role::Payer)?;
             // its company's publication does not carry it: no company reader serves
             // it, so it has the market's record. A company reader that failed to
@@ -170,7 +270,7 @@ pub fn read(ctx: &Ctx, payers: &[PayerNeed]) -> Result<()> {
                 }
             }
         }
-        read_beside(ctx, need, adapter, false)?;
+        read_beside(ctx, need, adapter, announced)?;
     }
     Ok(())
 }
@@ -186,7 +286,8 @@ fn read_beside(ctx: &Ctx, need: &PayerNeed, company: &dyn Payer, at_once: bool) 
         return Ok(());
     }
     let today = ctx.now.to_zoned(ctx.bank.clone()).date();
-    let due = if at_once { !lists_one_to_pay(&read.items, today) } else { market_due(&read, ctx.book.frequencies()?.get(&id), ctx.now, ctx.bank) };
+    let every = pace(&company.announcements(need, ctx.now));
+    let due = if at_once { !lists_one_to_pay(&read.items, today) } else { market_due(&read, ctx.book.frequencies()?.get(&id), ctx.now, ctx.bank, every) };
     if due {
         read_with(ctx, need, market.as_ref(), Role::Market)?;
     }

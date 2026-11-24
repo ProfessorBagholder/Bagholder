@@ -149,6 +149,13 @@ fn press_of(income_shares: bool) -> (&'static str, &'static str) {
     }
 }
 
+/// The address of a family's release for the month `now` falls in, in Toronto.
+fn month_release(income_shares: bool, now: Timestamp) -> String {
+    let today = now.to_zoned(bagholder_core::jiff::tz::TimeZone::get("America/Toronto").unwrap_or(bagholder_core::jiff::tz::TimeZone::UTC)).date();
+    let month = MONTHS[usize::from(today.month().unsigned_abs()) - 1];
+    format!("https://{HOST}/{}{month}-{}-distributions/", press_of(income_shares).1, today.year())
+}
+
 const MONTHS: [&str; 12] = ["january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december"];
 
 /// The newest monthly release a press page links whose address starts with
@@ -197,13 +204,11 @@ impl Harvest {
         Outcome::Answered(text)
     }
 
-    /// The newest monthly release of a family, on `today`: the month's own, asked at
+    /// The newest monthly release of a family, at `now`: the month's own, asked at
     /// its address, else the newest its press page links.
-    fn newest(&self, net: &Net, income_shares: bool, today: Date) -> Outcome<String> {
+    fn newest(&self, net: &Net, income_shares: bool, now: Timestamp) -> Outcome<String> {
         let (press, prefix) = press_of(income_shares);
-        let month = MONTHS[usize::from(today.month().unsigned_abs()) - 1];
-        let own = format!("https://{HOST}/{prefix}{month}-{}-distributions/", today.year());
-        match self.shared(net, &own, &[404]) {
+        match self.shared(net, &month_release(income_shares, now), &[404]) {
             Outcome::Answered(Some(r)) => return Outcome::Answered(r),
             Outcome::Answered(None) => {}
             other => return other.failed().expect("not answered"),
@@ -236,6 +241,16 @@ impl Payer for Harvest {
         crate::payers::CANADA
     }
 
+    /// Both families' releases for the month: which family a fund is in is
+    /// known from its page alone, and a page is what this spares.
+    fn announcements(&self, _need: &PayerNeed, now: Timestamp) -> Vec<String> {
+        vec![month_release(true, now), month_release(false, now)]
+    }
+
+    fn announced(&self, net: &Net, url: &str) -> Outcome<bool> {
+        self.shared(net, url, &[404]).map(|t| t.is_some())
+    }
+
     fn read(&self, net: &Net, need: &PayerNeed, now: Timestamp) -> Noted<Record> {
         let ticker = venue::root(&need.listing.symbol).to_ascii_lowercase();
         let url = format!("https://{HOST}/etf/{ticker}/");
@@ -253,9 +268,7 @@ impl Payer for Harvest {
         };
         // the month's announcement, where the page has not listed it yet
         let income_shares = html_tables(html).iter().any(|t| t.first().is_some_and(|h| h.iter().map(|c| c.trim()).eq(INCOME_SHARES.iter().copied())));
-        // Harvest's own day: Toronto's
-        let today = now.to_zoned(bagholder_core::jiff::tz::TimeZone::get("America/Toronto").unwrap_or(bagholder_core::jiff::tz::TimeZone::UTC)).date();
-        let release = match self.newest(net, income_shares, today) {
+        let release = match self.newest(net, income_shares, now) {
             Outcome::Answered(r) => r,
             other => return Noted { outcome: other.failed().expect("not answered"), shape_change: None },
         };
