@@ -165,10 +165,10 @@
 <a id="distribution-rate-for-a-holding-2"></a>A company reader that fails to answer is a failed source, written to the log and read again, never said on the page (§4, pages-43); it is never replaced by the market's record.
 <a id="distribution-rate-for-a-holding-3"></a>A company whose publication does not carry the payer does not serve it, and the market's record is read.
 
-1. <a id="distribution-rate-for-a-holding-4"></a>**Per-unit amount:** the cash per unit of the latest distribution gone ex.
+1. <a id="distribution-rate-for-a-holding-4"></a>**Per-unit amount:** the cash per unit of the distribution the holding's Ex-Div and Pay Day name (`cashflow-25`, `cashflow-26`), from the payer's own record: its next still to be paid, gone ex or declared ahead, else its last. Every figure of the row, Distribution, Projected and both yields, is that one distribution's, as Wealthsimple's next dividend and Yahoo's forward dividend are the one declared (the owner, 2026-11-24: "ex-div: nov 30, pay day: dec 4: projected: WRONG!!").
    <a id="distribution-rate-for-a-holding-5"></a>A part reinvested, as the record states it, pays no cash: a distribution paid wholly in units is passed over.
    <a id="distribution-rate-for-a-holding-6"></a>A market's record states an amount per unit and not whether it is paid in cash or in units, so the account's own record says which: a dividend paid on the payer between that ex-date and the next makes it cash; no dividend posted two business days after its pay date, in an account that held the payer into its ex-date (`cashflow-40`), makes it units (a distribution paid in units that are then consolidated posts nothing); while that day's positions are not read, the form waits on them.
-   <a id="distribution-rate-for-a-holding-7"></a>Until one of the two shows, the latest distribution's form is unknown and the rate waits on it (`form-unstated`).
+   <a id="distribution-rate-for-a-holding-7"></a>Until one of the two shows, that distribution's form is unknown and the rate waits on it (`form-unstated`), declared ahead or gone ex alike, never taking the figure of the one before it.
 2. <a id="distribution-rate-for-a-holding-8"></a>**Payments per year:** the schedule the record states, never worked out from the gaps between dates and never assumed.
    <a id="distribution-rate-for-a-holding-9"></a>Where no record states it, annual income waits on it (`schedule-unstated`).
 

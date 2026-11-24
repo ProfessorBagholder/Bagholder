@@ -561,7 +561,7 @@ pub struct CashflowHolding {
     /// value in (brief 79).
     pub book_currency: String,
     pub mv: Fig<Dec>,
-    /// Cash per unit of the latest distribution gone ex.
+    /// Cash per unit of the distribution Ex-Div and Pay Day name.
     pub per: Fig<Dec>,
     pub ytd: Partial,
     pub all: Partial,

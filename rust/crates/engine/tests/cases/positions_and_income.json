@@ -122,6 +122,59 @@
     "expect": {"payers": [{"instrument": "F", "per": "0.11", "per_year": 12, "next_ex": "2026-04-15"}]}
   },
   {
+    "name": "the rate is the distribution Ex-Div and Pay Day name: one declared ahead counts the day its payer's record lists it",
+    "spec": "SPEC.md §2 Distribution rate, 1; §5 Cashflow Positions, Ex-Div and Pay Day",
+    "working": [
+      "0.50 ex Oct 30 paid Nov 6; 0.45 declared ex Nov 30, paid Dec 4; the payer states 12 a year",
+      "today Nov 24: the next still to be paid is Nov 30's (paid Dec 4), declared ahead → per 0.45, the figure beside Ex-Div Nov 30 and Pay Day Dec 4, never Oct 30's 0.50"
+    ],
+    "today": "2026-11-24",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "F", "symbol": "FUND"}],
+    "frequencies": {"F": 12},
+    "declared": {"F": [
+      {"ex": "2026-10-30", "pay": "2026-11-06", "amount": "0.50"},
+      {"ex": "2026-11-30", "pay": "2026-12-04", "amount": "0.45"}
+    ]},
+    "transactions": [{"id": "t1", "account": "A", "day": "2026-09-02", "at": "2026-09-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}],
+    "expect": {"payers": [{"instrument": "F", "per": "0.45", "per_year": 12, "next_ex": "2026-11-30"}]}
+  },
+  {
+    "name": "once the distribution Ex-Div names is paid and none is declared after it, it stays the rate",
+    "spec": "SPEC.md §2 Distribution rate, 1; §5 Cashflow Positions, Ex-Div",
+    "working": [
+      "the same record; today Dec 10: Nov 30's was paid Dec 4 and none is declared after it → the last known, per 0.45, ex Nov 30"
+    ],
+    "today": "2026-12-10",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "F", "symbol": "FUND"}],
+    "frequencies": {"F": 12},
+    "declared": {"F": [
+      {"ex": "2026-10-30", "pay": "2026-11-06", "amount": "0.50"},
+      {"ex": "2026-11-30", "pay": "2026-12-04", "amount": "0.45"}
+    ]},
+    "transactions": [{"id": "t1", "account": "A", "day": "2026-09-02", "at": "2026-09-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}],
+    "expect": {"payers": [{"instrument": "F", "per": "0.45", "per_year": 12, "next_ex": "2026-11-30"}]}
+  },
+  {
+    "name": "a distribution declared ahead in a record that states no form waits on its form, as one gone ex does, never the one before's figure",
+    "spec": "SPEC.md §2 Distribution rate, 1 (a market's record states no form)",
+    "working": [
+      "the exchange's record is the payer's own: 0.50 ex Oct 30 paid Nov 6, its dividend posted Nov 6 (50 on 100 units) → cash; 0.45 declared ex Nov 30, paid Dec 4, its form not shown yet",
+      "today Nov 24: the distribution Ex-Div names is Nov 30's, whose form waits until its dividend posts → per waits: form-unstated; ex Nov 30"
+    ],
+    "today": "2026-11-24",
+    "accounts": [{"id": "A"}],
+    "instruments": [{"id": "F", "symbol": "FUND"}],
+    "frequencies": {"F": 12},
+    "declared": {"F": [
+      {"ex": "2026-10-30", "pay": "2026-11-06", "amount": "0.50", "form": "unstated"},
+      {"ex": "2026-11-30", "pay": "2026-12-04", "amount": "0.45", "form": "unstated"}
+    ]},
+    "transactions": [{"id": "t1", "account": "A", "day": "2026-09-02", "at": "2026-09-02T15:00:00Z", "kind": "buy", "instrument": "F", "qty": "100", "cash": "-1000"}, {"id": "d1", "account": "A", "day": "2026-11-06", "at": "2026-11-06T11:00:00Z", "kind": "dividend", "instrument": "F", "cash": "50", "cash_currency": "CAD"}],
+    "expect": {"payers": [{"instrument": "F", "per": {"gaps": ["form-unstated"]}, "per_year": 12, "next_ex": "2026-11-30"}]}
+  },
+  {
     "name": "a distribution reinvested whole pays no cash and is passed over; one with a cash part counts its cash",
     "spec": "docs/plans/stage-3a-sources.md, what the figures use: income paid; a reinvested part pays nothing",
     "working": [
@@ -155,7 +208,7 @@
     "spec": "docs/architecture.md §18: never assumed; docs/plans/stage-3a-sources.md: never filled from another source",
     "working": [
       "G: 5.00, 5.00, 5.25 paid on 100 units, and no record of its payer read → the rate and the schedule wait on the payer",
-      "H: its payer's record read and its schedule stated, before its first distribution goes ex → the rate waits for it; the schedule stands"
+      "H: its payer's record read and its schedule stated, its first distribution declared ahead (ex Apr 29, paid May 7) → the rate is that distribution's, the one Ex-Div names; the schedule stands"
     ],
     "today": "2026-04-10",
     "accounts": [{"id": "A"}],
@@ -171,7 +224,7 @@
     "expect": {
       "payers": [
         {"instrument": "G", "per": {"gaps": ["payer-not-read"]}, "per_year": {"gaps": ["payer-not-read"]}},
-        {"instrument": "H", "per": {"gaps": ["no-distribution-yet"]}, "per_year": 12, "next_ex": "2026-04-29"}
+        {"instrument": "H", "per": "0.16", "per_year": 12, "next_ex": "2026-04-29"}
       ]
     }
   },
