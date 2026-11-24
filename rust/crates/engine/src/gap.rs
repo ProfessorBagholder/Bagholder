@@ -65,14 +65,14 @@ pub enum Gap {
     /// A payer whose own record of its distributions and schedule has not been
     /// read: its payer's page or announcement is what the figure waits on.
     PayerNotRead(InstrumentId),
-    /// A payer whose own record states no cash distribution gone ex yet (a new
-    /// fund before its first).
+    /// A payer whose own record lists no cash distribution yet (a new fund
+    /// before its first is declared).
     NoDistributionYet(InstrumentId),
     /// A payer whose record was read and whose schedule no readable source
     /// states (a company whose own site cannot be read, whose distributions
     /// come from the exchange-side record): its annual income waits on it.
     ScheduleUnstated(InstrumentId),
-    /// A payer whose latest distribution gone ex was listed by a source that
+    /// A payer whose distribution its Ex-Div names was listed by a source that
     /// does not say whether it is paid in cash or in units, and whose payment
     /// has not posted yet: its rate waits on it.
     FormUnstated(InstrumentId),
@@ -149,7 +149,7 @@ impl fmt::Display for Gap {
             Gap::BookUnstated(i) => write!(f, "the broker states no book value for {i}"),
             Gap::HoldingsUnread(d) => write!(f, "the holdings as of {d} are not read yet"),
             Gap::PayerNotRead(i) => write!(f, "the record {i}'s payer publishes of its distributions has not been read"),
-            Gap::NoDistributionYet(i) => write!(f, "{i}'s payer states no cash distribution gone ex yet"),
+            Gap::NoDistributionYet(i) => write!(f, "{i}'s payer lists no cash distribution yet"),
             Gap::ScheduleUnstated(i) => write!(f, "no source that can be read states how often {i} pays"),
             Gap::FormUnstated(i) => write!(f, "whether {i}'s latest distribution is paid in cash or in units is not stated, and its payment has not posted"),
             Gap::BuyingPowerUnread(a) => write!(f, "what account {a} can borrow has not been read"),

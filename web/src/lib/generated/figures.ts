@@ -377,7 +377,7 @@ id: string, symbol: string, account: string, currency: string, qty: Fig<Dec>, av
  */
 bookCurrency: string, mv: Fig<Dec>, 
 /**
- * Cash per unit of the latest distribution gone ex.
+ * Cash per unit of the distribution Ex-Div and Pay Day name.
  */
 per: Fig<Dec>, ytd: Partial, all: Partial, nextExDate: string | null, nextPayDate: string | null, exPast: boolean, payPast: boolean, 
 /**
