@@ -23,7 +23,8 @@
 //! nothing still to be paid, the exchange's record (TMX) is read beside it for
 //! the next distribution (`SPEC.md` §5, Ex-Div): at once, then on its payer's
 //! pace while the next is looked for, and at once when its family's announcement
-//! is out, until TMX lists it. The rate and schedule stay the company's.
+//! is out, until TMX lists it. The schedule stays the company's; the rate is
+//! the distribution Ex-Div names, TMX's included (`SPEC.md` §2, Distribution rate).
 
 use std::collections::BTreeMap;
 
@@ -362,7 +363,7 @@ fn read_with(ctx: &Ctx, need: &PayerNeed, adapter: &dyn Payer, role: Role) -> Re
                     ctx.book.store_frequency(id, n, &adapter.source(), Some(ctx.today()), ctx.now)?;
                 }
             }
-            // the rate and the schedule stay the company's: only the rows are kept
+            // the schedule stays the company's: only the rows are kept
             Role::Market => ctx.book.store_market_declared(id, &stored_rows(&record), &adapter.source(), ctx.now)?,
         }
     }

@@ -337,14 +337,20 @@ pub fn payer_rate(inputs: &Inputs, i: InstrumentId, payments: Vec<&CashRow>, mat
         let mut all: Vec<&crate::input::Declared> = cash.to_vec();
         all.sort_by_key(|d| (due(d), d.ex_date));
         let next_own = all.iter().position(|d| due(d) >= today);
+        let latest_listed = all.iter().map(|d| d.ex_date).max();
+        let mut announced: Vec<&crate::input::Declared> = read.map(|r| r.market.iter().filter(|d| d.amount.amount.is_positive() && latest_listed.is_none_or(|l| d.ex_date > l)).collect()).unwrap_or_default();
+        announced.sort_by_key(|d| (due(d), d.ex_date));
+        let beside = if next_own.is_none() { announced.iter().find(|d| due(d) >= today).copied() } else { None };
         // the rate: the cash per unit of the distribution Ex-Div and Pay Day name,
-        // from the payer's own record and nothing else: its next still to be paid,
-        // gone ex or declared ahead, else its last (the owner, 2026-11-24, of a row
-        // naming the distribution paid Dec 4 beside the one before's figures: "ex-div:
-        // nov 30, pay day: dec 4: projected: WRONG!!"). A row whose source does not
-        // state its form counts as cash once the record shows it paid in cash, is
-        // passed over once it shows it paid in units, and holds the rate until then.
-        let gone: Vec<&crate::input::Declared> = all[..next_own.map_or(all.len(), |k| k + 1)].iter().rev().copied().collect();
+        // whichever record lists it (the owner, 2026-11-24, of a row naming the
+        // distribution paid Dec 4 beside the one before's figures: "ex-div: nov 30,
+        // pay day: dec 4: projected: WRONG!!"). A row whose source does not state
+        // its form counts at its amount while its ex-date is ahead (nothing can
+        // show its form before), and from then as cash once the record shows it
+        // paid in cash, is passed over once it shows it paid in units, and holds
+        // the rate until then.
+        let gone: Vec<&crate::input::Declared> = beside.into_iter().chain(all[..next_own.map_or(all.len(), |k| k + 1)].iter().rev().copied()).collect();
+        let exes: Vec<Date> = all.iter().chain(beside.iter()).map(|x| x.ex_date).collect();
         let accounts: Vec<AccountId> = matched.held_by.get(&i).into_iter().flatten().filter(|a| matched.units.contains_key(&(**a, i))).copied().collect();
         // held into the ex-date in some account: yes where one is; else waits on an
         // account's day not read yet; else no
@@ -363,8 +369,9 @@ pub fn payer_rate(inputs: &Inputs, i: InstrumentId, payments: Vec<&CashRow>, mat
         for d in &gone {
             let use_it = match d.form {
                 bagholder_core::distribution::Form::Stated => true,
+                bagholder_core::distribution::Form::Unstated if d.ex_date > today => true,
                 bagholder_core::distribution::Form::Unstated => {
-                    let next_ex = all.iter().map(|x| x.ex_date).filter(|e| *e > d.ex_date).min();
+                    let next_ex = exes.iter().copied().filter(|e| *e > d.ex_date).min();
                     match found_form(d, next_ex, &payments, held_into_ex(d.ex_date), today) {
                         Ok(Found::Cash) => true,
                         Ok(Found::Units) => false,
@@ -397,10 +404,7 @@ pub fn payer_rate(inputs: &Inputs, i: InstrumentId, payments: Vec<&CashRow>, mat
             (None, Some(_)) => (Err(Gaps::of(Gap::ScheduleUnstated(i))), None),
             (None, None) => (Err(Gaps::of(Gap::PayerNotRead(i))), None),
         };
-        let latest_listed = all.iter().map(|d| d.ex_date).max();
-        let mut announced: Vec<&crate::input::Declared> = read.map(|r| r.market.iter().filter(|d| d.amount.amount.is_positive() && latest_listed.is_none_or(|l| d.ex_date > l)).collect()).unwrap_or_default();
-        announced.sort_by_key(|d| (due(d), d.ex_date));
-        let next = next_own.map(|k| &all[k]).or_else(|| announced.iter().find(|d| due(d) >= today)).or(all.last());
+        let next = next_own.map(|k| all[k]).or(beside).or(all.last().copied());
         // without a record: the ex-date the listing's quote reports, and the day
         // of the last payment received only where it is that distribution's (paid
         // on or after it): a quote states no pay date, and an earlier payment's
