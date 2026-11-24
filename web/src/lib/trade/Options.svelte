@@ -52,7 +52,9 @@
     })
   })
 
-  const expiry = $derived(expiries.find((e) => e.day === picked) ?? expiries[0] ?? null)
+  // the expiries with a strike someone bids on, on the side shown (SPEC.md markets-125)
+  const shown = $derived(expiries.filter((e) => e[side].rows.length))
+  const expiry = $derived(shown.find((e) => e.day === picked) ?? shown[0] ?? null)
   const rows = $derived(expiry ? expiry[side].rows : [])
   const near = $derived(expiry ? expiry[side].near : null)
 
@@ -118,7 +120,7 @@
         </div>
       </div>
       <div class="oc-expiries" role="group" aria-label="Expiry">
-        {#each expiries as e (e.day)}
+        {#each shown as e (e.day)}
           <button class="oc-pill" class:on={e === expiry} type="button" aria-pressed={e === expiry} onclick={() => (picked = e.day)}>{e.label}</button>
         {/each}
       </div>

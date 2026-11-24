@@ -188,7 +188,7 @@ title: string, strike: Dec,
  */
 cost: Dec | null, 
 /**
- * The bid × 100, as Cboe states it: zero where no one bids.
+ * The bid × 100: a contract no one bids on is not listed.
  */
 premium: Dec, 
 /**

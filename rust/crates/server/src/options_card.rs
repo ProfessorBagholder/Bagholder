@@ -55,7 +55,7 @@ pub struct OptionRow {
     /// listing's current price for a call; none for a call while the listing's
     /// price is not read.
     pub cost: Option<crate::wire::Dec>,
-    /// The bid × 100, as Cboe states it: zero where no one bids.
+    /// The bid × 100: a contract no one bids on is not listed.
     pub premium: crate::wire::Dec,
     /// The Premium over the Cost, in percent, to two decimals.
     #[serde(rename = "yield")]
@@ -207,7 +207,6 @@ fn on_the_listing(c: &ChainContract, root: &str) -> bool {
 
 fn row(symbol: &str, c: &ChainContract, price: Option<Dec>, today: Date) -> Result<OptionRow, String> {
     let e = |e: DecError| format!("{}'s figures: {e}", c.occ);
-    // the bid as Cboe states it, zero included: a bid of zero is no one bidding
     let premium = c.bid.checked_mul(hundred()).map_err(e)?;
     let cost = match c.right {
         OptionRight::Put => Some(c.strike.checked_mul(hundred()).map_err(e)?),
@@ -237,12 +236,13 @@ fn side(symbol: &str, mut list: Vec<&ChainContract>, price: Option<Dec>, today: 
 
 /// The card for one listing on `today`: each expiry the chain lists, nearest
 /// first, its puts and its calls, each figured on the listing's current price
-/// where it is read. A contract on something other than 100 of the listing's
-/// shares is not listed.
+/// where it is read. Only a contract one could sell is listed: one someone bids
+/// on, on 100 of the listing's shares. A strike no one bids on puts nothing in play
+/// and earns nothing, and an expiry with no strike bid on either side is not listed.
 pub fn card(chain: &Chain, symbol: &str, price: Option<Dec>, today: Date) -> Result<Vec<OptionExpiry>, String> {
     let root = root_of(symbol);
     let mut by: BTreeMap<Date, (Vec<&ChainContract>, Vec<&ChainContract>)> = BTreeMap::new();
-    for c in chain.contracts.iter().filter(|c| on_the_listing(c, &root)) {
+    for c in chain.contracts.iter().filter(|c| on_the_listing(c, &root) && c.bid.is_positive()) {
         let e = by.entry(c.expiry).or_default();
         match c.right {
             OptionRight::Put => e.0.push(c),
@@ -487,14 +487,26 @@ mod tests {
         assert!(dec11.puts.rows.iter().all(|r| r.cost.map(|c| c.0) == r.strike.0.checked_mul(hundred()).ok()));
     }
 
-    /// A bid of zero, no one bidding, is a Premium of $0 and a Yield of 0.00%, as
-    /// Cboe states it: never a dash, as though nothing were stated.
+    /// A strike no one bids on cannot be sold: it is not listed, so every row is a
+    /// contract one could put in play, with its real figures; and an expiry with no
+    /// strike bid on either side is not listed at all.
     #[test]
-    fn a_contract_bid_at_zero_has_a_premium_and_a_yield_of_zero() {
+    fn a_strike_no_one_bids_on_is_not_listed() {
         let card = card(&chain(), "KO", Some(d("68.42")), today()).unwrap();
         let nov13 = expiry(&card, "2026-11-13");
-        assert_eq!(figures(of(&nov13.puts, "60")), some("6000", "0", "0"));
-        assert_eq!(figures(of(&nov13.calls, "76")), some("6842", "0", "0"));
+        let strikes = |s: &OptionSide| s.rows.iter().map(|r| r.strike.0.to_text()).collect::<Vec<_>>();
+        assert!(!strikes(&nov13.puts).contains(&"60".to_string()), "{:?}", strikes(&nov13.puts));
+        assert!(!strikes(&nov13.calls).contains(&"76".to_string()), "{:?}", strikes(&nov13.calls));
+        assert!(card.iter().flat_map(|e| e.puts.rows.iter().chain(&e.calls.rows)).all(|r| r.premium.0.is_positive()));
+        // a chain whose one expiry no one bids on, on either side: no expiry at all
+        let mut none = chain();
+        for c in &mut none.contracts {
+            if c.expiry.to_string() == "2026-11-13" {
+                c.bid = Dec::ZERO;
+            }
+        }
+        let card = super::card(&none, "KO", Some(d("68.42")), today()).unwrap();
+        assert!(!card.iter().any(|e| e.day == "2026-11-13"), "{:?}", card.iter().map(|e| &e.day).collect::<Vec<_>>());
     }
 
     /// A call is figured on the listing's price: while it is not read a call has
@@ -517,8 +529,8 @@ mod tests {
         let card = card(&chain, "KO", Some(d("68.42")), today()).unwrap();
         let occs: Vec<&str> = card.iter().flat_map(|e| e.puts.rows.iter().chain(e.calls.rows.iter())).map(|r| r.occ.as_str()).collect();
         assert!(!occs.is_empty() && occs.iter().all(|o| !o.starts_with("KO1")));
-        // every other contract is
-        assert_eq!(occs.len(), chain.contracts.iter().filter(|c| !c.occ.starts_with("KO1")).count());
+        // every other contract someone bids on is
+        assert_eq!(occs.len(), chain.contracts.iter().filter(|c| !c.occ.starts_with("KO1") && c.bid.is_positive()).count());
     }
 
     /// Expiries nearest first, each labelled as its button says it; strikes

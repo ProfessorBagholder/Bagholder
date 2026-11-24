@@ -35,8 +35,9 @@ const card = {
     {
       day: '2026-11-13',
       label: 'Nov 13',
-      puts: { rows: [row('KO261113P00070000', 'KO Nov 13 70 put', '70', '7000', '161', '2.30'), row('KO261113P00060000', 'KO Nov 13 60 put', '60', '6000', '0', '0')], near: 0 },
-      calls: { rows: [row('KO261113C00070000', 'KO Nov 13 70 call', '70', '6842', '3', '0.04')], near: 0 },
+      puts: { rows: [row('KO261113P00070000', 'KO Nov 13 70 put', '70', '7000', '161', '2.30'), row('KO261113P00060000', 'KO Nov 13 60 put', '60', '6000', '40', '0.67')], near: 0 },
+      // no call of this expiry is bid on: the server lists none
+      calls: { rows: [], near: null },
     },
     {
       day: '2026-12-11',
@@ -114,13 +115,13 @@ describe('the Options card', () => {
     expect(texts(Array.from(getByRole('group', { name: 'Expiry' }).querySelectorAll('button')))).toEqual(['Nov 13', 'Dec 11'])
     expect(texts(Array.from(el.querySelectorAll('.oc-head span')))).toEqual(['Strike', 'Cost', 'Premium', 'Yield'])
     const rows = () => Array.from(el.querySelectorAll('.oc-row')).map((r) => texts(Array.from(r.querySelectorAll('span'))))
-    // no bid: Premium and Yield read a dash
-    // a bid of zero is shown as Cboe states it: $0, and a yield of 0.00%
-    expect(rows()).toEqual([['70', '$7,000', '$161', '2.30%'], ['60', '$6,000', '$0', '0.00%']])
+    expect(rows()).toEqual([['70', '$7,000', '$161', '2.30%'], ['60', '$6,000', '$40', '0.67%']])
     await fireEvent.click(getAllByRole('button', { name: 'Dec 11' })[0])
     expect(rows()).toEqual([['66', '$6,600', '$24', '0.36%'], ['62.50', '$6,250', '$11', '0.18%']])
     await fireEvent.click(getByRole('button', { name: 'Calls' }))
     expect(rows()).toEqual([['66', '$6,842', '$266', '3.89%']])
+    // an expiry with no call bid on has no button on Calls (SPEC.md markets-125)
+    expect(texts(Array.from(getByRole('group', { name: 'Expiry' }).querySelectorAll('button')))).toEqual(['Dec 11'])
     // the chain read again: the row shows what it says now
     const again = structuredClone(card)
     again.expiries[1].calls.rows[0] = row('KO261211C00066000', 'KO Dec 11 66 call', '66', '6842', '270', '3.95')
